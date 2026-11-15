@@ -1,0 +1,455 @@
+{
+  "entities": {
+    "DeviceTrial": {
+      "title": "DeviceTrial",
+      "description": "Device-bound 7-day free trial anchor preventing repeat trials across reinstalls, data clears, or account switches on the same physical device.",
+      "type": "object",
+      "properties": {
+        "deviceHash": {
+          "type": "string",
+          "description": "64-char SHA-256 hex digest identifying the physical Android device."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the first Google user who activated the trial on this device."
+        },
+        "lastUserId": {
+          "type": "string",
+          "description": "Most recent Firebase Auth UID observed using this device."
+        },
+        "accountSwitchCount": {
+          "type": "integer",
+          "description": "Number of times a different Google account accessed this device record."
+        },
+        "trialStartedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp (FieldValue.serverTimestamp) when this device first started its free trial."
+        },
+        "lastVerifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp) written on sync to establish authoritative server time."
+        },
+        "isPremiumDevice": {
+          "type": "boolean",
+          "description": "Whether an active subscription has been verified on this device."
+        },
+        "subscriptionExpiresAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Timestamp when the current 30-day monthly subscription expires."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest sync."
+        }
+      },
+      "required": [
+        "deviceHash",
+        "ownerUid",
+        "lastUserId",
+        "accountSwitchCount",
+        "trialStartedAt",
+        "lastVerifiedAt",
+        "isPremiumDevice",
+        "updatedAt"
+      ]
+    },
+    "UserEntitlement": {
+      "title": "UserEntitlement",
+      "description": "Per-user subscription, trial, real-time preferences, and admin moderation record bound to Google Sign-In UID.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the signed-in Google user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name."
+        },
+        "email": {
+          "type": "string",
+          "description": "User Google email address."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "User phone number displayed in Profile and Admin directory."
+        },
+        "deviceHash": {
+          "type": "string",
+          "description": "Latest device SHA-256 fingerprint associated with this user."
+        },
+        "trialStartedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp (FieldValue.serverTimestamp) of the user's first trial start."
+        },
+        "isPremiumUser": {
+          "type": "boolean",
+          "description": "Whether the user holds an active paid subscription."
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "enum": ["trial", "pending_approval", "active", "expired", "rejected", "blocked"],
+          "description": "Real-time user subscription status synchronized with payment submissions and admin approvals."
+        },
+        "subscriptionProductId": {
+          "type": "string",
+          "description": "Subscription product or UPI plan identifier."
+        },
+        "purchaseToken": {
+          "type": "string",
+          "description": "Latest verified Play Billing purchase token or approved UPI transaction reference."
+        },
+        "subscriptionExpiresAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Timestamp when the user's current 30-day monthly subscription expires."
+        },
+        "isBlocked": {
+          "type": "boolean",
+          "description": "Admin-controlled flag that suspends access for this user."
+        },
+        "bonusTrialDays": {
+          "type": "integer",
+          "description": "Extra trial days granted to this user by the admin."
+        },
+        "adminNote": {
+          "type": "string",
+          "description": "Optional admin note attached to this user account."
+        },
+        "hideSubscriptionUI": {
+          "type": "boolean",
+          "description": "Admin toggle to instantly hide or show subscription cards and payment status UI for this user."
+        },
+        "autoCallRecording": {
+          "type": "boolean",
+          "description": "User preference for automatic call recording synced in real time across sessions."
+        },
+        "themeMode": {
+          "type": "string",
+          "enum": ["light", "dark"],
+          "description": "User display theme preference synced in real time across sessions."
+        },
+        "dialpadTonesEnabled": {
+          "type": "boolean",
+          "description": "User preference for keypad tones and haptics synced in real time across sessions."
+        },
+        "blockedNumbers": {
+          "type": "array",
+          "description": "User's blocked phone numbers list synced in real time across sessions."
+        },
+        "quickDeclineResponses": {
+          "type": "array",
+          "description": "User's quick decline SMS templates synced in real time across sessions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp when the user record was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user record was updated."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "email",
+        "deviceHash",
+        "trialStartedAt",
+        "isPremiumUser",
+        "subscriptionProductId",
+        "purchaseToken",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PaymentRequest": {
+      "title": "PaymentRequest",
+      "description": "UPI subscription payment submission verified from UPI app response or UTR and queued for admin approval or disapproval.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the submitting user."
+        },
+        "userName": {
+          "type": "string",
+          "description": "Display name of the submitting user."
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Google email of the submitting user."
+        },
+        "deviceHash": {
+          "type": "string",
+          "description": "64-char SHA-256 device hash for which access is requested."
+        },
+        "shortDeviceTag": {
+          "type": "string",
+          "description": "Human-readable short device tag (e.g. DEV-XXXX-XXXX)."
+        },
+        "upiId": {
+          "type": "string",
+          "description": "Recipient UPI VPA configured for payments (default elx@ptaxis)."
+        },
+        "amountInr": {
+          "type": "integer",
+          "description": "Subscription payment amount in INR (default 299)."
+        },
+        "txnRef": {
+          "type": "string",
+          "description": "App-generated unique UPI transaction reference (tr)."
+        },
+        "upiTxnId": {
+          "type": "string",
+          "description": "UPI gateway transaction ID or 12-digit UTR number."
+        },
+        "approvalRefNo": {
+          "type": "string",
+          "description": "Bank approval reference number returned by the UPI app."
+        },
+        "upiResponseStatus": {
+          "type": "string",
+          "enum": ["SUCCESS", "SUBMITTED", "MANUAL_UTR"],
+          "description": "Automatic UPI verification status or manual UTR submission indicator."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"],
+          "description": "Admin approval workflow status."
+        },
+        "reviewedByUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the admin who reviewed the payment."
+        },
+        "reviewNote": {
+          "type": "string",
+          "description": "Optional note entered by the admin during review."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp (FieldValue.serverTimestamp) when submitted."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp) when last updated."
+        }
+      },
+      "required": [
+        "userId",
+        "userName",
+        "userEmail",
+        "deviceHash",
+        "shortDeviceTag",
+        "upiId",
+        "amountInr",
+        "txnRef",
+        "upiTxnId",
+        "approvalRefNo",
+        "upiResponseStatus",
+        "status",
+        "reviewedByUid",
+        "reviewNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "Admin-managed global app settings controlling trial duration, pricing, UPI payee, support WhatsApp number, feature flags, and maintenance mode.",
+      "type": "object",
+      "properties": {
+        "trialDays": {
+          "type": "integer",
+          "description": "Default number of free trial days per device (1-365, default 7)."
+        },
+        "subscriptionPriceInr": {
+          "type": "integer",
+          "description": "Monthly subscription price in INR (default 299)."
+        },
+        "upiVpa": {
+          "type": "string",
+          "description": "Recipient UPI VPA (default elx@ptaxis)."
+        },
+        "whatsappNumber": {
+          "type": "string",
+          "description": "WhatsApp support phone number without country prefix or digits-only (default 9012634797)."
+        },
+        "enforceSingleDeviceTrial": {
+          "type": "boolean",
+          "description": "Whether device-bound anti-abuse trial enforcement is active."
+        },
+        "allowCallRecording": {
+          "type": "boolean",
+          "description": "Global toggle enabling or disabling call recording."
+        },
+        "allowManualUtr": {
+          "type": "boolean",
+          "description": "Whether users can submit manual 12-digit UTR references."
+        },
+        "maintenanceMode": {
+          "type": "boolean",
+          "description": "When true, non-admin app tabs are temporarily locked with maintenanceMessage."
+        },
+        "maintenanceMessage": {
+          "type": "string",
+          "description": "Message shown to users when maintenanceMode is enabled."
+        },
+        "announcementText": {
+          "type": "string",
+          "description": "Optional broadcast banner shown on the user Account screen."
+        },
+        "dialpadTonesDefault": {
+          "type": "boolean",
+          "description": "Global default for dialpad keypad tones and haptics pushed to connected clients."
+        },
+        "defaultAutoRecording": {
+          "type": "boolean",
+          "description": "Global auto call recording setting pushed to all authorized active devices."
+        },
+        "forceThemeMode": {
+          "type": "string",
+          "enum": ["user", "light", "dark"],
+          "description": "Theme enforcement mode pushed to all devices (user, light, or dark)."
+        },
+        "hideSubscriptionUI": {
+          "type": "boolean",
+          "description": "Global toggle making subscription cards and payment status UI disappear or appear in real-time."
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the admin who updated the settings."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp) when settings were saved."
+        }
+      },
+      "required": [
+        "trialDays",
+        "subscriptionPriceInr",
+        "upiVpa",
+        "whatsappNumber",
+        "enforceSingleDeviceTrial",
+        "allowCallRecording",
+        "allowManualUtr",
+        "maintenanceMode",
+        "maintenanceMessage",
+        "announcementText",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "NavigationTabsConfig": {
+      "title": "NavigationTabsConfig",
+      "description": "Server-driven BottomNavigationView tabs pushed in real-time via app_config/navigation_tabs.",
+      "type": "object",
+      "properties": {
+        "tabs": {
+          "type": "array",
+          "description": "Ordered list of built-in or custom bottom navigation tab objects."
+        },
+        "updatedByUid": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["tabs", "updatedByUid", "updatedAt"]
+    },
+    "SettingsItemsConfig": {
+      "title": "SettingsItemsConfig",
+      "description": "Server-driven dynamic settings list pushed in real-time via app_config/settings_items.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Ordered list of setting toggles and action rows."
+        },
+        "updatedByUid": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["items", "updatedByUid", "updatedAt"]
+    },
+    "LiveBroadcast": {
+      "title": "LiveBroadcast",
+      "description": "Instant live modal popup and custom banner ad broadcast document (app_config/live_broadcast).",
+      "type": "object",
+      "properties": {
+        "showPopup": { "type": "boolean" },
+        "popupId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "buttonText": { "type": "string" },
+        "actionUrl": { "type": "string" },
+        "isCancelable": { "type": "boolean" },
+        "showBannerAd": { "type": "boolean" },
+        "bannerText": { "type": "string" },
+        "bannerImageUrl": { "type": "string" },
+        "bannerActionUrl": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "showPopup",
+        "popupId",
+        "title",
+        "message",
+        "imageUrl",
+        "buttonText",
+        "actionUrl",
+        "isCancelable",
+        "showBannerAd",
+        "bannerText",
+        "bannerImageUrl",
+        "bannerActionUrl",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/device_trials/{deviceHash}": {
+      "schema": {
+        "$ref": "#/entities/DeviceTrial"
+      },
+      "description": "Device-level trial registry enforcing one 7-day free trial per physical device."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserEntitlement"
+      },
+      "description": "Authenticated user entitlement, real-time user preferences, subscription status, and admin user management controls."
+    },
+    "/payment_requests/{requestId}": {
+      "schema": {
+        "$ref": "#/entities/PaymentRequest"
+      },
+      "description": "UPI payment verification requests awaiting admin approval or disapproval to manage full access."
+    },
+    "/app_config/{configId}": {
+      "schema": {
+        "$ref": "#/entities/AppConfig"
+      },
+      "description": "Admin-managed global app configuration documents (global_settings, navigation_tabs, settings_items, live_broadcast)."
+    }
+  }
+}

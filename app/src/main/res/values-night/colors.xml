@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 Dark Palette -->
+    <color name="md_theme_primary">#2DD4BF</color>
+    <color name="md_theme_onPrimary">#042F2E</color>
+    <color name="md_theme_primaryContainer">#115E59</color>
+    <color name="md_theme_onPrimaryContainer">#CCFBF1</color>
+
+    <color name="md_theme_secondary">#93C5FD</color>
+    <color name="md_theme_onSecondary">#0D1B2A</color>
+    <color name="md_theme_secondaryContainer">#1E3A5F</color>
+    <color name="md_theme_onSecondaryContainer">#DBEAFE</color>
+
+    <color name="md_theme_tertiary">#FBBF24</color>
+    <color name="md_theme_onTertiary">#451A03</color>
+    <color name="md_theme_tertiaryContainer">#78350F</color>
+    <color name="md_theme_onTertiaryContainer">#FEF3C7</color>
+
+    <color name="md_theme_background">#0B1220</color>
+    <color name="md_theme_onBackground">#F8FAFC</color>
+    <color name="md_theme_surface">#111C2D</color>
+    <color name="md_theme_onSurface">#F8FAFC</color>
+    <color name="md_theme_surfaceVariant">#1E293B</color>
+    <color name="md_theme_onSurfaceVariant">#94A3B8</color>
+    <color name="md_theme_surfaceContainer">#172336</color>
+    <color name="md_theme_outline">#334155</color>
+
+    <color name="md_theme_error">#F87171</color>
+    <color name="md_theme_onError">#450A0A</color>
+    <color name="md_theme_errorContainer">#7F1D1D</color>
+    <color name="md_theme_onErrorContainer">#FEE2E2</color>
+
+    <!-- Semantic Dialer Colors -->
+    <color name="call_accept_green">#22C55E</color>
+    <color name="call_decline_red">#EF4444</color>
+    <color name="call_missed_red">#F87171</color>
+    <color name="call_incoming_teal">#2DD4BF</color>
+    <color name="call_outgoing_blue">#60A5FA</color>
+    <color name="incall_bg_start">#060D17</color>
+    <color name="incall_bg_end">#0F1E33</color>
+    <color name="incall_surface">#1B2D45</color>
+    <color name="incall_surface_active">#0D9488</color>
+    <color name="premium_card_bg">#162338</color>
+    <color name="premium_accent_gold">#FBBF24</color>
+    <color name="premium_badge_bg">#451A03</color>
+    <color name="premium_badge_text">#FDE68A</color>
+</resources>

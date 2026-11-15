@@ -1,0 +1,454 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (('email' in request.auth.token) &&
+         request.auth.token.email is string &&
+         request.auth.token.email.lower() == 'jitendrakumar888126@gmail.com' &&
+         ('email_verified' in request.auth.token) &&
+         request.auth.token.email_verified == true)
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDeviceHash(hash) {
+      return hash is string && hash.size() == 64 && hash.matches('^[a-f0-9]{64}$');
+    }
+
+    function isValidDeviceTrial(data) {
+      return isValidDeviceHash(data.deviceHash) &&
+             isValidId(data.ownerUid) &&
+             isValidId(data.lastUserId) &&
+             data.accountSwitchCount is int &&
+             data.accountSwitchCount >= 0 &&
+             data.accountSwitchCount <= 10000 &&
+             data.trialStartedAt is timestamp &&
+             data.trialStartedAt <= request.time &&
+             data.lastVerifiedAt is timestamp &&
+             data.lastVerifiedAt <= request.time &&
+             data.isPremiumDevice is bool &&
+             (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || data.subscriptionExpiresAt is timestamp) &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidUserEntitlement(data) {
+      return isValidId(data.userId) &&
+             data.displayName is string &&
+             data.displayName.size() <= 120 &&
+             data.email is string &&
+             data.email.size() <= 254 &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 32)) &&
+             isValidDeviceHash(data.deviceHash) &&
+             data.trialStartedAt is timestamp &&
+             data.trialStartedAt <= request.time &&
+             data.isPremiumUser is bool &&
+             (!('subscriptionStatus' in data) || data.subscriptionStatus in ['trial', 'pending_approval', 'active', 'expired', 'rejected', 'blocked']) &&
+             data.subscriptionProductId is string &&
+             data.subscriptionProductId.size() <= 64 &&
+             data.purchaseToken is string &&
+             data.purchaseToken.size() <= 512 &&
+             (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || data.subscriptionExpiresAt is timestamp) &&
+             (!('isBlocked' in data) || data.isBlocked is bool) &&
+             (!('bonusTrialDays' in data) || (data.bonusTrialDays is int && data.bonusTrialDays >= 0 && data.bonusTrialDays <= 3650)) &&
+             (!('adminNote' in data) || (data.adminNote is string && data.adminNote.size() <= 240)) &&
+             (!('hideSubscriptionUI' in data) || data.hideSubscriptionUI is bool) &&
+             (!('autoCallRecording' in data) || data.autoCallRecording is bool) &&
+             (!('themeMode' in data) || data.themeMode in ['light', 'dark']) &&
+             (!('dialpadTonesEnabled' in data) || data.dialpadTonesEnabled is bool) &&
+             (!('blockedNumbers' in data) || (
+               data.blockedNumbers is list &&
+               data.blockedNumbers.size() <= 500 &&
+               (data.blockedNumbers.size() == 0 || (data.blockedNumbers[0] is string && data.blockedNumbers[0].size() <= 40))
+             )) &&
+             (!('quickDeclineResponses' in data) || (
+               data.quickDeclineResponses is list &&
+               data.quickDeclineResponses.size() <= 50 &&
+               (data.quickDeclineResponses.size() == 0 || (data.quickDeclineResponses[0] is string && data.quickDeclineResponses[0].size() <= 200))
+             )) &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidPaymentRequest(data) {
+      return isValidId(data.userId) &&
+             data.userName is string &&
+             data.userName.size() <= 120 &&
+             data.userEmail is string &&
+             data.userEmail.size() <= 254 &&
+             isValidDeviceHash(data.deviceHash) &&
+             data.shortDeviceTag is string &&
+             data.shortDeviceTag.size() >= 4 &&
+             data.shortDeviceTag.size() <= 32 &&
+             data.upiId is string &&
+             data.upiId.size() >= 3 &&
+             data.upiId.size() <= 100 &&
+             data.upiId.matches('^[^@\\s]+@[^@\\s]+$') &&
+             data.amountInr is int &&
+             data.amountInr >= 1 &&
+             data.amountInr <= 100000 &&
+             data.txnRef is string &&
+             data.txnRef.size() >= 4 &&
+             data.txnRef.size() <= 64 &&
+             data.upiTxnId is string &&
+             data.upiTxnId.size() <= 64 &&
+             data.approvalRefNo is string &&
+             data.approvalRefNo.size() <= 64 &&
+             data.upiResponseStatus in ['SUCCESS', 'SUBMITTED', 'MANUAL_UTR'] &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.reviewedByUid is string &&
+             data.reviewedByUid.size() <= 128 &&
+             data.reviewNote is string &&
+             data.reviewNote.size() <= 240 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function matchesConfiguredPaymentTerms(data) {
+      return (
+        exists(/databases/$(database)/documents/app_config/global_settings) &&
+        data.upiId == get(/databases/$(database)/documents/app_config/global_settings).data.upiVpa &&
+        data.amountInr == get(/databases/$(database)/documents/app_config/global_settings).data.subscriptionPriceInr
+      ) || (
+        !exists(/databases/$(database)/documents/app_config/global_settings) &&
+        data.upiId == 'elx@ptaxis' &&
+        data.amountInr == 299
+      );
+    }
+
+    function isValidAppConfig(data) {
+      return data.trialDays is int &&
+             data.trialDays >= 1 &&
+             data.trialDays <= 365 &&
+             data.subscriptionPriceInr is int &&
+             data.subscriptionPriceInr >= 1 &&
+             data.subscriptionPriceInr <= 100000 &&
+             data.upiVpa is string &&
+             data.upiVpa.size() >= 3 &&
+             data.upiVpa.size() <= 100 &&
+             data.upiVpa.matches('^[^@\\s]+@[^@\\s]+$') &&
+             data.whatsappNumber is string &&
+             data.whatsappNumber.size() >= 10 &&
+             data.whatsappNumber.size() <= 16 &&
+             data.whatsappNumber.matches('^[0-9]{10,16}$') &&
+             data.enforceSingleDeviceTrial is bool &&
+             data.allowCallRecording is bool &&
+             data.allowManualUtr is bool &&
+             data.maintenanceMode is bool &&
+             data.maintenanceMessage is string &&
+             data.maintenanceMessage.size() <= 240 &&
+             data.announcementText is string &&
+             data.announcementText.size() <= 240 &&
+             (!('dialpadTonesDefault' in data) || data.dialpadTonesDefault is bool) &&
+             (!('defaultAutoRecording' in data) || data.defaultAutoRecording is bool) &&
+             (!('forceThemeMode' in data) || data.forceThemeMode in ['user', 'light', 'dark']) &&
+             (!('hideSubscriptionUI' in data) || data.hideSubscriptionUI is bool) &&
+             isValidId(data.updatedByUid) &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidNavigationTabsConfig(data) {
+      return data.tabs is list &&
+             data.tabs.size() >= 1 &&
+             data.tabs.size() <= 10 &&
+             isValidId(data.updatedByUid) &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidSettingsItemsConfig(data) {
+      return data.items is list &&
+             data.items.size() <= 30 &&
+             isValidId(data.updatedByUid) &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidLiveBroadcast(data) {
+      return data.showPopup is bool &&
+             data.popupId is string &&
+             data.popupId.size() <= 80 &&
+             data.title is string &&
+             data.title.size() <= 140 &&
+             data.message is string &&
+             data.message.size() <= 500 &&
+             data.imageUrl is string &&
+             data.imageUrl.size() <= 500 &&
+             data.buttonText is string &&
+             data.buttonText.size() <= 60 &&
+             data.actionUrl is string &&
+             data.actionUrl.size() <= 500 &&
+             data.isCancelable is bool &&
+             data.showBannerAd is bool &&
+             data.bannerText is string &&
+             data.bannerText.size() <= 180 &&
+             data.bannerImageUrl is string &&
+             data.bannerImageUrl.size() <= 500 &&
+             data.bannerActionUrl is string &&
+             data.bannerActionUrl.size() <= 500 &&
+             isValidId(data.updatedByUid) &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    // Optional admin UID registry (read-only for self check)
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && request.auth.uid == adminUid;
+      allow list, write: if false;
+    }
+
+    // Device trial registry: single-doc lookup by deterministic SHA-256 device hash.
+    // trialStartedAt and ownerUid are strictly immutable once created; only verified admin can list.
+    match /device_trials/{deviceHash} {
+      allow get: if isSignedIn() && isValidDeviceHash(deviceHash);
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidDeviceHash(deviceHash) &&
+                       incoming().deviceHash == deviceHash &&
+                       incoming().ownerUid == request.auth.uid &&
+                       incoming().lastUserId == request.auth.uid &&
+                       incoming().accountSwitchCount == 0 &&
+                       incoming().isPremiumDevice == false &&
+                       incoming().keys().hasAll([
+                         'deviceHash', 'ownerUid', 'lastUserId', 'accountSwitchCount',
+                         'trialStartedAt', 'lastVerifiedAt', 'isPremiumDevice', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'deviceHash', 'ownerUid', 'lastUserId', 'accountSwitchCount',
+                         'trialStartedAt', 'lastVerifiedAt', 'isPremiumDevice', 'updatedAt'
+                       ]) &&
+                       isValidDeviceTrial(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidDeviceHash(deviceHash) &&
+                       isValidDeviceTrial(incoming()) &&
+                       incoming().deviceHash == existing().deviceHash &&
+                       incoming().ownerUid == existing().ownerUid &&
+                       incoming().trialStartedAt == existing().trialStartedAt && (
+                         (
+                           incoming().lastUserId == request.auth.uid &&
+                           incoming().isPremiumDevice == existing().isPremiumDevice &&
+                           incoming().accountSwitchCount >= existing().accountSwitchCount &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'lastUserId', 'accountSwitchCount', 'lastVerifiedAt', 'updatedAt'
+                           ])
+                         ) || (
+                           isAdmin() &&
+                           incoming().lastUserId == existing().lastUserId &&
+                           incoming().accountSwitchCount == existing().accountSwitchCount &&
+                           incoming().lastVerifiedAt == existing().lastVerifiedAt &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'isPremiumDevice', 'subscriptionExpiresAt', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if false;
+    }
+
+    // Per-user entitlement, real-time preferences, and subscription record isolated by request.auth.uid, plus full admin moderation.
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().isPremiumUser == false &&
+                       (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus == 'trial') &&
+                       incoming().subscriptionProductId == '' &&
+                       incoming().purchaseToken == '' &&
+                       (!('isBlocked' in incoming()) || incoming().isBlocked == false) &&
+                       (!('bonusTrialDays' in incoming()) || incoming().bonusTrialDays == 0) &&
+                       (!('adminNote' in incoming()) || incoming().adminNote == '') &&
+                       (!('hideSubscriptionUI' in incoming()) || incoming().hideSubscriptionUI == false) &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayName', 'email', 'deviceHash',
+                         'trialStartedAt', 'isPremiumUser', 'subscriptionProductId',
+                         'purchaseToken', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'email', 'phoneNumber', 'deviceHash',
+                         'trialStartedAt', 'isPremiumUser', 'subscriptionStatus',
+                         'subscriptionProductId', 'purchaseToken', 'isBlocked',
+                         'bonusTrialDays', 'adminNote', 'hideSubscriptionUI',
+                         'autoCallRecording', 'themeMode', 'dialpadTonesEnabled',
+                         'blockedNumbers', 'quickDeclineResponses',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserEntitlement(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserEntitlement(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().trialStartedAt == existing().trialStartedAt &&
+                       incoming().createdAt == existing().createdAt && (
+                         (
+                           request.auth.uid == userId &&
+                           incoming().isPremiumUser == existing().isPremiumUser &&
+                           incoming().subscriptionProductId == existing().subscriptionProductId &&
+                           incoming().purchaseToken == existing().purchaseToken &&
+                           (!('subscriptionStatus' in incoming().diff(existing()).affectedKeys()) ||
+                            incoming().subscriptionStatus == 'pending_approval') &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'displayName', 'email', 'phoneNumber', 'deviceHash',
+                             'subscriptionStatus', 'autoCallRecording', 'themeMode',
+                             'dialpadTonesEnabled', 'blockedNumbers', 'quickDeclineResponses',
+                             'updatedAt'
+                           ])
+                         ) || (
+                           isAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'isPremiumUser', 'subscriptionStatus', 'subscriptionProductId',
+                             'purchaseToken', 'subscriptionExpiresAt', 'isBlocked',
+                             'bonusTrialDays', 'adminNote', 'hideSubscriptionUI', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if false;
+    }
+
+    // UPI payment verification requests: user creates pending request matching configured UPI & price;
+    // verified admin can approve or disapprove (reject/revoke).
+    match /payment_requests/{requestId} {
+      allow get: if isSignedIn() &&
+                    isValidId(requestId) &&
+                    (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+                     (existing().userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'pending' &&
+                       incoming().reviewedByUid == '' &&
+                       incoming().reviewNote == '' &&
+                       incoming().keys().hasAll([
+                         'userId', 'userName', 'userEmail', 'deviceHash', 'shortDeviceTag',
+                         'upiId', 'amountInr', 'txnRef', 'upiTxnId', 'approvalRefNo',
+                         'upiResponseStatus', 'status', 'reviewedByUid', 'reviewNote',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'userName', 'userEmail', 'deviceHash', 'shortDeviceTag',
+                         'upiId', 'amountInr', 'txnRef', 'upiTxnId', 'approvalRefNo',
+                         'upiResponseStatus', 'status', 'reviewedByUid', 'reviewNote',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidPaymentRequest(incoming()) &&
+                       matchesConfiguredPaymentTerms(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       isValidPaymentRequest(incoming()) &&
+                       isAdmin() &&
+                       incoming().status in ['approved', 'rejected'] &&
+                       incoming().reviewedByUid == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().userName == existing().userName &&
+                       incoming().userEmail == existing().userEmail &&
+                       incoming().deviceHash == existing().deviceHash &&
+                       incoming().shortDeviceTag == existing().shortDeviceTag &&
+                       incoming().upiId == existing().upiId &&
+                       incoming().amountInr == existing().amountInr &&
+                       incoming().txnRef == existing().txnRef &&
+                       incoming().upiTxnId == existing().upiTxnId &&
+                       incoming().approvalRefNo == existing().approvalRefNo &&
+                       incoming().upiResponseStatus == existing().upiResponseStatus &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'status', 'reviewedByUid', 'reviewNote', 'updatedAt'
+                       ]);
+
+      allow delete: if false;
+    }
+
+    // Global app settings managed exclusively by verified admin; signed-in users can read config.
+    match /app_config/{configId} {
+      allow get: if isSignedIn() && isValidId(configId);
+      allow list: if isAdmin();
+
+      allow create, update: if isSignedIn() &&
+                               isAdmin() &&
+                               isValidId(configId) &&
+                               incoming().updatedByUid == request.auth.uid && (
+                                 (
+                                   configId == 'navigation_tabs' &&
+                                   incoming().keys().hasAll(['tabs', 'updatedByUid', 'updatedAt']) &&
+                                   incoming().keys().hasOnly(['tabs', 'updatedByUid', 'updatedAt']) &&
+                                   isValidNavigationTabsConfig(incoming())
+                                 ) || (
+                                   configId == 'settings_items' &&
+                                   incoming().keys().hasAll(['items', 'updatedByUid', 'updatedAt']) &&
+                                   incoming().keys().hasOnly(['items', 'updatedByUid', 'updatedAt']) &&
+                                   isValidSettingsItemsConfig(incoming())
+                                 ) || (
+                                   configId == 'live_broadcast' &&
+                                   incoming().keys().hasAll([
+                                     'showPopup', 'popupId', 'title', 'message', 'imageUrl',
+                                     'buttonText', 'actionUrl', 'isCancelable',
+                                     'showBannerAd', 'bannerText', 'bannerImageUrl', 'bannerActionUrl',
+                                     'updatedByUid', 'updatedAt'
+                                   ]) &&
+                                   incoming().keys().hasOnly([
+                                     'showPopup', 'popupId', 'title', 'message', 'imageUrl',
+                                     'buttonText', 'actionUrl', 'isCancelable',
+                                     'showBannerAd', 'bannerText', 'bannerImageUrl', 'bannerActionUrl',
+                                     'updatedByUid', 'updatedAt'
+                                   ]) &&
+                                   isValidLiveBroadcast(incoming())
+                                 ) || (
+                                   !(configId in ['navigation_tabs', 'settings_items', 'live_broadcast']) &&
+                                   incoming().keys().hasAll([
+                                     'trialDays', 'subscriptionPriceInr', 'upiVpa', 'whatsappNumber',
+                                     'enforceSingleDeviceTrial', 'allowCallRecording', 'allowManualUtr',
+                                     'maintenanceMode', 'maintenanceMessage', 'announcementText',
+                                     'updatedByUid', 'updatedAt'
+                                   ]) &&
+                                   incoming().keys().hasOnly([
+                                     'trialDays', 'subscriptionPriceInr', 'upiVpa', 'whatsappNumber',
+                                     'enforceSingleDeviceTrial', 'allowCallRecording', 'allowManualUtr',
+                                     'maintenanceMode', 'maintenanceMessage', 'announcementText',
+                                     'dialpadTonesDefault', 'defaultAutoRecording', 'forceThemeMode',
+                                     'hideSubscriptionUI', 'updatedByUid', 'updatedAt'
+                                   ]) &&
+                                   isValidAppConfig(incoming())
+                                 )
+                               );
+
+      allow delete: if false;
+    }
+  }
+}

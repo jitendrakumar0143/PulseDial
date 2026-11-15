@@ -1,0 +1,6 @@
+{
+  "name": "PulseDial",
+  "description": "Lightweight Material Design 3 custom phone dialer with Scoped Storage call recording, minimalist settings, and Play Billing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

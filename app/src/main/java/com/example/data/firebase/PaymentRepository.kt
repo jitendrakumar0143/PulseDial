@@ -1,0 +1,343 @@
+package com.example.data.firebase
+
+import android.content.Context
+import com.example.R
+import com.example.billing.UpiPaymentHelper
+import com.example.data.DialerPreferences
+import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.snapshots
+import java.util.Date
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+
+class PaymentRepository(
+    private val db: FirebaseFirestore,
+    private val auth: FirebaseAuth = Firebase.auth
+) {
+
+    constructor(context: Context) : this(
+        db = FirebaseFirestore.getInstance(
+            context.applicationContext.getString(R.string.firestore_database_id)
+        ),
+        auth = Firebase.auth
+    )
+
+    private fun requireUserId(): String {
+        return auth.currentUser?.uid
+            ?: throw IllegalStateException("User must be signed in with Google before managing payments.")
+    }
+
+    fun observeUserEntitlement(): Flow<UserEntitlement?> = flow {
+        val uid = requireUserId()
+        val path = "${DeviceTrialRepository.COLLECTION_USERS}/$uid"
+        emitAll(
+            db.collection(DeviceTrialRepository.COLLECTION_USERS).document(uid)
+                .snapshots()
+                .map { snapshot ->
+                    if (!snapshot.exists()) null
+                    else snapshot.toObject(
+                        UserEntitlement::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val exceptionToLog = firestoreError ?: (error as? Exception)
+                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(exceptionToLog, OperationType.GET, path, auth)
+                    }
+                    throw error
+                }
+        )
+    }
+
+    fun observeMyPaymentRequests(): Flow<List<PaymentRequest>> = flow {
+        val uid = requireUserId()
+        emitAll(
+            db.collection(COLLECTION_PAYMENT_REQUESTS)
+                .whereEqualTo("userId", uid)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.documents.mapNotNull { doc ->
+                        doc.toObject(
+                            PaymentRequest::class.java,
+                            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                        )
+                    }.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val exceptionToLog = firestoreError ?: (error as? Exception)
+                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(exceptionToLog, OperationType.LIST, COLLECTION_PAYMENT_REQUESTS, auth)
+                    }
+                    throw error
+                }
+        )
+    }
+
+    fun observeAllPaymentRequestsForAdmin(): Flow<List<PaymentRequest>> = flow {
+        val uid = requireUserId()
+        emitAll(
+            db.collection(COLLECTION_PAYMENT_REQUESTS)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.documents.mapNotNull { doc ->
+                        doc.toObject(
+                            PaymentRequest::class.java,
+                            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                        )
+                    }.sortedWith(
+                        compareBy<PaymentRequest> {
+                            when (it.status) {
+                                PaymentRequest.STATUS_PENDING -> 0
+                                PaymentRequest.STATUS_APPROVED -> 1
+                                else -> 2
+                            }
+                        }.thenByDescending { it.createdAt?.toDate()?.time ?: 0L }
+                    )
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val exceptionToLog = firestoreError ?: (error as? Exception)
+                    if (exceptionToLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(exceptionToLog, OperationType.LIST, COLLECTION_PAYMENT_REQUESTS, auth)
+                    }
+                    throw error
+                }
+        )
+    }
+
+    suspend fun submitUpiPaymentRequest(
+        deviceHash: String,
+        shortDeviceTag: String,
+        userName: String,
+        userEmail: String,
+        txnRef: String,
+        upiTxnId: String,
+        approvalRefNo: String,
+        upiResponseStatus: String,
+        upiId: String = UpiPaymentHelper.UPI_VPA,
+        amountInr: Long = UpiPaymentHelper.UPI_AMOUNT_LONG
+    ): Result<String> {
+        val uid = try {
+            requireUserId()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+
+        val docRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document()
+        val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(uid)
+        val cleanStatus = when (upiResponseStatus.uppercase()) {
+            "SUCCESS", "SUBMITTED", "MANUAL_UTR" -> upiResponseStatus.uppercase()
+            else -> "SUBMITTED"
+        }
+        val cleanTxnRef = txnRef.trim().ifBlank { UpiPaymentHelper.generateTxnRef() }.take(64)
+        val payload = mapOf(
+            "userId" to uid,
+            "userName" to userName.trim().ifBlank { "PulseDial User" }.take(120),
+            "userEmail" to userEmail.trim().take(254),
+            "deviceHash" to deviceHash,
+            "shortDeviceTag" to shortDeviceTag.ifBlank { DeviceIdentityProvider.formatShortDeviceTag(deviceHash) }.take(32),
+            "upiId" to upiId.trim().ifBlank { UpiPaymentHelper.UPI_VPA }.take(100),
+            "amountInr" to amountInr.coerceIn(1L, 100000L),
+            "txnRef" to cleanTxnRef,
+            "upiTxnId" to upiTxnId.trim().take(64),
+            "approvalRefNo" to approvalRefNo.trim().take(64),
+            "upiResponseStatus" to cleanStatus,
+            "status" to PaymentRequest.STATUS_PENDING,
+            "reviewedByUid" to "",
+            "reviewNote" to "",
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        return try {
+            docRef.set(payload).awaitTask()
+            runCatching {
+                val userSnap = userRef.snapshots().first()
+                if (userSnap.exists()) {
+                    userRef.update(
+                        mapOf(
+                            "subscriptionStatus" to UserEntitlement.STATUS_PENDING_APPROVAL,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).awaitTask()
+                }
+            }
+            Result.success(docRef.id)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.CREATE, docRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    suspend fun approvePaymentRequest(
+        request: PaymentRequest,
+        reviewNote: String = "Verified on ${request.upiId.ifBlank { UpiPaymentHelper.UPI_VPA }}"
+    ): Result<Unit> {
+        val adminUid = try {
+            requireUserId()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        require(request.id.isNotBlank()) { "Payment request ID must not be blank" }
+
+        val reqRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document(request.id)
+        val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(request.userId)
+        val deviceRef = db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS).document(request.deviceHash)
+
+        return try {
+            val userSnap = userRef.snapshots().first()
+            val deviceSnap = deviceRef.snapshots().first()
+
+            val nowMs = System.currentTimeMillis()
+            val existingUserExpMs = userSnap.getTimestamp("subscriptionExpiresAt")?.toDate()?.time ?: 0L
+            val existingDeviceExpMs = deviceSnap.getTimestamp("subscriptionExpiresAt")?.toDate()?.time ?: 0L
+            val renewalBaseMs = maxOf(nowMs, existingUserExpMs, existingDeviceExpMs)
+            val nextExpiresAt = Timestamp(Date(renewalBaseMs + DialerPreferences.ONE_MONTH_MILLIS))
+
+            val batch = db.batch()
+            batch.update(
+                reqRef,
+                mapOf(
+                    "status" to PaymentRequest.STATUS_APPROVED,
+                    "reviewedByUid" to adminUid,
+                    "reviewNote" to reviewNote.trim().take(240),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            if (userSnap.exists()) {
+                batch.update(
+                    userRef,
+                    mapOf(
+                        "isPremiumUser" to true,
+                        "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                        "subscriptionProductId" to UpiPaymentHelper.UPI_PLAN_ID,
+                        "purchaseToken" to request.upiTxnId.ifBlank { request.txnRef }.take(512),
+                        "subscriptionExpiresAt" to nextExpiresAt,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            if (deviceSnap.exists()) {
+                batch.update(
+                    deviceRef,
+                    mapOf(
+                        "isPremiumDevice" to true,
+                        "subscriptionExpiresAt" to nextExpiresAt,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().awaitTask()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.UPDATE, reqRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    /**
+     * Disapproves (rejects/revokes) a payment request and revokes user/device premium entitlement if active.
+     */
+    suspend fun rejectPaymentRequest(
+        request: PaymentRequest,
+        reviewNote: String = "Disapproved by Admin"
+    ): Result<Unit> {
+        val adminUid = try {
+            requireUserId()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        require(request.id.isNotBlank()) { "Payment request ID must not be blank" }
+
+        val reqRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document(request.id)
+        val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(request.userId)
+        val deviceRef = db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS).document(request.deviceHash)
+
+        return try {
+            val userSnap = userRef.snapshots().first()
+            val deviceSnap = deviceRef.snapshots().first()
+
+            val batch = db.batch()
+            batch.update(
+                reqRef,
+                mapOf(
+                    "status" to PaymentRequest.STATUS_REJECTED,
+                    "reviewedByUid" to adminUid,
+                    "reviewNote" to reviewNote.trim().take(240),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            if (userSnap.exists()) {
+                batch.update(
+                    userRef,
+                    mapOf(
+                        "isPremiumUser" to false,
+                        "subscriptionStatus" to UserEntitlement.STATUS_REJECTED,
+                        "subscriptionProductId" to "",
+                        "purchaseToken" to "",
+                        "subscriptionExpiresAt" to null,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            if (deviceSnap.exists()) {
+                batch.update(
+                    deviceRef,
+                    mapOf(
+                        "isPremiumDevice" to false,
+                        "subscriptionExpiresAt" to null,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().awaitTask()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.UPDATE, reqRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    companion object {
+        const val COLLECTION_PAYMENT_REQUESTS = "payment_requests"
+    }
+}
