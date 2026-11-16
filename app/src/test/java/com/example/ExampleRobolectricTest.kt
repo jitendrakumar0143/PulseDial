@@ -1487,4 +1487,71 @@ class ExampleRobolectricTest {
             accountView.findViewById<android.widget.TextView>(R.id.tv_benefit_vip_shield).text.toString()
         )
     }
+
+    @Test
+    fun `sha1 bypass fallback login generates deterministic userId with ANDROID_ID, registers ServerValue TIMESTAMP in RTDB, and unlocks 5 tab dialer`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+
+        // 1. Verify deterministic userId pairing Email/Phone with Settings.Secure.ANDROID_ID
+        val uidFromEmail1 = com.example.data.firebase.GoogleAuthHelper.buildDeterministicUserId(
+            "Jitendrakumar888126@gmail.com",
+            "android_hw_id_001"
+        )
+        val uidFromEmail2 = com.example.data.firebase.GoogleAuthHelper.buildDeterministicUserId(
+            "  jitendrakumar888126@gmail.com  ",
+            "ANDROID_HW_ID_001"
+        )
+        assertEquals(uidFromEmail1, uidFromEmail2)
+        assertTrue(uidFromEmail1.startsWith("usr_"))
+
+        val uidFromPhone1 = com.example.data.firebase.GoogleAuthHelper.buildDeterministicUserId(
+            "+91 98765 43210",
+            "android_hw_id_001"
+        )
+        val uidFromPhone2 = com.example.data.firebase.GoogleAuthHelper.buildDeterministicUserId(
+            "09876543210",
+            "android_hw_id_001"
+        )
+        assertEquals(uidFromPhone1, uidFromPhone2)
+
+        // 2. Verify initial RTDB registration payload uses ServerValue.TIMESTAMP for installDate
+        val initialPayload = com.example.data.firebase.RealtimeDatabaseSync.buildInitialUserRegistrationPayload(
+            userId = uidFromEmail1,
+            email = "Jitendrakumar888126@gmail.com",
+            phone = "+919876543210",
+            displayName = "Jitendra Kumar",
+            deviceId = "android_hw_id_001",
+            deviceHash = "f".repeat(64),
+            isFirstRegistrationOnDevice = true
+        )
+        assertEquals(uidFromEmail1, initialPayload["uid"])
+        assertEquals("Jitendrakumar888126@gmail.com", initialPayload["email"])
+        assertEquals("+919876543210", initialPayload["phone"])
+        assertEquals("android_hw_id_001", initialPayload["deviceId"])
+        assertEquals(com.google.firebase.database.ServerValue.TIMESTAMP, initialPayload["installDate"])
+        assertEquals("trial", initialPayload["subscriptionStatus"])
+        assertEquals(false, initialPayload["isPremium"])
+        assertEquals(false, initialPayload["isBlocked"])
+
+        // 3. Verify completeFallbackLogin immediately persists session and marks user authenticated
+        assertFalse(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
+        val entitlement = com.example.data.firebase.GoogleAuthHelper.completeFallbackLogin(
+            context = app,
+            emailOrPhone = "Jitendrakumar888126@gmail.com",
+            displayName = "Jitendra Kumar"
+        )
+        assertTrue(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
+        assertTrue(prefs.isLoggedIn)
+        assertEquals(entitlement.userId, prefs.loggedInUserId)
+        assertEquals("Jitendrakumar888126@gmail.com", com.example.data.firebase.GoogleAuthHelper.resolveActiveEmail(app))
+        assertEquals(entitlement.userId, com.example.data.firebase.GoogleAuthHelper.resolveActiveUid(app))
+
+        // 4. Verify sign-out clears fallback session
+        prefs.resetSessionEntitlementsOnSignOut()
+        assertFalse(prefs.isLoggedIn)
+        assertFalse(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
+    }
 }
+

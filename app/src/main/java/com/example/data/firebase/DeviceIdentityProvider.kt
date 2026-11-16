@@ -19,6 +19,22 @@ object DeviceIdentityProvider {
     private var cachedDeviceHash: String? = null
 
     @SuppressLint("HardwareIds")
+    fun getHardwareAndroidId(context: Context): String {
+        val appContext = context.applicationContext
+        val raw = runCatching {
+            Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
+        }.getOrNull().orEmpty().trim()
+        if (raw.isNotEmpty()) return raw
+        val hardwareSeed = listOf(
+            Build.MANUFACTURER.orEmpty(),
+            Build.MODEL.orEmpty(),
+            Build.DEVICE.orEmpty(),
+            Build.BOARD.orEmpty()
+        ).joinToString(":")
+        return sha256Hex("$FINGERPRINT_SALT|hw:$hardwareSeed").take(16)
+    }
+
+    @SuppressLint("HardwareIds")
     fun getDeviceHash(context: Context): String {
         cachedDeviceHash?.let { return it }
         val appContext = context.applicationContext

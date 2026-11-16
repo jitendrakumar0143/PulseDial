@@ -8,6 +8,7 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
 import com.google.firebase.database.ValueEventListener
 import java.util.Date
 import java.util.concurrent.atomic.AtomicBoolean
@@ -421,6 +422,72 @@ object RealtimeDatabaseSync {
             val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
             onUpdate(parseLiveBroadcastSnapshot(rawMap))
         }
+    }
+
+    /**
+     * Builds the Realtime Database registration map for `/users/{userId}` on login.
+     * Uses `ServerValue.TIMESTAMP` for `installDate` on first registration on this device
+     * to enforce "7-Day Free Trial • One Per Device".
+     */
+    fun buildInitialUserRegistrationPayload(
+        userId: String,
+        email: String,
+        phone: String,
+        displayName: String,
+        deviceId: String,
+        deviceHash: String,
+        isFirstRegistrationOnDevice: Boolean
+    ): Map<String, Any?> {
+        val base = mutableMapOf<String, Any?>(
+            "uid" to userId,
+            "userId" to userId,
+            "email" to email,
+            "phone" to phone,
+            "phoneNumber" to phone,
+            "displayName" to displayName,
+            "deviceId" to deviceId,
+            "deviceHash" to deviceHash,
+            "updatedAtMs" to ServerValue.TIMESTAMP
+        )
+        if (isFirstRegistrationOnDevice) {
+            base["installDate"] = ServerValue.TIMESTAMP
+            base["subscriptionStatus"] = UserEntitlement.STATUS_TRIAL
+            base["isPremium"] = false
+            base["isPremiumUser"] = false
+            base["isBlocked"] = false
+        }
+        return base
+    }
+
+    /**
+     * Immediately creates or updates `/users/{userId}` in Firebase Realtime Database
+     * (`https://gen-lang-client-0353534085-default-rtdb.firebaseio.com`) when a user logs in
+     * (either via Google Sign-In or SHA-1 Fallback Login).
+     */
+    fun registerOrUpdateUserOnLogin(
+        context: Context,
+        userId: String,
+        email: String,
+        phone: String,
+        displayName: String,
+        deviceId: String,
+        deviceHash: String,
+        isFirstRegistrationOnDevice: Boolean
+    ): Map<String, Any?> {
+        val cleanUid = userId.trim()
+        val payload = buildInitialUserRegistrationPayload(
+            userId = cleanUid,
+            email = email.trim(),
+            phone = phone.trim(),
+            displayName = displayName.trim().ifBlank { "PulseDial User" },
+            deviceId = deviceId.trim(),
+            deviceHash = deviceHash.trim(),
+            isFirstRegistrationOnDevice = isFirstRegistrationOnDevice
+        )
+        if (cleanUid.isNotEmpty()) {
+            update("$NODE_USERS/$cleanUid", payload, context)
+        }
+        return payload
     }
 
     /**

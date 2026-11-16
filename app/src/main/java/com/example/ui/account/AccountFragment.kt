@@ -27,6 +27,7 @@ import com.example.billing.UpiTxnStatus
 import com.example.data.DialerPreferences
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.DeviceTrialRepository
+import com.example.data.firebase.GoogleAuthHelper
 import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.PaymentRequest
 import com.example.databinding.FragmentAccountBinding
@@ -272,8 +273,7 @@ class AccountFragment : Fragment() {
         verificationType: String
     ) {
         val ctx = requireContext()
-        val user = Firebase.auth.currentUser
-        if (user == null) {
+        if (!GoogleAuthHelper.isUserAuthenticated(ctx)) {
             Toast.makeText(ctx, R.string.auth_gate_title, Toast.LENGTH_SHORT).show()
             return
         }
@@ -281,8 +281,8 @@ class AccountFragment : Fragment() {
         val shortTag = prefs.shortDeviceTag.ifBlank {
             DeviceIdentityProvider.formatShortDeviceTag(deviceHash)
         }
-        val userName = user.displayName?.takeIf { it.isNotBlank() } ?: prefs.userName
-        val userEmail = user.email?.takeIf { it.isNotBlank() } ?: prefs.userEmail
+        val userName = GoogleAuthHelper.resolveActiveDisplayName(ctx).ifBlank { prefs.userName }
+        val userEmail = GoogleAuthHelper.resolveActiveEmail(ctx).ifBlank { prefs.userEmail }
 
         Toast.makeText(ctx, R.string.upi_verifying_submission, Toast.LENGTH_SHORT).show()
 
@@ -365,9 +365,8 @@ class AccountFragment : Fragment() {
 
     private fun openWhatsAppSupport() {
         val ctx = requireContext()
-        val user = Firebase.auth.currentUser
-        val name = user?.displayName?.takeIf { it.isNotBlank() } ?: prefs.userName
-        val email = user?.email?.takeIf { it.isNotBlank() } ?: prefs.userEmail
+        val name = GoogleAuthHelper.resolveActiveDisplayName(ctx).ifBlank { prefs.userName }
+        val email = GoogleAuthHelper.resolveActiveEmail(ctx).ifBlank { prefs.userEmail }
         val deviceTag = prefs.shortDeviceTag.ifBlank {
             DeviceIdentityProvider.formatShortDeviceTag(DeviceIdentityProvider.getDeviceHash(ctx))
         }
@@ -406,7 +405,7 @@ class AccountFragment : Fragment() {
     }
 
     private fun syncCloudTrialStatus() {
-        if (Firebase.auth.currentUser == null) return
+        if (!GoogleAuthHelper.isUserAuthenticated(requireContext())) return
         val deviceHash = DeviceIdentityProvider.getDeviceHash(requireContext())
         viewLifecycleOwner.lifecycleScope.launch {
             trialRepository.syncDeviceAndUserTrial(deviceHash)
@@ -415,9 +414,9 @@ class AccountFragment : Fragment() {
     }
 
     private fun bindProfile() {
-        val currentUser = Firebase.auth.currentUser
-        val displayName = currentUser?.displayName?.takeIf { it.isNotBlank() } ?: prefs.userName
-        val email = currentUser?.email?.takeIf { it.isNotBlank() } ?: prefs.userEmail
+        val ctx = requireContext()
+        val displayName = GoogleAuthHelper.resolveActiveDisplayName(ctx).ifBlank { prefs.userName }
+        val email = GoogleAuthHelper.resolveActiveEmail(ctx).ifBlank { prefs.userEmail }
         binding.tvUserName.text = displayName
         if (email.isNotBlank()) {
             binding.tvUserEmail.visibility = View.VISIBLE
@@ -440,7 +439,7 @@ class AccountFragment : Fragment() {
 
     private fun renderBillingState(state: BillingUiState) {
         val ctx = requireContext()
-        val isAdmin = UpiPaymentHelper.isAdminEmail(Firebase.auth.currentUser?.email)
+        val isAdmin = UpiPaymentHelper.isAdminEmail(GoogleAuthHelper.resolveActiveEmail(ctx))
         val isBlockedByAdmin = prefs.adminBlockedUser
         val isMaintenance = prefs.maintenanceMode && !isAdmin
         val isPremium = !isBlockedByAdmin && subscriptionManager.isPremiumActive()

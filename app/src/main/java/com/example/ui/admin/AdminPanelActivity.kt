@@ -33,6 +33,7 @@ import com.example.data.firebase.AdminUserFilter
 import com.example.data.firebase.AppConfig
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.DynamicSettingItem
+import com.example.data.firebase.GoogleAuthHelper
 import com.example.data.firebase.LiveBroadcast
 import com.example.data.firebase.NavigationTabItem
 import com.example.data.firebase.PaymentRepository
@@ -94,8 +95,8 @@ class AdminPanelActivity : AppCompatActivity() {
         binding = ActivityAdminPanelBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val currentUser = Firebase.auth.currentUser
-        if (currentUser == null || !UpiPaymentHelper.isAdminEmail(currentUser.email)) {
+        val activeEmail = GoogleAuthHelper.resolveActiveEmail(this)
+        if (!GoogleAuthHelper.isUserAuthenticated(this) || !UpiPaymentHelper.isAdminEmail(activeEmail)) {
             Toast.makeText(
                 this,
                 getString(R.string.admin_access_denied, UpiPaymentHelper.ADMIN_EMAIL),
@@ -110,7 +111,7 @@ class AdminPanelActivity : AppCompatActivity() {
         paymentRepository = PaymentRepository(this)
 
         applyInsets()
-        setupToolbar(currentUser.email.orEmpty())
+        setupToolbar(activeEmail)
         setupTabs()
         setupUsersTab()
         setupExpiringTab()
@@ -226,8 +227,8 @@ class AdminPanelActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        val currentUser = Firebase.auth.currentUser
-        if (currentUser == null || !UpiPaymentHelper.isAdminEmail(currentUser.email)) {
+        val activeEmail = GoogleAuthHelper.resolveActiveEmail(this)
+        if (!GoogleAuthHelper.isUserAuthenticated(this) || !UpiPaymentHelper.isAdminEmail(activeEmail)) {
             finish()
         }
     }

@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.Manifest
+import android.accounts.AccountManager
+import android.app.Activity
 import android.app.role.RoleManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +12,7 @@ import android.os.Bundle
 import android.telecom.TelecomManager
 import android.view.Menu
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -79,14 +82,16 @@ class MainActivity : AppCompatActivity() {
     private var activeBroadcastPopupId: String? = null
     private var bannerDismissedTextKey: String? = null
 
-    private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+    private val authStateListener = FirebaseAuth.AuthStateListener { _ ->
         if (!isFinishing && !isDestroyed) {
-            val signedIn = firebaseAuth.currentUser != null
+            val signedIn = GoogleAuthHelper.isUserAuthenticated(this)
             if (lastRenderedAuthState != signedIn) {
                 renderAuthState(signedIn)
             }
         }
     }
+
+
 
     private val requiredPermissions: Array<String>
         get() = buildList {
@@ -145,7 +150,7 @@ class MainActivity : AppCompatActivity() {
         com.example.billing.SubscriptionEnforcementService.init(this)
         RealtimeSyncManager.init(this)
         observeRealtimeSync()
-        renderAuthState(Firebase.auth.currentUser != null)
+        renderAuthState(GoogleAuthHelper.isUserAuthenticated(this))
         handleIncomingIntent(intent)
     }
 
@@ -156,7 +161,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (Firebase.auth.currentUser != null) {
+        if (GoogleAuthHelper.isUserAuthenticated(this)) {
             RealtimeSyncManager.refreshFromCloudNow()
             enforcePaywallIfExpired()
         }
@@ -195,6 +200,7 @@ class MainActivity : AppCompatActivity() {
                 scope = lifecycleScope,
                 onAuthSuccess = {
                     setAuthLoading(false, null)
+                    lastRenderedAuthState = null
                     renderAuthState(true)
                 },
                 onAuthError = { msg ->
@@ -211,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             }
             val intent = UpiPaymentHelper.buildWhatsAppSupportIntent(
                 userName = prefs.userName,
-                userEmail = Firebase.auth.currentUser?.email.orEmpty(),
+                userEmail = GoogleAuthHelper.resolveActiveEmail(this),
                 deviceTag = deviceTag,
                 supportNumberRaw = prefs.configuredWhatsappNumber
             )
@@ -225,8 +231,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateBlockedOverlayState() {
-        val isSignedIn = Firebase.auth.currentUser != null
-        val isAdmin = UpiPaymentHelper.isAdminEmail(Firebase.auth.currentUser?.email)
+        val isSignedIn = GoogleAuthHelper.isUserAuthenticated(this)
+        val isAdmin = UpiPaymentHelper.isAdminEmail(GoogleAuthHelper.resolveActiveEmail(this))
         val isBlocked = isSignedIn && !isAdmin && (
             prefs.adminBlockedUser ||
                 com.example.billing.SubscriptionEnforcementService.state.value.isBlocked ||
@@ -277,7 +283,7 @@ class MainActivity : AppCompatActivity() {
             if (!attemptedSilentSignIn) {
                 attemptedSilentSignIn = true
                 binding.root.post {
-                    if (isFinishing || isDestroyed || Firebase.auth.currentUser != null) return@post
+                    if (isFinishing || isDestroyed || GoogleAuthHelper.isUserAuthenticated(this)) return@post
                     setAuthLoading(true, null)
                     GoogleAuthHelper.attemptAutoSignIn(
                         context = this,
@@ -285,6 +291,7 @@ class MainActivity : AppCompatActivity() {
                         scope = lifecycleScope,
                         onAuthSuccess = {
                             setAuthLoading(false, null)
+                            lastRenderedAuthState = null
                             renderAuthState(true)
                         },
                         onUnauthenticated = {
@@ -316,7 +323,7 @@ class MainActivity : AppCompatActivity() {
             switchFragment(activeTabId, titleForTab(activeTabId))
         }
         updateFabVisibility(activeTabId)
-        Firebase.auth.currentUser?.uid?.let { uid ->
+        GoogleAuthHelper.resolveActiveUid(this)?.let { uid ->
             lastSyncedUid = uid
             com.example.billing.SubscriptionEnforcementService.startMonitoringUser(uid, this)
             RealtimeSyncManager.startForUser(uid)
@@ -328,7 +335,7 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
-                        if (Firebase.auth.currentUser == null) return@collect
+                        if (!GoogleAuthHelper.isUserAuthenticated(this@MainActivity)) return@collect
                         if (enfState.lastEvaluatedAtMs == 0L) return@collect
 
                         updateBlockedOverlayState()
@@ -364,7 +371,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 launch {
                     RealtimeSyncManager.syncState.collect { state ->
-                        if (state.uid == null || Firebase.auth.currentUser == null) return@collect
+                        if (state.uid == null || !GoogleAuthHelper.isUserAuthenticated(this@MainActivity)) return@collect
                         if (state.version == 0L) return@collect
 
                         updateBlockedOverlayState()
@@ -432,7 +439,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 launch {
                     while (isActive) {
-                        if (Firebase.auth.currentUser != null &&
+                        if (GoogleAuthHelper.isUserAuthenticated(this@MainActivity) &&
                             activeTabId != R.id.nav_account &&
                             isAppLockedByTrialExpiry()
                         ) {
@@ -640,6 +647,7 @@ class MainActivity : AppCompatActivity() {
 
     fun signOutUser() {
         lastSyncedUid = null
+        com.example.billing.SubscriptionEnforcementService.stopMonitoring()
         RealtimeSyncManager.stop()
         activeBroadcastDialog?.dismiss()
         activeBroadcastDialog = null
@@ -648,9 +656,11 @@ class MainActivity : AppCompatActivity() {
         hiddenAdminTapDetector.onOtherTabSelected()
         prefs.resetSessionEntitlementsOnSignOut()
         GoogleAuthHelper.signOut(
+            context = this,
             credentialManager = credentialManager,
             scope = lifecycleScope,
             onSignOutComplete = {
+                lastRenderedAuthState = null
                 renderAuthState(false)
             }
         )
@@ -725,7 +735,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleAccountTabTap() {
         if (hiddenAdminTapDetector.onAccountTabTapped()) {
-            val email = Firebase.auth.currentUser?.email
+            val email = GoogleAuthHelper.resolveActiveEmail(this)
             if (UpiPaymentHelper.isAdminEmail(email)) {
                 startActivity(AdminPanelActivity.createIntent(this))
             } else {
@@ -804,7 +814,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
-        if (Firebase.auth.currentUser == null) return
+        if (!GoogleAuthHelper.isUserAuthenticated(this)) return
         if (intent?.getBooleanExtra(EXTRA_OPEN_ACCOUNT_TAB, false) == true || isAppLockedByTrialExpiry()) {
             navigateToAccountTab()
             return
@@ -827,7 +837,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun isAppLockedByTrialExpiry(): Boolean {
-        val isAdmin = UpiPaymentHelper.isAdminEmail(Firebase.auth.currentUser?.email)
+        val isAdmin = UpiPaymentHelper.isAdminEmail(GoogleAuthHelper.resolveActiveEmail(this))
         if (subscriptionManager.isMaintenanceLocked(isAdmin)) return true
         return !subscriptionManager.isSubscriptionActive()
     }

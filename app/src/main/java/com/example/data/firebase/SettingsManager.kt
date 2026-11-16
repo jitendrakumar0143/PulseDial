@@ -48,10 +48,16 @@ class SettingsManager(
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private fun activeUid(): String? {
+        val firebaseUid = runCatching { auth?.currentUser?.uid }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (firebaseUid != null) return firebaseUid
+        return prefs.loggedInUserId.takeIf { prefs.isLoggedIn && it.isNotBlank() }
+    }
+
     fun observeUserSettings(): Flow<UserEntitlement?> = flow {
         val firestore = db
             ?: throw IllegalStateException("FirebaseFirestore is not initialized.")
-        val uid = auth?.currentUser?.uid
+        val uid = activeUid()
             ?: throw IllegalStateException("User must be signed in before observing settings.")
         val path = "${DeviceTrialRepository.COLLECTION_USERS}/$uid"
         emitAll(
@@ -87,7 +93,7 @@ class SettingsManager(
     fun setAutoCallRecording(enabled: Boolean) {
         prefs.autoCallRecording = enabled
         pushFieldsAsync(mapOf("autoCallRecording" to enabled))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -112,7 +118,7 @@ class SettingsManager(
             UserEntitlement.THEME_LIGHT
         }
         pushFieldsAsync(mapOf("themeMode" to themeStr))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -126,7 +132,7 @@ class SettingsManager(
     fun setDialpadTonesEnabled(enabled: Boolean) {
         prefs.dialpadTonesEnabled = enabled
         pushFieldsAsync(mapOf("dialpadTonesEnabled" to enabled))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -172,7 +178,7 @@ class SettingsManager(
     fun setAnnouncerEnabled(enabled: Boolean) {
         prefs.announcerEnabled = enabled
         pushFieldsAsync(mapOf("announcerEnabled" to enabled))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -186,7 +192,7 @@ class SettingsManager(
     fun setAnnouncerHeadsetOnly(enabled: Boolean) {
         prefs.announcerHeadsetOnly = enabled
         pushFieldsAsync(mapOf("announcerHeadsetOnly" to enabled))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -201,7 +207,7 @@ class SettingsManager(
         prefs.unknownShieldMode = mode
         val normalized = prefs.unknownShieldMode
         pushFieldsAsync(mapOf("unknownShieldMode" to normalized))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -215,7 +221,7 @@ class SettingsManager(
     fun setAutoSmsFollowUp(enabled: Boolean) {
         prefs.autoSmsFollowUp = enabled
         pushFieldsAsync(mapOf("autoSmsFollowUp" to enabled))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -229,7 +235,7 @@ class SettingsManager(
     fun setAutoWhatsappFollowUp(enabled: Boolean) {
         prefs.autoWhatsappFollowUp = enabled
         pushFieldsAsync(mapOf("autoWhatsappFollowUp" to enabled))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -244,7 +250,7 @@ class SettingsManager(
         prefs.followUpTrigger = trigger
         val normalized = prefs.followUpTrigger
         pushFieldsAsync(mapOf("followUpTrigger" to normalized))
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -266,7 +272,7 @@ class SettingsManager(
                 "missedCallTemplate" to cleanMissed
             )
         )
-        auth?.currentUser?.uid?.let { uid ->
+        activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
@@ -281,7 +287,7 @@ class SettingsManager(
     suspend fun syncAllLocalPreferencesToCloud(): Result<Unit> {
         val firestore = db
             ?: return Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
-        val uid = auth?.currentUser?.uid
+        val uid = activeUid()
             ?: return Result.failure(IllegalStateException("User must be signed in before syncing settings."))
         val themeStr = if (prefs.displayThemeMode == AppCompatDelegate.MODE_NIGHT_YES) {
             UserEntitlement.THEME_DARK
@@ -336,7 +342,7 @@ class SettingsManager(
 
     private fun pushFieldsAsync(fields: Map<String, Any>) {
         val firestore = db ?: return
-        val uid = auth?.currentUser?.uid ?: return
+        val uid = activeUid() ?: return
         val payload = fields + ("updatedAt" to FieldValue.serverTimestamp())
         ioScope.launch {
             runCatching {

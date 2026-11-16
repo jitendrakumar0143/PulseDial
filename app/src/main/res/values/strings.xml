@@ -373,9 +373,13 @@
 
     <!-- Google Sign-In Gate -->
     <string name="auth_gate_title">Welcome to PulseDial</string>
-    <string name="auth_gate_subtitle">New users enjoy 7 days completely free, then ₹299/month. Sign in with Google to verify your device and activate your trial.</string>
+    <string name="auth_gate_subtitle">New users enjoy 7 days completely free, then ₹299/month. Sign in with Google or enter your Email / 10-digit Mobile Number to verify your device and activate your trial.</string>
     <string name="auth_gate_trial_badge">7-Day Free Trial • One Per Device</string>
     <string name="auth_gate_btn_google">Sign in with Google</string>
+    <string name="auth_gate_or_divider">OR INSTANT DEVICE LOGIN</string>
+    <string name="auth_gate_fallback_hint">Email or 10-Digit Mobile Number</string>
+    <string name="auth_gate_btn_fallback">Continue with Email / Mobile</string>
+    <string name="auth_gate_fallback_invalid">Please enter a valid Email address or 10-digit Mobile Number</string>
     <string name="auth_gate_verifying">Verifying device trial status…</string>
 
     <!-- Full-Screen Account Blocked Overlay & Live Real-Time Controls -->

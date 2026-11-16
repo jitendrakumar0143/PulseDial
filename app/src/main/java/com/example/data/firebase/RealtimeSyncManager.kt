@@ -101,17 +101,18 @@ object RealtimeSyncManager {
         if (!firebaseAvailable) return
 
         RealtimeDatabaseSync.init(context.applicationContext)
-        val auth = runCatching { Firebase.auth }.getOrNull() ?: return
+        val auth = runCatching { Firebase.auth }.getOrNull()
         isInitialized = true
-        auth.addAuthStateListener { firebaseAuth ->
+        auth?.addAuthStateListener { firebaseAuth ->
             val uid = firebaseAuth.currentUser?.uid
+                ?: GoogleAuthHelper.resolveActiveUid(context.applicationContext)
             if (uid != null) {
                 startForUser(uid)
             } else {
                 stop()
             }
         }
-        auth.currentUser?.uid?.let { startForUser(it) }
+        GoogleAuthHelper.resolveActiveUid(context.applicationContext)?.let { startForUser(it) }
     }
 
     private fun applyIncomingAppConfig(config: AppConfig, prefs: DialerPreferences) {

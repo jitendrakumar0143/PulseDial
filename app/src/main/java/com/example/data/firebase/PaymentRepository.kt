@@ -24,19 +24,24 @@ import kotlinx.coroutines.flow.map
 
 class PaymentRepository(
     private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val auth: FirebaseAuth = Firebase.auth,
+    private val fallbackUidProvider: () -> String? = { null }
 ) {
 
     constructor(context: Context) : this(
         db = FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
         ),
-        auth = Firebase.auth
+        auth = Firebase.auth,
+        fallbackUidProvider = { GoogleAuthHelper.resolveActiveUid(context.applicationContext) }
     )
 
     private fun requireUserId(): String {
-        return auth.currentUser?.uid
-            ?: throw IllegalStateException("User must be signed in with Google before managing payments.")
+        val firebaseUid = runCatching { auth.currentUser?.uid }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (firebaseUid != null) return firebaseUid
+        val fallbackUid = fallbackUidProvider()?.takeIf { it.isNotBlank() }
+        if (fallbackUid != null) return fallbackUid
+        throw IllegalStateException("User must be signed in before managing payments.")
     }
 
     fun observeUserEntitlement(): Flow<UserEntitlement?> = flow {
@@ -210,6 +215,9 @@ class PaymentRepository(
                     "updatedAtMs" to System.currentTimeMillis()
                 )
             )
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(docRef.id)
+            }
             docRef.set(payload).awaitTask()
             runCatching {
                 val userSnap = userRef.snapshots().first()

@@ -426,6 +426,8 @@ class DialerPreferences(context: Context) {
 
     fun resetSessionEntitlementsOnSignOut() {
         prefs.edit {
+            putBoolean(KEY_IS_LOGGED_IN, false)
+            remove(KEY_LOGGED_IN_USER_ID)
             putBoolean(KEY_IS_PREMIUM_USER, false)
             putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
             putBoolean(KEY_ADMIN_BLOCKED_USER, false)
@@ -436,6 +438,22 @@ class DialerPreferences(context: Context) {
         }
         refreshIntegritySeal()
     }
+
+    var isLoggedIn: Boolean
+        get() = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
+        set(value) = prefs.edit { putBoolean(KEY_IS_LOGGED_IN, value) }
+
+    var loggedInUserId: String
+        get() = prefs.getString(KEY_LOGGED_IN_USER_ID, "").orEmpty()
+        set(value) = prefs.edit { putString(KEY_LOGGED_IN_USER_ID, value.trim()) }
+
+    var rawAndroidId: String
+        get() = prefs.getString(KEY_RAW_ANDROID_ID, "").orEmpty()
+        set(value) = prefs.edit { putString(KEY_RAW_ANDROID_ID, value.trim()) }
+
+    var initialDeviceRegisteredInRtdb: Boolean
+        get() = prefs.getBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, false)
+        set(value) = prefs.edit { putBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, value) }
 
     var autoCallRecording: Boolean
         get() = prefs.getBoolean(KEY_AUTO_RECORDING, false)
@@ -762,6 +780,10 @@ class DialerPreferences(context: Context) {
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_USER_NUMBER = "user_number"
+        const val KEY_IS_LOGGED_IN = "isLoggedIn"
+        const val KEY_LOGGED_IN_USER_ID = "userId"
+        const val KEY_RAW_ANDROID_ID = "deviceId"
+        private const val KEY_INITIAL_DEVICE_REGISTERED_RTDB = "initial_device_registered_rtdb"
         private const val DELIMITER = "|||"
 
         const val KEY_ANNOUNCER_ENABLED = "announcer_enabled"

@@ -55,20 +55,24 @@ enum class AdminSubscriberFilter {
 
 class AdminRepository(
     private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val auth: FirebaseAuth = Firebase.auth,
+    private val fallbackUidProvider: () -> String? = { null }
 ) {
 
     constructor(context: Context) : this(
         db = FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
         ),
-        auth = Firebase.auth
+        auth = Firebase.auth,
+        fallbackUidProvider = { GoogleAuthHelper.resolveActiveUid(context.applicationContext) }
     )
 
     private fun requireAdminUid(): String {
-        val user = auth.currentUser
-            ?: throw IllegalStateException("Admin must be signed in with Google.")
-        return user.uid
+        val firebaseUid = runCatching { auth.currentUser?.uid }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (firebaseUid != null) return firebaseUid
+        val fallbackUid = fallbackUidProvider()?.takeIf { it.isNotBlank() }
+        if (fallbackUid != null) return fallbackUid
+        throw IllegalStateException("Admin must be signed in.")
     }
 
     fun observeAllUsers(): Flow<List<UserEntitlement>> = flow {
@@ -446,6 +450,9 @@ class AdminRepository(
                     forceThemeMode = cleanTheme
                 )
             )
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -511,6 +518,9 @@ class AdminRepository(
                     "updatedAtMs" to System.currentTimeMillis()
                 )
             )
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
             val deviceSnap = deviceRef?.snapshots()?.first()
             val batch = db.batch()
             batch.update(
