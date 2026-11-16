@@ -71,6 +71,7 @@ service cloud.firestore {
              data.subscriptionProductId.size() <= 64 &&
              data.purchaseToken is string &&
              data.purchaseToken.size() <= 512 &&
+             (!('paymentRefId' in data) || (data.paymentRefId is string && data.paymentRefId.size() <= 64)) &&
              (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || data.subscriptionExpiresAt is timestamp) &&
              (!('isBlocked' in data) || data.isBlocked is bool) &&
              (!('bonusTrialDays' in data) || (data.bonusTrialDays is int && data.bonusTrialDays >= 0 && data.bonusTrialDays <= 3650)) &&
@@ -89,6 +90,14 @@ service cloud.firestore {
                data.quickDeclineResponses.size() <= 50 &&
                (data.quickDeclineResponses.size() == 0 || (data.quickDeclineResponses[0] is string && data.quickDeclineResponses[0].size() <= 200))
              )) &&
+             (!('announcerEnabled' in data) || data.announcerEnabled is bool) &&
+             (!('announcerHeadsetOnly' in data) || data.announcerHeadsetOnly is bool) &&
+             (!('unknownShieldMode' in data) || data.unknownShieldMode in ['OFF', 'SILENT_RECORD', 'AUTO_REJECT']) &&
+             (!('autoSmsFollowUp' in data) || data.autoSmsFollowUp is bool) &&
+             (!('autoWhatsappFollowUp' in data) || data.autoWhatsappFollowUp is bool) &&
+             (!('followUpTrigger' in data) || data.followUpTrigger in ['ALL_CALLS', 'MISSED_ONLY', 'COMPLETED_ONLY']) &&
+             (!('completedCallTemplate' in data) || (data.completedCallTemplate is string && data.completedCallTemplate.size() <= 500)) &&
+             (!('missedCallTemplate' in data) || (data.missedCallTemplate is string && data.missedCallTemplate.size() <= 500)) &&
              data.createdAt is timestamp &&
              data.createdAt <= request.time &&
              data.updatedAt is timestamp &&
@@ -300,10 +309,13 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'userId', 'displayName', 'email', 'phoneNumber', 'deviceHash',
                          'trialStartedAt', 'isPremiumUser', 'subscriptionStatus',
-                         'subscriptionProductId', 'purchaseToken', 'isBlocked',
+                         'subscriptionProductId', 'purchaseToken', 'paymentRefId', 'isBlocked',
                          'bonusTrialDays', 'adminNote', 'hideSubscriptionUI',
                          'autoCallRecording', 'themeMode', 'dialpadTonesEnabled',
                          'blockedNumbers', 'quickDeclineResponses',
+                         'announcerEnabled', 'announcerHeadsetOnly', 'unknownShieldMode',
+                         'autoSmsFollowUp', 'autoWhatsappFollowUp', 'followUpTrigger',
+                         'completedCallTemplate', 'missedCallTemplate',
                          'createdAt', 'updatedAt'
                        ]) &&
                        isValidUserEntitlement(incoming());
@@ -323,15 +335,18 @@ service cloud.firestore {
                             incoming().subscriptionStatus == 'pending_approval') &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
                              'displayName', 'email', 'phoneNumber', 'deviceHash',
-                             'subscriptionStatus', 'autoCallRecording', 'themeMode',
+                             'subscriptionStatus', 'paymentRefId', 'autoCallRecording', 'themeMode',
                              'dialpadTonesEnabled', 'blockedNumbers', 'quickDeclineResponses',
+                             'announcerEnabled', 'announcerHeadsetOnly', 'unknownShieldMode',
+                             'autoSmsFollowUp', 'autoWhatsappFollowUp', 'followUpTrigger',
+                             'completedCallTemplate', 'missedCallTemplate',
                              'updatedAt'
                            ])
                          ) || (
                            isAdmin() &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
                              'isPremiumUser', 'subscriptionStatus', 'subscriptionProductId',
-                             'purchaseToken', 'subscriptionExpiresAt', 'isBlocked',
+                             'purchaseToken', 'paymentRefId', 'subscriptionExpiresAt', 'isBlocked',
                              'bonusTrialDays', 'adminNote', 'hideSubscriptionUI', 'updatedAt'
                            ])
                          )

@@ -12,16 +12,25 @@
         android:id="@+id/app_bar_layout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/md_theme_background"
-        app:elevation="0dp">
+        android:background="@color/md_theme_surface"
+        app:elevation="0dp"
+        app:liftOnScroll="true">
 
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/top_app_bar"
             android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
+            android:layout_height="64dp"
+            android:paddingHorizontal="6dp"
+            app:subtitleTextAppearance="@style/TextAppearance.Material3.LabelMedium"
+            app:subtitleTextColor="@color/md_theme_primary"
             app:title="@string/app_name"
             app:titleTextAppearance="@style/TextAppearance.Material3.HeadlineSmall"
-            app:titleTextColor="@color/md_theme_onBackground" />
+            app:titleTextColor="@color/md_theme_onSurface" />
+
+        <com.google.android.material.divider.MaterialDivider
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:dividerColor="@color/md_theme_surfaceVariant" />
 
     </com.google.android.material.appbar.AppBarLayout>
 
@@ -37,30 +46,31 @@
             android:id="@+id/card_live_banner_ad"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginHorizontal="12dp"
-            android:layout_marginTop="4dp"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginTop="8dp"
             android:layout_marginBottom="4dp"
             android:clickable="true"
             android:focusable="true"
             android:visibility="gone"
             app:cardBackgroundColor="@color/md_theme_primaryContainer"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="1dp"
+            app:cardCornerRadius="20dp"
+            app:cardElevation="0dp"
             app:strokeColor="@color/md_theme_primary"
-            app:strokeWidth="1dp">
+            app:strokeWidth="1.5dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:padding="10dp">
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="10dp">
 
                 <ImageView
                     android:id="@+id/iv_live_banner_ad"
                     android:layout_width="44dp"
                     android:layout_height="44dp"
-                    android:layout_marginEnd="10dp"
+                    android:layout_marginEnd="12dp"
                     android:contentDescription="@string/broadcast_image_cd"
                     android:scaleType="centerCrop"
                     android:visibility="gone" />
@@ -114,8 +124,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 app:cardBackgroundColor="@color/md_theme_surface"
-                app:cardCornerRadius="28dp"
-                app:cardElevation="2dp"
+                app:cardCornerRadius="32dp"
+                app:cardElevation="3dp"
                 app:strokeColor="@color/md_theme_outline"
                 app:strokeWidth="1dp">
 
@@ -124,30 +134,31 @@
                     android:layout_height="wrap_content"
                     android:gravity="center_horizontal"
                     android:orientation="vertical"
-                    android:padding="28dp">
+                    android:padding="32dp">
 
                     <FrameLayout
-                        android:layout_width="72dp"
-                        android:layout_height="72dp"
+                        android:layout_width="84dp"
+                        android:layout_height="84dp"
                         android:background="@drawable/bg_circle_avatar">
 
                         <ImageView
-                            android:layout_width="38dp"
-                            android:layout_height="38dp"
+                            android:layout_width="42dp"
+                            android:layout_height="42dp"
                             android:layout_gravity="center"
                             android:contentDescription="@string/app_name"
                             android:src="@drawable/ic_verified_shield"
-                            app:tint="@color/md_theme_onPrimaryContainer" />
+                            app:tint="@color/md_theme_primary" />
                     </FrameLayout>
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="20dp"
+                        android:layout_marginTop="22dp"
                         android:gravity="center"
                         android:text="@string/auth_gate_title"
                         android:textAppearance="@style/TextAppearance.Material3.HeadlineSmall"
-                        android:textColor="@color/md_theme_onSurface" />
+                        android:textColor="@color/md_theme_onSurface"
+                        android:textStyle="bold" />
 
                     <com.google.android.material.chip.Chip
                         android:layout_width="wrap_content"
@@ -157,6 +168,8 @@
                         android:text="@string/auth_gate_trial_badge"
                         android:textColor="@color/md_theme_onPrimaryContainer"
                         app:chipBackgroundColor="@color/md_theme_primaryContainer"
+                        app:chipIcon="@drawable/ic_check_circle"
+                        app:chipIconTint="@color/md_theme_primary"
                         app:chipStrokeWidth="0dp" />
 
                     <TextView
@@ -164,6 +177,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="14dp"
                         android:gravity="center"
+                        android:lineSpacingExtra="2dp"
                         android:text="@string/auth_gate_subtitle"
                         android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
                         android:textColor="@color/md_theme_onSurfaceVariant" />
@@ -172,10 +186,12 @@
                         android:id="@+id/btn_google_sign_in"
                         style="@style/Widget.Material3.Button"
                         android:layout_width="match_parent"
-                        android:layout_height="52dp"
-                        android:layout_marginTop="24dp"
+                        android:layout_height="56dp"
+                        android:layout_marginTop="26dp"
                         android:text="@string/auth_gate_btn_google"
-                        app:cornerRadius="16dp"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="18dp"
                         app:icon="@drawable/ic_account"
                         app:iconGravity="textStart" />
 
@@ -206,9 +222,12 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_marginEnd="20dp"
-        android:layout_marginBottom="96dp"
+        android:layout_marginBottom="98dp"
         android:contentDescription="@string/action_dialpad"
         app:backgroundTint="@color/md_theme_primary"
+        app:elevation="6dp"
+        app:fabCustomSize="60dp"
+        app:maxImageSize="28dp"
         app:shapeAppearanceOverlay="@style/ShapeAppearance.Material3.Corner.Large"
         app:srcCompat="@drawable/ic_dialpad"
         app:tint="@color/md_theme_onPrimary" />
@@ -219,11 +238,93 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:background="@color/md_theme_surface"
-        app:elevation="6dp"
+        app:elevation="8dp"
         app:itemActiveIndicatorStyle="@style/Widget.Material3.BottomNavigationView.ActiveIndicator"
         app:itemIconTint="@color/md_theme_primary"
         app:itemTextColor="@color/md_theme_onSurface"
         app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav_menu" />
+
+    <!-- Full-Screen "Account Blocked by Admin" Real-Time Overlay -->
+    <FrameLayout
+        android:id="@+id/blocked_overlay_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/md_theme_background"
+        android:clickable="true"
+        android:elevation="24dp"
+        android:focusable="true"
+        android:padding="24dp"
+        android:visibility="gone">
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            app:cardBackgroundColor="@color/md_theme_errorContainer"
+            app:cardCornerRadius="28dp"
+            app:cardElevation="4dp"
+            app:strokeColor="@color/md_theme_error"
+            app:strokeWidth="2dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:padding="28dp">
+
+                <ImageView
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:contentDescription="@string/blocked_overlay_title"
+                    android:src="@drawable/ic_block"
+                    app:tint="@color/md_theme_error" />
+
+                <TextView
+                    android:id="@+id/tv_blocked_overlay_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:text="@string/blocked_overlay_title"
+                    android:textAppearance="@style/TextAppearance.Material3.HeadlineSmall"
+                    android:textColor="@color/md_theme_onErrorContainer"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_blocked_overlay_message"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="2dp"
+                    android:text="@string/blocked_overlay_message"
+                    android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
+                    android:textColor="@color/md_theme_onErrorContainer" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_blocked_whatsapp"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="22dp"
+                    android:text="@string/blocked_overlay_whatsapp"
+                    app:backgroundTint="@color/md_theme_error"
+                    app:cornerRadius="16dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_blocked_sign_out"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/account_sign_out"
+                    android:textColor="@color/md_theme_onErrorContainer"
+                    app:cornerRadius="16dp"
+                    app:strokeColor="@color/md_theme_error" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </FrameLayout>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

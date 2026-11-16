@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <resources>
     <string name="firestore_database_id" translatable="false">ai-studio-android-pulsedia-0892fc2b-7d56-4727-b667-114f9dc65284</string>
+    <string name="firebase_database_url" translatable="false">https://gen-lang-client-0353534085-default-rtdb.firebaseio.com</string>
 </resources>

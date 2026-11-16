@@ -78,6 +78,12 @@ object RealtimeSyncManager {
     private var navTabsListener: ListenerRegistration? = null
     private var settingsItemsListener: ListenerRegistration? = null
     private var liveBroadcastListener: ListenerRegistration? = null
+    private var rtdbConfigCleanup: (() -> Unit)? = null
+    private var rtdbUserCleanup: (() -> Unit)? = null
+    private var rtdbPaymentsCleanup: (() -> Unit)? = null
+    private var rtdbNavTabsCleanup: (() -> Unit)? = null
+    private var rtdbSettingsItemsCleanup: (() -> Unit)? = null
+    private var rtdbLiveBroadcastCleanup: (() -> Unit)? = null
 
     private var latestConfig: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
     private var latestUser: UserEntitlement? = null
@@ -94,6 +100,7 @@ object RealtimeSyncManager {
             .getOrDefault(false)
         if (!firebaseAvailable) return
 
+        RealtimeDatabaseSync.init(context.applicationContext)
         val auth = runCatching { Firebase.auth }.getOrNull() ?: return
         isInitialized = true
         auth.addAuthStateListener { firebaseAuth ->
@@ -107,14 +114,129 @@ object RealtimeSyncManager {
         auth.currentUser?.uid?.let { startForUser(it) }
     }
 
+    private fun applyIncomingAppConfig(config: AppConfig, prefs: DialerPreferences) {
+        latestConfig = config
+        val prevAllowRecording = prefs.allowCallRecordingConfig
+        prefs.applyAppConfig(config)
+
+        val desiredNightMode = when (config.forceThemeMode) {
+            AppConfig.THEME_DARK -> AppCompatDelegate.MODE_NIGHT_YES
+            AppConfig.THEME_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
+            else -> null
+        }
+        if (desiredNightMode != null &&
+            android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
+            AppCompatDelegate.getDefaultNightMode() != desiredNightMode
+        ) {
+            AppCompatDelegate.setDefaultNightMode(desiredNightMode)
+        }
+
+        if (!config.allowCallRecording) {
+            CallManager.stopRecordingIfNeeded()
+            if (prevAllowRecording) {
+                _events.tryEmit(RealtimeSyncEvent.RecordingDisabledByAdmin)
+            }
+        }
+
+        if (hasReceivedInitialConfig) {
+            _events.tryEmit(RealtimeSyncEvent.GlobalSettingsUpdated)
+        }
+        hasReceivedInitialConfig = true
+
+        recomputeEntitlementFromSnapshots(prefs)
+        bumpState(appConfig = config)
+    }
+
+    private fun applyIncomingPaymentRequests(requests: List<PaymentRequest>) {
+        if (hasReceivedInitialPayments) {
+            requests.forEach { req ->
+                val prevStatus = knownPaymentStatuses[req.id]
+                if (prevStatus != null && prevStatus != req.status) {
+                    when (req.status) {
+                        PaymentRequest.STATUS_APPROVED -> _events.tryEmit(RealtimeSyncEvent.PaymentApproved)
+                        PaymentRequest.STATUS_REJECTED -> _events.tryEmit(
+                            RealtimeSyncEvent.PaymentDisapproved(
+                                req.reviewNote.ifBlank { "Disapproved by Admin" }
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        knownPaymentStatuses.clear()
+        requests.forEach { knownPaymentStatuses[it.id] = it.status }
+        hasReceivedInitialPayments = true
+
+        bumpState(myPaymentRequests = requests)
+    }
+
+    private fun applyIncomingSettingsItems(items: List<DynamicSettingItem>, prefs: DialerPreferences) {
+        items.filter { it.lockedByAdmin }.forEach { lockedItem ->
+            when (lockedItem.key) {
+                DynamicSettingItem.KEY_AUTO_RECORDING -> {
+                    prefs.autoCallRecording = prefs.allowCallRecordingConfig && lockedItem.defaultValue
+                }
+                DynamicSettingItem.KEY_SOUNDS_VIBRATION -> {
+                    prefs.dialpadTonesEnabled = lockedItem.defaultValue
+                }
+                else -> if (lockedItem.type == DynamicSettingItem.TYPE_TOGGLE) {
+                    prefs.setDynamicToggle(lockedItem.key, lockedItem.defaultValue)
+                }
+            }
+        }
+        bumpState(settingsItems = items)
+    }
+
+    private fun handleIncomingUserUpdate(
+        user: UserEntitlement?,
+        snapshot: DocumentSnapshot?,
+        prefs: DialerPreferences
+    ) {
+        val previous = latestUser
+        latestUser = user
+
+        if (user != null) {
+            if (snapshot != null) {
+                SettingsManager.applyCloudUserSettings(snapshot, user, prefs)
+            } else {
+                SettingsManager.applyRtdbUserEntitlement(user, prefs)
+            }
+            com.example.billing.SubscriptionEnforcementService.onUserEntitlementSynced(user, appContext)
+            if (hasReceivedInitialUser && previous != null) {
+                if (!previous.isBlocked && user.isBlocked) {
+                    _events.tryEmit(RealtimeSyncEvent.AccountBlocked)
+                } else if (previous.isBlocked && !user.isBlocked) {
+                    _events.tryEmit(RealtimeSyncEvent.AccountUnblocked)
+                }
+                if ((!previous.isPremiumUser && user.isPremiumUser && !user.isBlocked) ||
+                    (previous.subscriptionStatus != UserEntitlement.STATUS_ACTIVE &&
+                        user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE &&
+                        !user.isBlocked) ||
+                    (user.isPremiumUser && !user.isBlocked &&
+                        previous.subscriptionExpiresAt != user.subscriptionExpiresAt)
+                ) {
+                    _events.tryEmit(RealtimeSyncEvent.PaymentApproved)
+                } else if (previous.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL &&
+                    (user.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                        user.subscriptionStatus == UserEntitlement.STATUS_EXPIRED)
+                ) {
+                    _events.tryEmit(RealtimeSyncEvent.PaymentDisapproved("Disapproved by Admin"))
+                }
+            }
+            hasReceivedInitialUser = true
+        }
+
+        recomputeEntitlementFromSnapshots(prefs)
+        bumpState(userEntitlement = user)
+    }
+
     fun startForUser(uid: String) {
         val ctx = appContext ?: return
-        if (activeUid == uid && configListener != null && userListener != null) return
+        if (activeUid == uid && (configListener != null || rtdbConfigCleanup != null)) return
         stop()
         activeUid = uid
+        com.example.billing.SubscriptionEnforcementService.startMonitoringUser(uid, ctx)
 
-        val dbId = ctx.getString(R.string.firestore_database_id)
-        val db = runCatching { FirebaseFirestore.getInstance(dbId) }.getOrNull() ?: return
         val prefs = DialerPreferences(ctx)
         val deviceHash = DeviceIdentityProvider.getDeviceHash(ctx)
 
@@ -126,6 +248,56 @@ object RealtimeSyncManager {
                 DeviceTrialRepository(ctx).syncDeviceAndUserTrial(deviceHash)
             }
         }
+
+        // 0. Live Firebase Realtime Database ValueEventListeners (`onValue`)
+        rtdbConfigCleanup = RealtimeDatabaseSync.attachAppConfigListener(
+            context = ctx,
+            currentFallback = { latestConfig },
+            onUpdate = { rtdbConfig ->
+                applyIncomingAppConfig(rtdbConfig, prefs)
+            }
+        )
+        rtdbUserCleanup = RealtimeDatabaseSync.attachUserListener(
+            context = ctx,
+            uid = uid,
+            currentFallback = { latestUser },
+            onUpdate = { rtdbUser ->
+                handleIncomingUserUpdate(rtdbUser, snapshot = null, prefs = prefs)
+            }
+        )
+        rtdbPaymentsCleanup = RealtimeDatabaseSync.attachUserPaymentRequestsListener(
+            context = ctx,
+            uid = uid,
+            onUpdate = { rtdbRequests ->
+                if (rtdbRequests.isNotEmpty() || _syncState.value.myPaymentRequests.isEmpty()) {
+                    applyIncomingPaymentRequests(rtdbRequests)
+                }
+            }
+        )
+        rtdbNavTabsCleanup = RealtimeDatabaseSync.attachNavigationTabsListener(
+            context = ctx,
+            onUpdate = { tabs ->
+                bumpState(navigationTabs = tabs)
+            }
+        )
+        rtdbSettingsItemsCleanup = RealtimeDatabaseSync.attachDynamicSettingsListener(
+            context = ctx,
+            onUpdate = { items ->
+                applyIncomingSettingsItems(items, prefs)
+            }
+        )
+        rtdbLiveBroadcastCleanup = RealtimeDatabaseSync.attachLiveBroadcastListener(
+            context = ctx,
+            onUpdate = { broadcast ->
+                if (broadcast.showPopup) {
+                    _events.tryEmit(RealtimeSyncEvent.LiveBroadcastTriggered(broadcast))
+                }
+                bumpState(liveBroadcast = broadcast)
+            }
+        )
+
+        val dbId = ctx.getString(R.string.firestore_database_id)
+        val db = runCatching { FirebaseFirestore.getInstance(dbId) }.getOrNull() ?: return
 
         // 1. Live global /app_config/global_settings push stream (shared single-doc fan-out)
         configListener = db.collection(AdminRepository.COLLECTION_APP_CONFIG)
@@ -143,36 +315,7 @@ object RealtimeSyncManager {
                 } else {
                     AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
                 }
-
-                latestConfig = config
-                val prevAllowRecording = prefs.allowCallRecordingConfig
-                prefs.applyAppConfig(config)
-
-                val desiredNightMode = when (config.forceThemeMode) {
-                    AppConfig.THEME_DARK -> AppCompatDelegate.MODE_NIGHT_YES
-                    AppConfig.THEME_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
-                    else -> null
-                }
-                if (desiredNightMode != null &&
-                    AppCompatDelegate.getDefaultNightMode() != desiredNightMode
-                ) {
-                    AppCompatDelegate.setDefaultNightMode(desiredNightMode)
-                }
-
-                if (!config.allowCallRecording) {
-                    CallManager.stopRecordingIfNeeded()
-                    if (prevAllowRecording) {
-                        _events.tryEmit(RealtimeSyncEvent.RecordingDisabledByAdmin)
-                    }
-                }
-
-                if (hasReceivedInitialConfig) {
-                    _events.tryEmit(RealtimeSyncEvent.GlobalSettingsUpdated)
-                }
-                hasReceivedInitialConfig = true
-
-                recomputeEntitlementFromSnapshots(prefs)
-                bumpState(appConfig = config)
+                applyIncomingAppConfig(config, prefs)
             }
 
         // 2. Live /users/{uid} entitlement, real-time preferences & moderation push stream
@@ -191,36 +334,7 @@ object RealtimeSyncManager {
                 } else {
                     null
                 }
-                val previous = latestUser
-                latestUser = user
-
-                if (user != null) {
-                    SettingsManager.applyCloudUserSettings(snapshot, user, prefs)
-                    if (hasReceivedInitialUser && previous != null) {
-                        if (!previous.isBlocked && user.isBlocked) {
-                            _events.tryEmit(RealtimeSyncEvent.AccountBlocked)
-                        } else if (previous.isBlocked && !user.isBlocked) {
-                            _events.tryEmit(RealtimeSyncEvent.AccountUnblocked)
-                        }
-                        if ((!previous.isPremiumUser && user.isPremiumUser && !user.isBlocked) ||
-                            (previous.subscriptionStatus != UserEntitlement.STATUS_ACTIVE &&
-                                user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE &&
-                                !user.isBlocked) ||
-                            (user.isPremiumUser && !user.isBlocked &&
-                                previous.subscriptionExpiresAt != user.subscriptionExpiresAt)
-                        ) {
-                            _events.tryEmit(RealtimeSyncEvent.PaymentApproved)
-                        } else if (previous.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL &&
-                            user.subscriptionStatus == UserEntitlement.STATUS_REJECTED
-                        ) {
-                            _events.tryEmit(RealtimeSyncEvent.PaymentDisapproved("Disapproved by Admin"))
-                        }
-                    }
-                    hasReceivedInitialUser = true
-                }
-
-                recomputeEntitlementFromSnapshots(prefs)
-                bumpState(userEntitlement = user)
+                handleIncomingUserUpdate(user, snapshot, prefs)
             }
 
         // 3. Live /device_trials/{deviceHash} device-lock push stream
@@ -503,6 +617,18 @@ object RealtimeSyncManager {
         settingsItemsListener = null
         liveBroadcastListener?.remove()
         liveBroadcastListener = null
+        rtdbConfigCleanup?.invoke()
+        rtdbConfigCleanup = null
+        rtdbUserCleanup?.invoke()
+        rtdbUserCleanup = null
+        rtdbPaymentsCleanup?.invoke()
+        rtdbPaymentsCleanup = null
+        rtdbNavTabsCleanup?.invoke()
+        rtdbNavTabsCleanup = null
+        rtdbSettingsItemsCleanup?.invoke()
+        rtdbSettingsItemsCleanup = null
+        rtdbLiveBroadcastCleanup?.invoke()
+        rtdbLiveBroadcastCleanup = null
         activeUid = null
         latestConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
         latestUser = null

@@ -131,6 +131,10 @@ object CallManager {
             }
             false
         } else {
+            if (!com.example.billing.SubscriptionEnforcementService.canStartCallRecording(context)) {
+                _uiState.update { it.copy(isRecording = false) }
+                return false
+            }
             val numberOrLabel = _uiState.value.callerNumber.ifBlank { _uiState.value.callerName }
             val started = mgr.startRecording(numberOrLabel)
             _uiState.update { it.copy(isRecording = started) }
@@ -139,6 +143,10 @@ object CallManager {
     }
 
     fun startAutoRecordingIfEnabled(context: Context) {
+        if (!com.example.billing.SubscriptionEnforcementService.canStartCallRecording(context)) {
+            stopRecordingIfNeeded()
+            return
+        }
         val mgr = recorder ?: CallRecorder(context.applicationContext).also {
             recorder = it
         }

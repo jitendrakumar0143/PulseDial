@@ -3,25 +3,25 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@color/md_theme_surface"
+    android:background="@drawable/bg_bottom_sheet_surface"
     android:orientation="vertical"
-    android:paddingHorizontal="18dp"
+    android:paddingHorizontal="20dp"
     android:paddingTop="12dp"
-    android:paddingBottom="24dp">
+    android:paddingBottom="28dp">
 
     <View
-        android:layout_width="36dp"
-        android:layout_height="4dp"
+        android:layout_width="42dp"
+        android:layout_height="5dp"
         android:layout_gravity="center_horizontal"
-        android:layout_marginBottom="10dp"
-        android:background="@color/md_theme_outline" />
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_bottom_sheet_handle" />
 
     <!-- Live T9 Contact & History Suggestions -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recycler_t9_suggestions"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="8dp"
+        android:layout_marginBottom="10dp"
         android:clipToPadding="false"
         android:visibility="gone" />
 
@@ -30,7 +30,7 @@
         android:id="@+id/layout_dialpad_chips"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="6dp"
+        android:layout_marginBottom="8dp"
         android:gravity="center"
         android:orientation="horizontal"
         android:visibility="gone">
@@ -61,7 +61,8 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="6dp">
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp">
 
         <EditText
             android:id="@+id/et_dialpad_input"
@@ -73,9 +74,9 @@
             android:gravity="center"
             android:hint="@string/dialpad_hint"
             android:inputType="phone"
-            android:letterSpacing="0.04"
+            android:letterSpacing="0.05"
             android:maxLines="1"
-            android:textAppearance="@style/TextAppearance.Material3.HeadlineMedium"
+            android:textAppearance="@style/TextAppearance.Material3.HeadlineLarge"
             android:textColor="@color/md_theme_onSurface"
             android:textColorHint="@color/md_theme_onSurfaceVariant"
             android:textStyle="bold" />
@@ -93,7 +94,8 @@
     <com.google.android.material.divider.MaterialDivider
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginVertical="10dp" />
+        android:layout_marginVertical="12dp"
+        app:dividerColor="@color/md_theme_surfaceVariant" />
 
     <!-- Tactile Material 3 Dialpad Grid -->
     <GridLayout

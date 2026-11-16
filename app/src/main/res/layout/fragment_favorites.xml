@@ -10,7 +10,7 @@
         android:layout_height="match_parent"
         android:clipToPadding="false"
         android:paddingHorizontal="12dp"
-        android:paddingTop="8dp"
+        android:paddingTop="10dp"
         android:paddingBottom="96dp" />
 
     <LinearLayout
@@ -22,21 +22,28 @@
         android:padding="32dp"
         android:visibility="gone">
 
-        <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:alpha="0.45"
-            android:contentDescription="@null"
-            android:src="@drawable/ic_star"
-            app:tint="@color/md_theme_primary" />
+        <FrameLayout
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            android:background="@drawable/bg_circle_avatar">
+
+            <ImageView
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="center"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_star"
+                app:tint="@color/md_theme_tertiary" />
+        </FrameLayout>
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="18dp"
             android:text="@string/favorites_empty_title"
             android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
-            android:textColor="@color/md_theme_onSurface" />
+            android:textColor="@color/md_theme_onSurface"
+            android:textStyle="bold" />
 
         <TextView
             android:layout_width="wrap_content"

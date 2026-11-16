@@ -26,7 +26,16 @@ class CallRecordingAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Deliberately no-op: active service binding enables OS audio capture during calls.
+        val pkg = event?.packageName?.toString().orEmpty()
+        if ((pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") && consumeValidWhatsappAutoSendWindow()) {
+            val root = rootInActiveWindow ?: return
+            val sendNodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/send")
+            val sendButton = sendNodes?.firstOrNull { it.isClickable && it.isEnabled }
+            if (sendButton != null) {
+                sendButton.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+                clearPendingWhatsappAutoSend()
+            }
+        }
     }
 
     override fun onInterrupt() {
@@ -45,8 +54,30 @@ class CallRecordingAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "CallRecAccessibility"
+        private const val AUTO_SEND_WINDOW_MS = 12_000L
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+        @Volatile
+        private var pendingWhatsappAutoSendUntilMs: Long = 0L
+
+        fun notifyPendingWhatsappAutoSend(nowMs: Long = System.currentTimeMillis()) {
+            pendingWhatsappAutoSendUntilMs = nowMs + AUTO_SEND_WINDOW_MS
+        }
+
+        fun clearPendingWhatsappAutoSend() {
+            pendingWhatsappAutoSendUntilMs = 0L
+        }
+
+        private fun consumeValidWhatsappAutoSendWindow(nowMs: Long = System.currentTimeMillis()): Boolean {
+            val until = pendingWhatsappAutoSendUntilMs
+            if (until <= 0L) return false
+            if (nowMs > until) {
+                pendingWhatsappAutoSendUntilMs = 0L
+                return false
+            }
+            return true
+        }
 
         fun isServiceEnabled(context: Context): Boolean {
             if (_isRunning.value) return true

@@ -93,6 +93,7 @@ class DynamicSettingsAdapter(
         private fun iconResForKey(iconKey: String): Int = when (iconKey) {
             DynamicSettingItem.ICON_RECORD -> R.drawable.ic_record_dot
             DynamicSettingItem.ICON_FOLDER -> R.drawable.ic_folder
+            DynamicSettingItem.ICON_ACCESSIBILITY -> R.drawable.ic_verified_shield
             DynamicSettingItem.ICON_BLOCK -> R.drawable.ic_block
             DynamicSettingItem.ICON_PALETTE -> R.drawable.ic_palette
             DynamicSettingItem.ICON_VOLUME -> R.drawable.ic_volume_tune

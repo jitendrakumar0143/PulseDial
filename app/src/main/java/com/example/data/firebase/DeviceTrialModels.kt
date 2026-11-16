@@ -35,6 +35,7 @@ data class UserEntitlement(
     val subscriptionStatus: String = STATUS_TRIAL,
     val subscriptionProductId: String = "",
     val purchaseToken: String = "",
+    val paymentRefId: String = "",
     val subscriptionExpiresAt: Timestamp? = null,
     @get:PropertyName("isBlocked")
     val isBlocked: Boolean = false,
@@ -49,11 +50,32 @@ data class UserEntitlement(
     val dialpadTonesEnabled: Boolean = true,
     val blockedNumbers: List<String> = emptyList(),
     val quickDeclineResponses: List<String> = emptyList(),
+    @get:PropertyName("announcerEnabled")
+    val announcerEnabled: Boolean = false,
+    @get:PropertyName("announcerHeadsetOnly")
+    val announcerHeadsetOnly: Boolean = false,
+    val unknownShieldMode: String = SHIELD_OFF,
+    @get:PropertyName("autoSmsFollowUp")
+    val autoSmsFollowUp: Boolean = false,
+    @get:PropertyName("autoWhatsappFollowUp")
+    val autoWhatsappFollowUp: Boolean = false,
+    val followUpTrigger: String = TRIGGER_ALL_CALLS,
+    val completedCallTemplate: String = DEFAULT_COMPLETED_CALL_TEMPLATE,
+    val missedCallTemplate: String = DEFAULT_MISSED_CALL_TEMPLATE,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    val uid: String
+        get() = userId.ifBlank { id }
+
+    val phone: String
+        get() = phoneNumber
+
     val isPremium: Boolean
         get() = isPremiumUser && !isBlocked
+
+    val autoRecordEnabled: Boolean
+        get() = autoCallRecording
 
     val installDate: Timestamp?
         get() = trialStartedAt ?: createdAt
@@ -68,6 +90,19 @@ data class UserEntitlement(
 
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
+
+        const val SHIELD_OFF = "OFF"
+        const val SHIELD_SILENT_RECORD = "SILENT_RECORD"
+        const val SHIELD_AUTO_REJECT = "AUTO_REJECT"
+
+        const val TRIGGER_ALL_CALLS = "ALL_CALLS"
+        const val TRIGGER_MISSED_ONLY = "MISSED_ONLY"
+        const val TRIGGER_COMPLETED_ONLY = "COMPLETED_ONLY"
+
+        const val DEFAULT_COMPLETED_CALL_TEMPLATE =
+            "Thank you for calling! We have saved your number and will assist you shortly."
+        const val DEFAULT_MISSED_CALL_TEMPLATE =
+            "Sorry I missed your call. I am currently busy and will call you back soon."
     }
 }
 
@@ -98,6 +133,12 @@ data class AppConfig(
     val updatedByUid: String = "",
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    val subscriptionPrice: Long
+        get() = subscriptionPriceInr
+
+    val adminUpiId: String
+        get() = upiVpa
+
     companion object {
         const val DOC_GLOBAL_SETTINGS = "global_settings"
         const val THEME_USER = "user"

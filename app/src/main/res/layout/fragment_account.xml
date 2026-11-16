@@ -205,15 +205,16 @@
             android:layout_marginTop="16dp"
             app:cardBackgroundColor="@color/premium_card_bg"
             app:cardCornerRadius="24dp"
-            app:cardElevation="2dp"
+            app:cardElevation="3dp"
             app:strokeColor="@color/premium_accent_gold"
             app:strokeWidth="1.5dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:background="@drawable/bg_premium_card_gradient"
                 android:orientation="vertical"
-                android:padding="22dp">
+                android:padding="24dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -222,8 +223,8 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:layout_width="28dp"
-                        android:layout_height="28dp"
+                        android:layout_width="30dp"
+                        android:layout_height="30dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_verified_shield"
                         app:tint="@color/premium_accent_gold" />
@@ -236,7 +237,8 @@
                         android:layout_weight="1"
                         android:text="@string/premium_card_title"
                         android:textAppearance="@style/TextAppearance.Material3.TitleLarge"
-                        android:textColor="#FFFFFF" />
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
                 <TextView
@@ -248,12 +250,85 @@
                     android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
                     android:textColor="#CBD5E1" />
 
-                <!-- 3 Benefits: Unlimited Auto Call Recording, Custom Folder Storage, Ad-Free -->
+                <!-- VIP Benefits: #1 Auto WhatsApp & SMS Business Follow-up + Smart Call Announcer + Unknown Caller Shield + Unlimited Call Recording -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="18dp"
                     android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_verified_shield"
+                            app:tint="@color/premium_accent_gold" />
+
+                        <TextView
+                            android:id="@+id/tv_benefit_vip_followup"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:text="@string/benefit_vip_followup"
+                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
+                            android:textColor="#FDE68A"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_verified_shield"
+                            app:tint="@color/premium_accent_gold" />
+
+                        <TextView
+                            android:id="@+id/tv_benefit_vip_announcer"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:text="@string/benefit_vip_announcer"
+                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
+                            android:textColor="#F8FAFC" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingVertical="6dp">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_verified_shield"
+                            app:tint="@color/premium_accent_gold" />
+
+                        <TextView
+                            android:id="@+id/tv_benefit_vip_shield"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:text="@string/benefit_vip_shield"
+                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
+                            android:textColor="#F8FAFC" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"

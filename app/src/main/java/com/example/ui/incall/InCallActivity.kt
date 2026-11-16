@@ -86,10 +86,20 @@ class InCallActivity : AppCompatActivity() {
     private fun observeRealtimePolicy() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                RealtimeSyncManager.syncState.collect { state ->
-                    if (state.uid == null) return@collect
-                    if (!prefs.allowCallRecordingConfig || !subscriptionManager.isSubscriptionActive()) {
-                        CallManager.stopRecordingIfNeeded()
+                launch {
+                    com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
+                        if (enfState.lastEvaluatedAtMs == 0L) return@collect
+                        if (!enfState.isRecordingAllowed || !prefs.allowCallRecordingConfig || !subscriptionManager.isSubscriptionActive()) {
+                            CallManager.stopRecordingIfNeeded()
+                        }
+                    }
+                }
+                launch {
+                    RealtimeSyncManager.syncState.collect { state ->
+                        if (state.uid == null) return@collect
+                        if (!prefs.allowCallRecordingConfig || !subscriptionManager.isSubscriptionActive()) {
+                            CallManager.stopRecordingIfNeeded()
+                        }
                     }
                 }
             }
@@ -120,7 +130,9 @@ class InCallActivity : AppCompatActivity() {
                 Toast.makeText(this, R.string.setting_recording_disabled_admin, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            if (!subscriptionManager.isSubscriptionActive()) {
+            if (!subscriptionManager.isSubscriptionActive() ||
+                !com.example.billing.SubscriptionEnforcementService.canStartCallRecording(this)
+            ) {
                 showTrialExpiredPrompt()
                 return@setOnClickListener
             }

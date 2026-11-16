@@ -1,6 +1,8 @@
 package com.example.ui.settings
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -12,6 +14,7 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -20,11 +23,13 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.R
+import com.example.billing.SubscriptionEnforcementService
 import com.example.billing.SubscriptionManager
 import com.example.data.DialerPreferences
 import com.example.data.firebase.DynamicSettingItem
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.data.firebase.SettingsManager
+import com.example.data.firebase.UserEntitlement
 import com.example.databinding.DialogListEditorBinding
 import com.example.databinding.FragmentSettingsBinding
 import com.example.databinding.ItemSimpleRowBinding
@@ -34,8 +39,9 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.launch
 
 /**
- * Server-Driven Dynamic Settings Fragment synced in real time with Firestore
- * (/app_config/settings_items and /users/{uid}) and persisted locally in SharedPreferences.
+ * Server-Driven Dynamic Settings Fragment + VIP Smart Call Announcer, Unknown Caller Shield,
+ * and VIP Business Auto Follow-Up (WhatsApp & SMS) synced in <1s with Firebase Realtime Database
+ * (`https://gen-lang-client-0353534085-default-rtdb.firebaseio.com`) and Firestore (`/users/{uid}`).
  */
 class SettingsFragment : Fragment() {
 
@@ -46,6 +52,25 @@ class SettingsFragment : Fragment() {
     private lateinit var settingsManager: SettingsManager
     private lateinit var subscriptionManager: SubscriptionManager
     private lateinit var settingsAdapter: DynamicSettingsAdapter
+    private var isBindingVipControls: Boolean = false
+
+    private val sendSmsPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (_binding == null) return@registerForActivityResult
+        if (granted) {
+            settingsManager.setAutoSmsFollowUp(true)
+            bindVipCardsState()
+        } else {
+            settingsManager.setAutoSmsFollowUp(false)
+            bindVipCardsState()
+            Toast.makeText(
+                requireContext(),
+                "SMS permission is required for background Auto SMS Follow-Up",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -85,13 +110,23 @@ class SettingsFragment : Fragment() {
         subscriptionManager = SubscriptionManager(requireContext())
 
         setupRecyclerView()
+        setupVipCardsListeners()
         bindCurrentValues()
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                RealtimeSyncManager.syncState.collect { state ->
-                    if (state.uid != null && _binding != null) {
-                        bindCurrentValues(state.settingsItems)
+                launch {
+                    RealtimeSyncManager.syncState.collect { state ->
+                        if (state.uid != null && _binding != null) {
+                            bindCurrentValues(state.settingsItems)
+                        }
+                    }
+                }
+                launch {
+                    SubscriptionEnforcementService.state.collect {
+                        if (_binding != null) {
+                            bindCurrentValues()
+                        }
                     }
                 }
             }
@@ -109,6 +144,168 @@ class SettingsFragment : Fragment() {
         }
     }
 
+    private fun isVipEntitled(): Boolean {
+        return !prefs.adminBlockedUser &&
+            subscriptionManager.isSubscriptionActive() &&
+            SubscriptionEnforcementService.canStartCallRecording(requireContext())
+    }
+
+    private fun showVipPaywallDialog(isBusinessFollowUp: Boolean) {
+        val titleRes = if (isBusinessFollowUp) {
+            R.string.vip_business_feature_locked_title
+        } else {
+            R.string.vip_feature_locked_title
+        }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(titleRes)
+            .setMessage(R.string.vip_feature_locked_message)
+            .setPositiveButton(R.string.vip_unlock_in_account_btn) { _, _ ->
+                (activity as? MainActivity)?.navigateToAccountTab()
+            }
+            .setNegativeButton(R.string.trial_expired_dialog_later, null)
+            .show()
+    }
+
+    private fun setupVipCardsListeners() {
+        binding.switchVipAnnouncer.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVipControls) return@setOnCheckedChangeListener
+            if (!isVipEntitled()) {
+                bindVipCardsState()
+                showVipPaywallDialog(isBusinessFollowUp = false)
+                return@setOnCheckedChangeListener
+            }
+            settingsManager.setAnnouncerEnabled(isChecked)
+        }
+
+        binding.switchVipAnnouncerHeadset.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVipControls) return@setOnCheckedChangeListener
+            if (!isVipEntitled()) {
+                bindVipCardsState()
+                showVipPaywallDialog(isBusinessFollowUp = false)
+                return@setOnCheckedChangeListener
+            }
+            settingsManager.setAnnouncerHeadsetOnly(isChecked)
+        }
+
+        binding.rgVipUnknownShield.setOnCheckedChangeListener { _, checkedId ->
+            if (isBindingVipControls) return@setOnCheckedChangeListener
+            if (!isVipEntitled()) {
+                bindVipCardsState()
+                showVipPaywallDialog(isBusinessFollowUp = false)
+                return@setOnCheckedChangeListener
+            }
+            val mode = when (checkedId) {
+                R.id.rb_shield_silent_record -> UserEntitlement.SHIELD_SILENT_RECORD
+                R.id.rb_shield_auto_reject -> UserEntitlement.SHIELD_AUTO_REJECT
+                else -> UserEntitlement.SHIELD_OFF
+            }
+            settingsManager.setUnknownShieldMode(mode)
+        }
+
+        binding.switchVipAutoSms.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVipControls) return@setOnCheckedChangeListener
+            if (!isVipEntitled()) {
+                bindVipCardsState()
+                showVipPaywallDialog(isBusinessFollowUp = true)
+                return@setOnCheckedChangeListener
+            }
+            if (isChecked) {
+                val hasPerm = ContextCompat.checkSelfPermission(
+                    requireContext(),
+                    Manifest.permission.SEND_SMS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (hasPerm) {
+                    settingsManager.setAutoSmsFollowUp(true)
+                } else {
+                    sendSmsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+                }
+            } else {
+                settingsManager.setAutoSmsFollowUp(false)
+            }
+        }
+
+        binding.switchVipAutoWhatsapp.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVipControls) return@setOnCheckedChangeListener
+            if (!isVipEntitled()) {
+                bindVipCardsState()
+                showVipPaywallDialog(isBusinessFollowUp = true)
+                return@setOnCheckedChangeListener
+            }
+            settingsManager.setAutoWhatsappFollowUp(isChecked)
+        }
+
+        binding.rgVipFollowupTrigger.setOnCheckedChangeListener { _, checkedId ->
+            if (isBindingVipControls) return@setOnCheckedChangeListener
+            if (!isVipEntitled()) {
+                bindVipCardsState()
+                showVipPaywallDialog(isBusinessFollowUp = true)
+                return@setOnCheckedChangeListener
+            }
+            val trigger = when (checkedId) {
+                R.id.rb_trigger_missed_only -> UserEntitlement.TRIGGER_MISSED_ONLY
+                R.id.rb_trigger_completed_only -> UserEntitlement.TRIGGER_COMPLETED_ONLY
+                else -> UserEntitlement.TRIGGER_ALL_CALLS
+            }
+            settingsManager.setFollowUpTrigger(trigger)
+        }
+
+        binding.btnVipSaveTemplates.setOnClickListener {
+            if (!isVipEntitled()) {
+                showVipPaywallDialog(isBusinessFollowUp = true)
+                return@setOnClickListener
+            }
+            val completedText = binding.etVipCompletedTemplate.text?.toString().orEmpty()
+            val missedText = binding.etVipMissedTemplate.text?.toString().orEmpty()
+            settingsManager.saveFollowUpTemplates(completedText, missedText)
+            bindVipCardsState()
+            Toast.makeText(
+                requireContext(),
+                R.string.vip_templates_saved_toast,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun bindVipCardsState() {
+        isBindingVipControls = true
+        try {
+            val entitled = isVipEntitled()
+            binding.switchVipAnnouncer.isChecked = entitled && prefs.announcerEnabled
+            binding.switchVipAnnouncerHeadset.isChecked = entitled && prefs.announcerHeadsetOnly
+
+            val shieldMode = if (entitled) prefs.unknownShieldMode else UserEntitlement.SHIELD_OFF
+            val shieldRadioId = when (shieldMode) {
+                UserEntitlement.SHIELD_SILENT_RECORD -> R.id.rb_shield_silent_record
+                UserEntitlement.SHIELD_AUTO_REJECT -> R.id.rb_shield_auto_reject
+                else -> R.id.rb_shield_off
+            }
+            if (binding.rgVipUnknownShield.checkedRadioButtonId != shieldRadioId) {
+                binding.rgVipUnknownShield.check(shieldRadioId)
+            }
+
+            binding.switchVipAutoSms.isChecked = entitled && prefs.autoSmsFollowUp
+            binding.switchVipAutoWhatsapp.isChecked = entitled && prefs.autoWhatsappFollowUp
+
+            val triggerRadioId = when (prefs.followUpTrigger) {
+                UserEntitlement.TRIGGER_MISSED_ONLY -> R.id.rb_trigger_missed_only
+                UserEntitlement.TRIGGER_COMPLETED_ONLY -> R.id.rb_trigger_completed_only
+                else -> R.id.rb_trigger_all_calls
+            }
+            if (binding.rgVipFollowupTrigger.checkedRadioButtonId != triggerRadioId) {
+                binding.rgVipFollowupTrigger.check(triggerRadioId)
+            }
+
+            if (!binding.etVipCompletedTemplate.hasFocus()) {
+                binding.etVipCompletedTemplate.setText(prefs.completedCallTemplate)
+            }
+            if (!binding.etVipMissedTemplate.hasFocus()) {
+                binding.etVipMissedTemplate.setText(prefs.missedCallTemplate)
+            }
+        } finally {
+            isBindingVipControls = false
+        }
+    }
+
     private fun setupRecyclerView() {
         settingsAdapter = DynamicSettingsAdapter(
             onRowClicked = { row -> handleSettingAction(row) },
@@ -121,6 +318,8 @@ class SettingsFragment : Fragment() {
     private fun bindCurrentValues(
         items: List<DynamicSettingItem> = RealtimeSyncManager.syncState.value.settingsItems
     ) {
+        bindVipCardsState()
+
         val visibleItems = items
             .filter { it.enabled }
             .sortedBy { it.order }
@@ -173,6 +372,14 @@ class SettingsFragment : Fragment() {
                 }
                 Triple(desc, false, !item.lockedByAdmin)
             }
+            DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
+                val isEnabled = CallRecordingAccessibilityService.isServiceEnabled(requireContext())
+                val desc = getString(
+                    if (isEnabled) R.string.setting_accessibility_enabled
+                    else R.string.setting_accessibility_disabled
+                )
+                Triple(desc, isEnabled, !item.lockedByAdmin)
+            }
             DynamicSettingItem.KEY_BLOCKED_NUMBERS -> {
                 val blockedCount = prefs.getBlockedNumbers().size
                 val desc = getString(R.string.setting_blocked_desc_count, blockedCount)
@@ -220,7 +427,10 @@ class SettingsFragment : Fragment() {
                 if (isChecked && !prefs.allowCallRecordingConfig) {
                     Toast.makeText(requireContext(), R.string.setting_recording_disabled_admin, Toast.LENGTH_SHORT).show()
                     false
-                } else if (isChecked && !subscriptionManager.isSubscriptionActive()) {
+                } else if (isChecked &&
+                    (!subscriptionManager.isSubscriptionActive() ||
+                        !com.example.billing.SubscriptionEnforcementService.canStartCallRecording(requireContext()))
+                ) {
                     (activity as? MainActivity)?.showTrialExpiredDialog()
                     false
                 } else {
@@ -261,6 +471,13 @@ class SettingsFragment : Fragment() {
         }
         when (item.key) {
             DynamicSettingItem.KEY_RECORDING_FOLDER -> folderPickerLauncher.launch(null)
+            DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }.onFailure {
+                    showAccessibilityEnablePrompt()
+                }
+            }
             DynamicSettingItem.KEY_BLOCKED_NUMBERS -> {
                 showListEditorDialog(
                     title = item.title.ifBlank { getString(R.string.setting_blocked_title) },

@@ -24,7 +24,9 @@ class AdminUsersAdapter(
     private val onRenewMonthClick: (UserEntitlement) -> Unit,
     private val onExtendTrialClick: (UserEntitlement) -> Unit,
     private val onToggleBlockClick: (UserEntitlement) -> Unit,
-    private val onManageClick: (UserEntitlement) -> Unit
+    private val onManageClick: (UserEntitlement) -> Unit,
+    private val onApproveUtrClick: (UserEntitlement) -> Unit = {},
+    private val onRejectUtrClick: (UserEntitlement) -> Unit = {}
 ) : ListAdapter<UserEntitlement, AdminUsersAdapter.UserViewHolder>(DiffCallback) {
 
     var trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS
@@ -61,11 +63,33 @@ class AdminUsersAdapter(
             val daysLeft = AdminRepository.getRemainingDaysForUser(item, trialDaysConfig)
             val subDaysLeft = AdminRepository.getSubscriptionRemainingDays(item)
             val effectiveExpiryMs = AdminRepository.resolveEffectiveExpiryMs(item)
+            val isPendingUtr = item.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL
 
-            val strokeDp = if (status == AdminUserAccountStatus.EXPIRING_SOON) 2 else 1
+            val strokeDp = if (isPendingUtr || status == AdminUserAccountStatus.EXPIRING_SOON) 2 else 1
             binding.cardAdminUser.strokeWidth = (strokeDp * ctx.resources.displayMetrics.density).toInt()
-            when (status) {
-                AdminUserAccountStatus.BLOCKED -> {
+            when {
+                isPendingUtr -> {
+                    binding.cardAdminUser.setCardBackgroundColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_primaryContainer)
+                    )
+                    binding.cardAdminUser.strokeColor =
+                        ContextCompat.getColor(ctx, R.color.md_theme_primary)
+                    binding.tvAdminUserExpiryBanner.visibility = View.VISIBLE
+                    binding.tvAdminUserExpiryBanner.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_onPrimaryContainer)
+                    )
+                    binding.tvAdminUserExpiryBanner.text = ctx.getString(
+                        R.string.admin_pending_utr_banner,
+                        item.phoneNumber.ifBlank { "—" },
+                        item.paymentRefId.ifBlank { item.purchaseToken.ifBlank { "Submitted" } }
+                    )
+                    binding.chipAdminUserStatus.setText(R.string.admin_user_status_pending_utr)
+                    binding.chipAdminUserStatus.setChipBackgroundColorResource(R.color.md_theme_primary)
+                    binding.chipAdminUserStatus.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_onPrimary)
+                    )
+                }
+                status == AdminUserAccountStatus.BLOCKED -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
@@ -75,7 +99,7 @@ class AdminUsersAdapter(
                         ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer)
                     )
                 }
-                AdminUserAccountStatus.EXPIRING_SOON -> {
+                status == AdminUserAccountStatus.EXPIRING_SOON -> {
                     binding.tvAdminUserExpiryBanner.visibility = View.VISIBLE
                     if (item.isPremiumUser) {
                         val safeDays = subDaysLeft.coerceAtLeast(1)
@@ -130,7 +154,7 @@ class AdminUsersAdapter(
                         )
                     }
                 }
-                AdminUserAccountStatus.PREMIUM -> {
+                status == AdminUserAccountStatus.PREMIUM -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
@@ -144,7 +168,7 @@ class AdminUsersAdapter(
                         ContextCompat.getColor(ctx, R.color.premium_badge_text)
                     )
                 }
-                AdminUserAccountStatus.EXPIRED -> {
+                status == AdminUserAccountStatus.EXPIRED -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
@@ -157,7 +181,7 @@ class AdminUsersAdapter(
                         ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer)
                     )
                 }
-                AdminUserAccountStatus.TRIAL_ACTIVE -> {
+                else -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
@@ -177,7 +201,10 @@ class AdminUsersAdapter(
             val uidPreview = if (item.userId.length > 10) "${item.userId.take(10)}…" else item.userId
             binding.tvAdminUserMeta.text = buildString {
                 if (item.phoneNumber.isNotBlank()) {
-                    append(item.phoneNumber).append(" • ")
+                    append("Phone: ").append(item.phoneNumber).append(" • ")
+                }
+                if (item.paymentRefId.isNotBlank()) {
+                    append("UTR: ").append(item.paymentRefId).append(" • ")
                 }
                 append("UID: ").append(uidPreview)
                 append(" • Device: ").append(deviceTag)
@@ -192,7 +219,7 @@ class AdminUsersAdapter(
                 if (item.hideSubscriptionUI) {
                     append(" • ").append(ctx.getString(R.string.admin_hide_sub_ui_badge))
                 }
-                if (item.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL) {
+                if (isPendingUtr) {
                     append(" • Payment: Pending Approval")
                 }
                 if (item.subscriptionProductId.isNotBlank()) {
@@ -207,7 +234,27 @@ class AdminUsersAdapter(
                 binding.tvAdminUserNote.visibility = View.GONE
             }
 
+            binding.layoutAdminUserUtrActions.visibility = if (isPendingUtr || item.paymentRefId.isNotBlank()) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+            binding.btnUserApproveUtr.setOnClickListener { onApproveUtrClick(item) }
+            binding.btnUserRejectUtr.setOnClickListener { onRejectUtrClick(item) }
+
             val isUnexpiredPro = item.isPremiumUser && status != AdminUserAccountStatus.EXPIRED
+            binding.switchUserPremium.setOnCheckedChangeListener(null)
+            binding.switchUserPremium.isChecked = isUnexpiredPro
+            binding.switchUserPremium.setOnCheckedChangeListener { _, _ ->
+                onToggleProClick(item)
+            }
+
+            binding.switchUserBlock.setOnCheckedChangeListener(null)
+            binding.switchUserBlock.isChecked = item.isBlocked
+            binding.switchUserBlock.setOnCheckedChangeListener { _, _ ->
+                onToggleBlockClick(item)
+            }
+
             binding.btnUserTogglePro.setText(
                 if (isUnexpiredPro) R.string.admin_revoke_pro else R.string.admin_grant_pro
             )

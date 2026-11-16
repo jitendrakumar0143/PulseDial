@@ -876,15 +876,17 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `history fragment layout shows recent calls only and hides recordings from app ui`() {
+    fun `history fragment layout provides recent calls and playable recordings playlist with mini player`() {
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
         val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
         val root = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_history, null)
 
         assertTrue(root.findViewById<android.view.View>(R.id.recycler_history) != null)
-        assertEquals(0, app.resources.getIdentifier("recycler_recordings", "id", app.packageName))
-        assertEquals(0, app.resources.getIdentifier("btn_mode_recordings", "id", app.packageName))
-        assertEquals(0, app.resources.getIdentifier("card_mini_player", "id", app.packageName))
+        assertTrue(root.findViewById<android.view.View>(R.id.recycler_recordings) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_mode_calls) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_mode_recordings) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.card_recording_folder_banner) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.card_mini_player) != null)
     }
 
     @Test
@@ -1107,5 +1109,382 @@ class ExampleRobolectricTest {
         assertEquals(installTimestamp, entitlement.installDate)
         assertEquals(com.example.data.firebase.UserEntitlement.STATUS_ACTIVE, entitlement.subscriptionStatus)
     }
-}
 
+    @Test
+    fun `realtime database sync mapping, pending utr top sort, admin user card controls, 6 clean settings, and blocked overlay work`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+
+        // 1. Verify 6 clean settings include Accessibility Service Status
+        val defaultSettings = com.example.data.firebase.DynamicSettingItem.defaultItems()
+        assertEquals(6, defaultSettings.size)
+        assertEquals(
+            listOf(
+                com.example.data.firebase.DynamicSettingItem.KEY_AUTO_RECORDING,
+                com.example.data.firebase.DynamicSettingItem.KEY_RECORDING_FOLDER,
+                com.example.data.firebase.DynamicSettingItem.KEY_ACCESSIBILITY_STATUS,
+                com.example.data.firebase.DynamicSettingItem.KEY_BLOCKED_NUMBERS,
+                com.example.data.firebase.DynamicSettingItem.KEY_DISPLAY_THEME,
+                com.example.data.firebase.DynamicSettingItem.KEY_SOUNDS_VIBRATION
+            ),
+            defaultSettings.map { it.key }
+        )
+
+        // 2. Verify RealtimeDatabaseSync user & config round-trip mapping
+        val nowMs = 1_700_000_000_000L
+        val originalUser = com.example.data.firebase.UserEntitlement(
+            id = "u_rtdb",
+            userId = "u_rtdb",
+            displayName = "Rahul Kumar",
+            email = "rahul@example.com",
+            phoneNumber = "+919876543210",
+            trialStartedAt = com.google.firebase.Timestamp(java.util.Date(nowMs)),
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_PENDING_APPROVAL,
+            isPremiumUser = false,
+            paymentRefId = "412345678901",
+            isBlocked = false,
+            autoCallRecording = true,
+            themeMode = com.example.data.firebase.UserEntitlement.THEME_DARK
+        )
+        val rtdbMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbUserMap(originalUser)
+        assertEquals("u_rtdb", rtdbMap["uid"])
+        assertEquals("+919876543210", rtdbMap["phone"])
+        assertEquals("412345678901", rtdbMap["paymentRefId"])
+        assertEquals(true, rtdbMap["autoRecordEnabled"])
+
+        val parsedUser = com.example.data.firebase.RealtimeDatabaseSync.parseUserSnapshot("u_rtdb", rtdbMap, null)
+        assertEquals("u_rtdb", parsedUser.uid)
+        assertEquals("+919876543210", parsedUser.phone)
+        assertEquals("412345678901", parsedUser.paymentRefId)
+        assertEquals(com.example.data.firebase.UserEntitlement.STATUS_PENDING_APPROVAL, parsedUser.subscriptionStatus)
+        assertTrue(parsedUser.autoRecordEnabled)
+
+        val cfgMap = mapOf(
+            "subscriptionPrice" to 349L,
+            "adminUpiId" to "admin@upi"
+        )
+        val parsedCfg = com.example.data.firebase.RealtimeDatabaseSync.parseAppConfigSnapshot(cfgMap)
+        assertEquals(349L, parsedCfg.subscriptionPrice)
+        assertEquals("admin@upi", parsedCfg.adminUpiId)
+
+        // 3. Verify pending_approval users sort to the top of AdminRepository.filterUsers
+        val normalUser = com.example.data.firebase.UserEntitlement(
+            id = "u_normal",
+            userId = "u_normal",
+            displayName = "Normal User",
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_TRIAL,
+            updatedAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 50_000L))
+        )
+        val sorted = com.example.data.firebase.AdminRepository.filterUsers(
+            users = listOf(normalUser, parsedUser),
+            filter = com.example.data.firebase.AdminUserFilter.ALL,
+            query = "",
+            trialDaysConfig = 7,
+            nowMs = nowMs
+        )
+        assertEquals(listOf("u_rtdb", "u_normal"), sorted.map { it.userId })
+
+        // 4. Verify AdminUsersAdapter binds Approve UTR, Reject UTR, Block/Unblock switch, and Premium Access switch
+        var approvedUid: String? = null
+        var rejectedUid: String? = null
+        var toggledProUid: String? = null
+        var toggledBlockUid: String? = null
+        val adminAdapter = com.example.ui.admin.AdminUsersAdapter(
+            onToggleProClick = { toggledProUid = it.userId },
+            onRenewMonthClick = {},
+            onExtendTrialClick = {},
+            onToggleBlockClick = { toggledBlockUid = it.userId },
+            onManageClick = {},
+            onApproveUtrClick = { approvedUid = it.userId },
+            onRejectUtrClick = { rejectedUid = it.userId }
+        )
+        adminAdapter.submitList(listOf(parsedUser))
+        val parent = android.widget.FrameLayout(themedContext)
+        val holder = adminAdapter.onCreateViewHolder(parent, 0)
+        adminAdapter.onBindViewHolder(holder, 0)
+
+        val utrActions = holder.itemView.findViewById<android.view.View>(R.id.layout_admin_user_utr_actions)
+        assertEquals(android.view.View.VISIBLE, utrActions.visibility)
+        holder.itemView.findViewById<android.view.View>(R.id.btn_user_approve_utr).performClick()
+        holder.itemView.findViewById<android.view.View>(R.id.btn_user_reject_utr).performClick()
+        assertEquals("u_rtdb", approvedUid)
+        assertEquals("u_rtdb", rejectedUid)
+
+        val switchPro = holder.itemView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_user_premium)
+        val switchBlock = holder.itemView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_user_block)
+        switchPro.performClick()
+        switchBlock.performClick()
+        assertEquals("u_rtdb", toggledProUid)
+        assertEquals("u_rtdb", toggledBlockUid)
+
+        // 5. Verify full-screen Account Blocked by Admin overlay exists in activity_main.xml
+        val mainRoot = android.view.LayoutInflater.from(themedContext).inflate(R.layout.activity_main, null)
+        val blockedOverlay = mainRoot.findViewById<android.view.View>(R.id.blocked_overlay_container)
+        val blockedTitle = mainRoot.findViewById<android.widget.TextView>(R.id.tv_blocked_overlay_title)
+        assertTrue(blockedOverlay != null)
+        assertEquals("Account Blocked by Admin", blockedTitle.text.toString())
+
+        // 6. Verify RTDB URL resource, payment_requests, navigation_tabs, settings_items & live_broadcast snapshots
+        assertEquals(
+            "https://gen-lang-client-0353534085-default-rtdb.firebaseio.com",
+            themedContext.getString(R.string.firebase_database_url)
+        )
+        assertEquals("gen-lang-client-0353534085", com.example.data.firebase.RealtimeDatabaseSync.PROJECT_ID)
+        assertEquals("113923036774", com.example.data.firebase.RealtimeDatabaseSync.PROJECT_NUMBER)
+
+        val paymentReq = com.example.data.firebase.PaymentRequest(
+            id = "req_rtdb_1",
+            userId = "u_rtdb",
+            userName = "RTDB Tester",
+            userEmail = "rtdb@example.com",
+            upiId = "elx@ptaxis",
+            amountInr = 299L,
+            upiTxnId = "412345678901",
+            status = com.example.data.firebase.PaymentRequest.STATUS_PENDING
+        )
+        val reqMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbPaymentRequestMap(paymentReq)
+        val parsedReq = com.example.data.firebase.RealtimeDatabaseSync.parsePaymentRequestSnapshot("req_rtdb_1", reqMap)
+        assertEquals("req_rtdb_1", parsedReq.id)
+        assertEquals("u_rtdb", parsedReq.userId)
+        assertEquals("412345678901", parsedReq.upiTxnId)
+        assertEquals(299L, parsedReq.amountInr)
+
+        val navTabs = com.example.data.firebase.NavigationTabItem.defaultTabs()
+        val parsedTabs = com.example.data.firebase.RealtimeDatabaseSync.parseNavigationTabsSnapshot(
+            mapOf("tabs" to navTabs.map { it.toFirestoreMap() })
+        )
+        assertEquals(navTabs.size, parsedTabs.size)
+
+        val settingsItems = com.example.data.firebase.DynamicSettingItem.defaultItems()
+        val parsedItems = com.example.data.firebase.RealtimeDatabaseSync.parseDynamicSettingsSnapshot(
+            mapOf("items" to settingsItems.map { it.toFirestoreMap() })
+        )
+        assertEquals(settingsItems.size, parsedItems.size)
+
+        val broadcast = com.example.data.firebase.RealtimeDatabaseSync.parseLiveBroadcastSnapshot(
+            mapOf(
+                "showPopup" to true,
+                "popupId" to "pop_1",
+                "title" to "Live Update",
+                "message" to "Instant RTDB Broadcast"
+            )
+        )
+        assertTrue(broadcast.showPopup)
+        assertEquals("Live Update", broadcast.title)
+    }
+
+    @Test
+    fun `subscription enforcement service monitors subscriptionStatus and isPremium nodes and enforces 7 day trial and recording restrictions`() {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val nowMs = 1_800_000_000_000L
+        val threeDaysAgo = nowMs - 3L * DialerPreferences.ONE_DAY_MILLIS
+        val eightDaysAgo = nowMs - 8L * DialerPreferences.ONE_DAY_MILLIS
+
+        // 1. Active 7-day trial (3 days used -> 4 days remaining)
+        val activeTrialState = com.example.billing.SubscriptionEnforcementService.evaluateNodeState(
+            uid = "u_enf_1",
+            subscriptionStatus = "trial",
+            isPremium = false,
+            isBlocked = false,
+            installDateMs = threeDaysAgo,
+            nowMs = nowMs
+        )
+        assertFalse(activeTrialState.isTrialExpired)
+        assertEquals(4, activeTrialState.trialDaysRemaining)
+        assertTrue(activeTrialState.isSubscriptionActive)
+        assertTrue(activeTrialState.isRecordingAllowed)
+        assertFalse(activeTrialState.shouldRestrictUiToAccountTab)
+        assertEquals("Free Trial Active (4 days left)", activeTrialState.statusBannerText)
+
+        // 2. Expired 7-day trial (8 days used, isPremium = false -> restricted)
+        val expiredTrialState = com.example.billing.SubscriptionEnforcementService.evaluateNodeState(
+            uid = "u_enf_1",
+            subscriptionStatus = "trial",
+            isPremium = false,
+            isBlocked = false,
+            installDateMs = eightDaysAgo,
+            nowMs = nowMs
+        )
+        assertTrue(expiredTrialState.isTrialExpired)
+        assertEquals(0, expiredTrialState.trialDaysRemaining)
+        assertFalse(expiredTrialState.isSubscriptionActive)
+        assertFalse(expiredTrialState.isRecordingAllowed)
+        assertTrue(expiredTrialState.shouldRestrictUiToAccountTab)
+        assertEquals("Trial Expired - Upgrade to Pro (₹299/month)", expiredTrialState.statusBannerText)
+
+        // 3. Pending UTR approval
+        val pendingState = com.example.billing.SubscriptionEnforcementService.evaluateNodeState(
+            uid = "u_enf_1",
+            subscriptionStatus = "pending_approval",
+            isPremium = false,
+            isBlocked = false,
+            installDateMs = eightDaysAgo,
+            nowMs = nowMs
+        )
+        assertEquals("Verification Pending... Admin is checking your UTR", pendingState.statusBannerText)
+
+        // 4. Admin approves UTR: /users/{uid}/isPremium = true, /users/{uid}/subscriptionStatus = "active"
+        val approvedState = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = context,
+            subscriptionStatus = "active",
+            isPremium = true,
+            isBlocked = false,
+            installDateMs = eightDaysAgo,
+            subscriptionExpiresAtMs = nowMs + DialerPreferences.ONE_MONTH_MILLIS,
+            nowMs = nowMs
+        )
+        assertTrue(approvedState.isPremium)
+        assertTrue(approvedState.isSubscriptionActive)
+        assertTrue(approvedState.isRecordingAllowed)
+        assertFalse(approvedState.shouldRestrictUiToAccountTab)
+        assertEquals("Pro Plan Active", approvedState.statusBannerText)
+        assertTrue(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(context, nowMs))
+
+        // 5. Admin revokes/expires: /users/{uid}/isPremium = false, /users/{uid}/subscriptionStatus = "expired"
+        val revokedState = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = context,
+            subscriptionStatus = "expired",
+            isPremium = false,
+            isBlocked = false,
+            installDateMs = eightDaysAgo,
+            subscriptionExpiresAtMs = 0L,
+            nowMs = nowMs
+        )
+        assertFalse(revokedState.isPremium)
+        assertFalse(revokedState.isSubscriptionActive)
+        assertFalse(revokedState.isRecordingAllowed)
+        assertTrue(revokedState.shouldRestrictUiToAccountTab)
+        assertFalse(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(context, nowMs))
+
+        // 6. Admin blocks user: /users/{uid}/isBlocked = true
+        val blockedState = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = context,
+            subscriptionStatus = "blocked",
+            isPremium = false,
+            isBlocked = true,
+            installDateMs = threeDaysAgo,
+            nowMs = nowMs
+        )
+        assertTrue(blockedState.isBlocked)
+        assertFalse(blockedState.isSubscriptionActive)
+        assertFalse(blockedState.isRecordingAllowed)
+        assertEquals("Account Blocked by Admin", blockedState.statusBannerText)
+    }
+
+    @Test
+    fun `vip smart call announcer, unknown caller shield, and auto whatsapp sms follow up sync and enforce 24h cooldown`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val prefs = DialerPreferences(app)
+
+        // 1. Smart Call Announcer speech formatting
+        assertEquals(
+            "Incoming call from Rahul Sharma",
+            com.example.telecom.CustomInCallService.buildAnnouncerSpeechText("Rahul Sharma", "+91 98765 43210")
+        )
+        assertEquals(
+            "Incoming call from unknown number 9 8 7 6 5 4 3 2 1 0",
+            com.example.telecom.CustomInCallService.buildAnnouncerSpeechText(null, "98765 43210")
+        )
+
+        // 2. Call end outcome & trigger matching
+        assertEquals(
+            com.example.telecom.CustomInCallService.CallEndOutcome.COMPLETED_CALL,
+            com.example.telecom.CustomInCallService.resolveCallEndOutcome(wasIncomingRinging = true, reachedActive = true)
+        )
+        assertEquals(
+            com.example.telecom.CustomInCallService.CallEndOutcome.MISSED_OR_BUSY_CALL,
+            com.example.telecom.CustomInCallService.resolveCallEndOutcome(wasIncomingRinging = true, reachedActive = false)
+        )
+        assertTrue(
+            com.example.telecom.CustomInCallService.shouldTriggerFollowUp(
+                com.example.data.firebase.UserEntitlement.TRIGGER_ALL_CALLS,
+                com.example.telecom.CustomInCallService.CallEndOutcome.MISSED_OR_BUSY_CALL
+            )
+        )
+        assertFalse(
+            com.example.telecom.CustomInCallService.shouldTriggerFollowUp(
+                com.example.data.firebase.UserEntitlement.TRIGGER_COMPLETED_ONLY,
+                com.example.telecom.CustomInCallService.CallEndOutcome.MISSED_OR_BUSY_CALL
+            )
+        )
+        assertEquals(
+            "919876543210",
+            com.example.telecom.CustomInCallService.formatWhatsappFollowUpPhone("098765 43210")
+        )
+
+        // 3. 24-hour anti-spam cooldown per phone number & Unknown Shield rejected number tracking
+        val nowMs = 1_850_000_000_000L
+        assertTrue(prefs.canSendFollowUpToday("+91 99887 76655", nowMs))
+        prefs.recordFollowUpSent("9988776655", nowMs)
+        assertFalse(prefs.canSendFollowUpToday("+91 99887 76655", nowMs + 6 * 3600_000L))
+        assertTrue(prefs.canSendFollowUpToday("+91 99887 76655", nowMs + DialerPreferences.ONE_DAY_MILLIS + 1L))
+
+        prefs.recordShieldRejectedNumber("+91 91111 22222")
+        assertTrue(prefs.isRejectedByShield("09111122222"))
+
+        // 4. RealtimeDatabaseSync round-trip for all 8 VIP fields
+        val vipUser = com.example.data.firebase.UserEntitlement(
+            id = "u_vip_1",
+            userId = "u_vip_1",
+            isPremiumUser = true,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            announcerEnabled = true,
+            announcerHeadsetOnly = true,
+            unknownShieldMode = com.example.data.firebase.UserEntitlement.SHIELD_SILENT_RECORD,
+            autoSmsFollowUp = true,
+            autoWhatsappFollowUp = true,
+            followUpTrigger = com.example.data.firebase.UserEntitlement.TRIGGER_MISSED_ONLY,
+            completedCallTemplate = "Custom completed reply!",
+            missedCallTemplate = "Custom missed call reply!"
+        )
+        val rtdbMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbUserMap(vipUser)
+        val parsedVip = com.example.data.firebase.RealtimeDatabaseSync.parseUserSnapshot("u_vip_1", rtdbMap, null)
+        assertTrue(parsedVip.announcerEnabled)
+        assertTrue(parsedVip.announcerHeadsetOnly)
+        assertEquals(com.example.data.firebase.UserEntitlement.SHIELD_SILENT_RECORD, parsedVip.unknownShieldMode)
+        assertTrue(parsedVip.autoSmsFollowUp)
+        assertTrue(parsedVip.autoWhatsappFollowUp)
+        assertEquals(com.example.data.firebase.UserEntitlement.TRIGGER_MISSED_ONLY, parsedVip.followUpTrigger)
+        assertEquals("Custom completed reply!", parsedVip.completedCallTemplate)
+        assertEquals("Custom missed call reply!", parsedVip.missedCallTemplate)
+
+        com.example.data.firebase.SettingsManager.applyRtdbUserEntitlement(parsedVip, prefs)
+        assertTrue(prefs.announcerEnabled)
+        assertTrue(prefs.announcerHeadsetOnly)
+        assertEquals(com.example.data.firebase.UserEntitlement.SHIELD_SILENT_RECORD, prefs.unknownShieldMode)
+        assertTrue(prefs.autoSmsFollowUp)
+        assertTrue(prefs.autoWhatsappFollowUp)
+        assertEquals(com.example.data.firebase.UserEntitlement.TRIGGER_MISSED_ONLY, prefs.followUpTrigger)
+        assertEquals("Custom completed reply!", prefs.completedCallTemplate)
+        assertEquals("Custom missed call reply!", prefs.missedCallTemplate)
+
+        // 5. Verify Settings and Account XML layouts contain all VIP cards and benefits
+        val settingsView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_settings, null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.card_vip_announcer_shield) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_vip_announcer) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_vip_announcer_headset) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.rg_vip_unknown_shield) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.card_vip_business_followup) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_vip_auto_sms) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_vip_auto_whatsapp) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.rg_vip_followup_trigger) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.et_vip_completed_template) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.et_vip_missed_template) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.btn_vip_save_templates) != null)
+
+        val accountView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_account, null)
+        assertEquals(
+            "Auto WhatsApp & SMS Business Follow-up",
+            accountView.findViewById<android.widget.TextView>(R.id.tv_benefit_vip_followup).text.toString()
+        )
+        assertEquals(
+            "Smart Call Name Announcer (Bike/Earphone Mode)",
+            accountView.findViewById<android.widget.TextView>(R.id.tv_benefit_vip_announcer).text.toString()
+        )
+        assertEquals(
+            "Unknown & Spam Caller Shield",
+            accountView.findViewById<android.widget.TextView>(R.id.tv_benefit_vip_shield).text.toString()
+        )
+    }
+}

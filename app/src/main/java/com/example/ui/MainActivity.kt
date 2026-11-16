@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity() {
 
         setupBottomNavigation()
         setupDialpadFab()
+        com.example.billing.SubscriptionEnforcementService.init(this)
         RealtimeSyncManager.init(this)
         observeRealtimeSync()
         renderAuthState(Firebase.auth.currentUser != null)
@@ -204,6 +205,44 @@ class MainActivity : AppCompatActivity() {
                 }
             )
         }
+        binding.btnBlockedWhatsapp.setOnClickListener {
+            val deviceTag = prefs.shortDeviceTag.ifBlank {
+                DeviceIdentityProvider.formatShortDeviceTag(DeviceIdentityProvider.getDeviceHash(this))
+            }
+            val intent = UpiPaymentHelper.buildWhatsAppSupportIntent(
+                userName = prefs.userName,
+                userEmail = Firebase.auth.currentUser?.email.orEmpty(),
+                deviceTag = deviceTag,
+                supportNumberRaw = prefs.configuredWhatsappNumber
+            )
+            runCatching { startActivity(intent) }.onFailure {
+                Toast.makeText(this, R.string.whatsapp_unavailable, Toast.LENGTH_SHORT).show()
+            }
+        }
+        binding.btnBlockedSignOut.setOnClickListener {
+            signOutUser()
+        }
+    }
+
+    private fun updateBlockedOverlayState() {
+        val isSignedIn = Firebase.auth.currentUser != null
+        val isAdmin = UpiPaymentHelper.isAdminEmail(Firebase.auth.currentUser?.email)
+        val isBlocked = isSignedIn && !isAdmin && (
+            prefs.adminBlockedUser ||
+                com.example.billing.SubscriptionEnforcementService.state.value.isBlocked ||
+                RealtimeSyncManager.syncState.value.userEntitlement?.isBlocked == true
+            )
+        if (isBlocked) {
+            binding.tvBlockedOverlayMessage.text = getString(
+                R.string.blocked_overlay_message,
+                prefs.configuredWhatsappNumber
+            )
+            binding.blockedOverlayContainer.visibility = View.VISIBLE
+            (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
+                as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
+        } else {
+            binding.blockedOverlayContainer.visibility = View.GONE
+        }
     }
 
     private fun setAuthLoading(loading: Boolean, errorMsg: String?) {
@@ -219,9 +258,11 @@ class MainActivity : AppCompatActivity() {
 
         if (!isSignedIn) {
             lastSyncedUid = null
+            com.example.billing.SubscriptionEnforcementService.stopMonitoring()
             RealtimeSyncManager.stop()
             activeBroadcastDialog?.dismiss()
             activeBroadcastDialog = null
+            binding.blockedOverlayContainer.visibility = View.GONE
             binding.cardLiveBannerAd.visibility = View.GONE
             binding.authGateContainer.visibility = View.VISIBLE
             binding.mainContentContainer.visibility = View.GONE
@@ -258,6 +299,7 @@ class MainActivity : AppCompatActivity() {
         binding.authGateContainer.visibility = View.GONE
         binding.mainContentContainer.visibility = View.VISIBLE
         binding.bottomNavigation.visibility = View.VISIBLE
+        updateBlockedOverlayState()
 
         applyDynamicBottomNavigation(RealtimeSyncManager.syncState.value.navigationTabs)
         if (isAppLockedByTrialExpiry()) {
@@ -276,6 +318,7 @@ class MainActivity : AppCompatActivity() {
         updateFabVisibility(activeTabId)
         Firebase.auth.currentUser?.uid?.let { uid ->
             lastSyncedUid = uid
+            com.example.billing.SubscriptionEnforcementService.startMonitoringUser(uid, this)
             RealtimeSyncManager.startForUser(uid)
         }
     }
@@ -284,10 +327,47 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
+                    com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
+                        if (Firebase.auth.currentUser == null) return@collect
+                        if (enfState.lastEvaluatedAtMs == 0L) return@collect
+
+                        updateBlockedOverlayState()
+                        if (enfState.shouldRestrictUiToAccountTab || isAppLockedByTrialExpiry()) {
+                            (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
+                                as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
+                            enforcePaywallIfExpired()
+                        } else {
+                            updateFabVisibility(activeTabId)
+                        }
+                        refreshCurrentFragment()
+                    }
+                }
+                launch {
+                    com.example.billing.SubscriptionEnforcementService.restrictionEvents.collect { event ->
+                        when (event) {
+                            is com.example.billing.SubscriptionRestrictionEvent.TrialExpiredRedirectToPayment -> {
+                                enforcePaywallIfExpired()
+                            }
+                            is com.example.billing.SubscriptionRestrictionEvent.RecordingRestricted -> {
+                                enforcePaywallIfExpired()
+                            }
+                            com.example.billing.SubscriptionRestrictionEvent.AccountBlockedByAdmin -> {
+                                updateBlockedOverlayState()
+                            }
+                            com.example.billing.SubscriptionRestrictionEvent.SubscriptionUnlocked -> {
+                                updateBlockedOverlayState()
+                                updateFabVisibility(activeTabId)
+                                refreshCurrentFragment()
+                            }
+                        }
+                    }
+                }
+                launch {
                     RealtimeSyncManager.syncState.collect { state ->
                         if (state.uid == null || Firebase.auth.currentUser == null) return@collect
                         if (state.version == 0L) return@collect
 
+                        updateBlockedOverlayState()
                         applyDynamicBottomNavigation(state.navigationTabs)
                         applyLiveBroadcastState(state.liveBroadcast)
 
@@ -298,6 +378,7 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             updateFabVisibility(activeTabId)
                         }
+                        refreshCurrentFragment()
                     }
                 }
                 launch {
@@ -318,6 +399,7 @@ class MainActivity : AppCompatActivity() {
                                 ).show()
                             }
                             RealtimeSyncEvent.AccountBlocked -> {
+                                updateBlockedOverlayState()
                                 Toast.makeText(
                                     this@MainActivity,
                                     R.string.realtime_account_blocked_toast,
@@ -325,6 +407,7 @@ class MainActivity : AppCompatActivity() {
                                 ).show()
                             }
                             RealtimeSyncEvent.AccountUnblocked -> {
+                                updateBlockedOverlayState()
                                 Toast.makeText(
                                     this@MainActivity,
                                     R.string.realtime_account_unblocked_toast,

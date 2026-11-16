@@ -141,6 +141,7 @@ data class DynamicSettingItem(
     companion object {
         const val KEY_AUTO_RECORDING = "auto_recording"
         const val KEY_RECORDING_FOLDER = "recording_folder"
+        const val KEY_ACCESSIBILITY_STATUS = "accessibility_status"
         const val KEY_BLOCKED_NUMBERS = "blocked_numbers"
         const val KEY_DISPLAY_THEME = "display_theme"
         const val KEY_SOUNDS_VIBRATION = "sounds_vibration"
@@ -151,6 +152,7 @@ data class DynamicSettingItem(
 
         const val ICON_RECORD = "record"
         const val ICON_FOLDER = "folder"
+        const val ICON_ACCESSIBILITY = "accessibility"
         const val ICON_BLOCK = "block"
         const val ICON_PALETTE = "palette"
         const val ICON_VOLUME = "volume"
@@ -162,7 +164,7 @@ data class DynamicSettingItem(
             DynamicSettingItem(
                 key = KEY_AUTO_RECORDING,
                 title = "Auto Call Recording",
-                description = "Automatically record calls to your folder (.m4a)",
+                description = "Automatically record calls from the first ring (.mp3)",
                 iconKey = ICON_RECORD,
                 type = TYPE_TOGGLE,
                 enabled = true,
@@ -173,12 +175,22 @@ data class DynamicSettingItem(
             DynamicSettingItem(
                 key = KEY_RECORDING_FOLDER,
                 title = "Recording Storage Folder",
-                description = "Default: Music / Recordings",
+                description = "Default: Music / PulseDial",
                 iconKey = ICON_FOLDER,
                 type = TYPE_ACTION,
                 enabled = true,
                 lockedByAdmin = false,
                 order = 1
+            ),
+            DynamicSettingItem(
+                key = KEY_ACCESSIBILITY_STATUS,
+                title = "Accessibility Service Status",
+                description = "Enable PulseDial Call Audio Helper for Android 10–16+ calls",
+                iconKey = ICON_ACCESSIBILITY,
+                type = TYPE_ACTION,
+                enabled = true,
+                lockedByAdmin = false,
+                order = 2
             ),
             DynamicSettingItem(
                 key = KEY_BLOCKED_NUMBERS,
@@ -188,7 +200,7 @@ data class DynamicSettingItem(
                 type = TYPE_ACTION,
                 enabled = true,
                 lockedByAdmin = false,
-                order = 2
+                order = 3
             ),
             DynamicSettingItem(
                 key = KEY_DISPLAY_THEME,
@@ -198,7 +210,7 @@ data class DynamicSettingItem(
                 type = TYPE_ACTION,
                 enabled = true,
                 lockedByAdmin = false,
-                order = 3
+                order = 4
             ),
             DynamicSettingItem(
                 key = KEY_SOUNDS_VIBRATION,
@@ -209,16 +221,6 @@ data class DynamicSettingItem(
                 enabled = true,
                 lockedByAdmin = false,
                 defaultValue = true,
-                order = 4
-            ),
-            DynamicSettingItem(
-                key = KEY_QUICK_DECLINE,
-                title = "Quick Decline Responses",
-                description = "Edit quick SMS decline templates",
-                iconKey = ICON_REPLY,
-                type = TYPE_ACTION,
-                enabled = true,
-                lockedByAdmin = false,
                 order = 5
             )
         )

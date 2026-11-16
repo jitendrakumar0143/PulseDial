@@ -81,6 +81,12 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private var currentPaymentFilter: AdminPaymentFilter = AdminPaymentFilter.ALL
     private var currentPaymentQuery: String = ""
+    private var rtdbAdminUsersCleanup: (() -> Unit)? = null
+    private var rtdbAdminConfigCleanup: (() -> Unit)? = null
+    private var rtdbAdminPaymentsCleanup: (() -> Unit)? = null
+    private var rtdbAdminNavTabsCleanup: (() -> Unit)? = null
+    private var rtdbAdminSettingsItemsCleanup: (() -> Unit)? = null
+    private var rtdbAdminBroadcastCleanup: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,6 +119,109 @@ class AdminPanelActivity : AppCompatActivity() {
         setupTabsAndUiTab()
         setupSettingsTab()
         observeAdminData()
+        attachRtdbAdminListeners()
+    }
+
+    private fun attachRtdbAdminListeners() {
+        rtdbAdminUsersCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAllUsersListener(
+            context = this,
+            onUpdate = { rtdbUsers ->
+                if (rtdbUsers.isNotEmpty() || allUsers.isEmpty()) {
+                    val mergedById = allUsers.associateBy { it.uid }.toMutableMap()
+                    rtdbUsers.forEach { rtdbUser ->
+                        mergedById[rtdbUser.uid] = rtdbUser
+                    }
+                    allUsers = mergedById.values.toList()
+                    val nowMs = System.currentTimeMillis()
+                    expiringSubscriptionUsers = allUsers.filter { user ->
+                        user.isPremiumUser && !user.isBlocked &&
+                            AdminRepository.getSubscriptionRemainingDays(user, nowMs) in 1..AdminRepository.SUB_EXPIRING_SOON_DAYS
+                    }
+                    allActiveSubscribers = allUsers.filter { user ->
+                        user.isPremiumUser && !user.isBlocked &&
+                            AdminRepository.getSubscriptionRemainingDays(user, nowMs) != 0
+                    }
+                    updateKpis()
+                    applyUserFilters()
+                    applySubscriberFilters()
+                }
+            }
+        )
+        rtdbAdminPaymentsCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAllPaymentRequestsListener(
+            context = this,
+            onUpdate = { rtdbRequests ->
+                if (rtdbRequests.isNotEmpty() || allPayments.isEmpty()) {
+                    val mergedById = allPayments.associateBy { it.id }.toMutableMap()
+                    rtdbRequests.forEach { req ->
+                        if (req.id.isNotBlank()) {
+                            mergedById[req.id] = req
+                        }
+                    }
+                    allPayments = mergedById.values.sortedWith(
+                        compareBy<PaymentRequest> {
+                            when (it.status) {
+                                PaymentRequest.STATUS_PENDING -> 0
+                                PaymentRequest.STATUS_APPROVED -> 1
+                                else -> 2
+                            }
+                        }.thenByDescending { it.createdAt?.toDate()?.time ?: 0L }
+                    )
+                    updateKpis()
+                    applyPaymentFilters()
+                }
+            }
+        )
+        rtdbAdminConfigCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAppConfigListener(
+            context = this,
+            currentFallback = { currentConfig },
+            onUpdate = { rtdbConfig ->
+                currentConfig = rtdbConfig
+                prefs.applyAppConfig(rtdbConfig)
+                usersAdapter.trialDaysConfig = rtdbConfig.trialDays.toInt()
+                bindSettingsInputs(rtdbConfig)
+                applyUserFilters()
+            }
+        )
+        rtdbAdminNavTabsCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachNavigationTabsListener(
+            context = this,
+            onUpdate = { tabs ->
+                if (tabs.isNotEmpty()) {
+                    currentNavTabs = tabs
+                    navTabsAdapter.submitList(tabs)
+                }
+            }
+        )
+        rtdbAdminSettingsItemsCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachDynamicSettingsListener(
+            context = this,
+            onUpdate = { items ->
+                if (items.isNotEmpty()) {
+                    currentSettingItems = items
+                    settingsItemsAdapter.submitList(items)
+                }
+            }
+        )
+        rtdbAdminBroadcastCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachLiveBroadcastListener(
+            context = this,
+            onUpdate = { broadcast ->
+                bindBroadcastInputs(broadcast)
+            }
+        )
+    }
+
+    override fun onDestroy() {
+        rtdbAdminUsersCleanup?.invoke()
+        rtdbAdminUsersCleanup = null
+        rtdbAdminConfigCleanup?.invoke()
+        rtdbAdminConfigCleanup = null
+        rtdbAdminPaymentsCleanup?.invoke()
+        rtdbAdminPaymentsCleanup = null
+        rtdbAdminNavTabsCleanup?.invoke()
+        rtdbAdminNavTabsCleanup = null
+        rtdbAdminSettingsItemsCleanup?.invoke()
+        rtdbAdminSettingsItemsCleanup = null
+        rtdbAdminBroadcastCleanup?.invoke()
+        rtdbAdminBroadcastCleanup = null
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -312,7 +421,9 @@ class AdminPanelActivity : AppCompatActivity() {
             onRenewMonthClick = { user -> renewUserMonth(user) },
             onExtendTrialClick = { user -> extendUserTrial(user, 7L) },
             onToggleBlockClick = { user -> toggleUserBlock(user) },
-            onManageClick = { user -> showManageUserDialog(user) }
+            onManageClick = { user -> showManageUserDialog(user) },
+            onApproveUtrClick = { user -> approveUserUtrDirect(user) },
+            onRejectUtrClick = { user -> rejectUserUtrDirect(user) }
         )
         binding.recyclerAdminUsers.layoutManager = LinearLayoutManager(this)
         binding.recyclerAdminUsers.adapter = usersAdapter
@@ -1093,6 +1204,58 @@ class AdminPanelActivity : AppCompatActivity() {
                 Toast.makeText(
                     this@AdminPanelActivity,
                     getString(R.string.admin_user_updated, user.displayName.ifBlank { user.email }),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { err ->
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun approveUserUtrDirect(user: UserEntitlement) {
+        lifecycleScope.launch {
+            val pendingReq = allPayments.firstOrNull {
+                it.userId == user.userId && it.status == PaymentRequest.STATUS_PENDING
+            }
+            val result = if (pendingReq != null) {
+                paymentRepository.approvePaymentRequest(pendingReq)
+            } else {
+                adminRepository.approveUserUtrDirect(user)
+            }
+            result.onSuccess {
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_approved_toast, user.displayName.ifBlank { user.email }),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { err ->
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun rejectUserUtrDirect(user: UserEntitlement) {
+        lifecycleScope.launch {
+            val pendingReq = allPayments.firstOrNull {
+                it.userId == user.userId && it.status == PaymentRequest.STATUS_PENDING
+            }
+            val result = if (pendingReq != null) {
+                paymentRepository.rejectPaymentRequest(pendingReq, "Rejected by Admin")
+            } else {
+                adminRepository.rejectUserUtrDirect(user)
+            }
+            result.onSuccess {
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_rejected_toast, user.displayName.ifBlank { user.email }),
                     Toast.LENGTH_SHORT
                 ).show()
             }.onFailure { err ->

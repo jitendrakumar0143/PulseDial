@@ -87,11 +87,23 @@ class SettingsManager(
     fun setAutoCallRecording(enabled: Boolean) {
         prefs.autoCallRecording = enabled
         pushFieldsAsync(mapOf("autoCallRecording" to enabled))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "autoRecordEnabled" to enabled,
+                    "autoCallRecording" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     fun setThemeMode(nightMode: Int) {
         prefs.displayThemeMode = nightMode
-        if (AppCompatDelegate.getDefaultNightMode() != nightMode) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
+            AppCompatDelegate.getDefaultNightMode() != nightMode
+        ) {
             AppCompatDelegate.setDefaultNightMode(nightMode)
         }
         val themeStr = if (nightMode == AppCompatDelegate.MODE_NIGHT_YES) {
@@ -100,11 +112,29 @@ class SettingsManager(
             UserEntitlement.THEME_LIGHT
         }
         pushFieldsAsync(mapOf("themeMode" to themeStr))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "themeMode" to themeStr,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     fun setDialpadTonesEnabled(enabled: Boolean) {
         prefs.dialpadTonesEnabled = enabled
         pushFieldsAsync(mapOf("dialpadTonesEnabled" to enabled))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "dialpadTonesEnabled" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     fun addBlockedNumber(number: String) {
@@ -139,6 +169,115 @@ class SettingsManager(
         )
     }
 
+    fun setAnnouncerEnabled(enabled: Boolean) {
+        prefs.announcerEnabled = enabled
+        pushFieldsAsync(mapOf("announcerEnabled" to enabled))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "announcerEnabled" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setAnnouncerHeadsetOnly(enabled: Boolean) {
+        prefs.announcerHeadsetOnly = enabled
+        pushFieldsAsync(mapOf("announcerHeadsetOnly" to enabled))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "announcerHeadsetOnly" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setUnknownShieldMode(mode: String) {
+        prefs.unknownShieldMode = mode
+        val normalized = prefs.unknownShieldMode
+        pushFieldsAsync(mapOf("unknownShieldMode" to normalized))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "unknownShieldMode" to normalized,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setAutoSmsFollowUp(enabled: Boolean) {
+        prefs.autoSmsFollowUp = enabled
+        pushFieldsAsync(mapOf("autoSmsFollowUp" to enabled))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "autoSmsFollowUp" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setAutoWhatsappFollowUp(enabled: Boolean) {
+        prefs.autoWhatsappFollowUp = enabled
+        pushFieldsAsync(mapOf("autoWhatsappFollowUp" to enabled))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "autoWhatsappFollowUp" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setFollowUpTrigger(trigger: String) {
+        prefs.followUpTrigger = trigger
+        val normalized = prefs.followUpTrigger
+        pushFieldsAsync(mapOf("followUpTrigger" to normalized))
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "followUpTrigger" to normalized,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun saveFollowUpTemplates(completedTemplate: String, missedTemplate: String) {
+        prefs.completedCallTemplate = completedTemplate
+        prefs.missedCallTemplate = missedTemplate
+        val cleanCompleted = prefs.completedCallTemplate
+        val cleanMissed = prefs.missedCallTemplate
+        pushFieldsAsync(
+            mapOf(
+                "completedCallTemplate" to cleanCompleted,
+                "missedCallTemplate" to cleanMissed
+            )
+        )
+        auth?.currentUser?.uid?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "completedCallTemplate" to cleanCompleted,
+                    "missedCallTemplate" to cleanMissed,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     suspend fun syncAllLocalPreferencesToCloud(): Result<Unit> {
         val firestore = db
             ?: return Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
@@ -155,7 +294,33 @@ class SettingsManager(
             "dialpadTonesEnabled" to prefs.dialpadTonesEnabled,
             "blockedNumbers" to prefs.getBlockedNumbers().map { it.take(40) }.take(500),
             "quickDeclineResponses" to prefs.getQuickDeclineResponses().map { it.take(200) }.take(50),
+            "announcerEnabled" to prefs.announcerEnabled,
+            "announcerHeadsetOnly" to prefs.announcerHeadsetOnly,
+            "unknownShieldMode" to prefs.unknownShieldMode,
+            "autoSmsFollowUp" to prefs.autoSmsFollowUp,
+            "autoWhatsappFollowUp" to prefs.autoWhatsappFollowUp,
+            "followUpTrigger" to prefs.followUpTrigger,
+            "completedCallTemplate" to prefs.completedCallTemplate,
+            "missedCallTemplate" to prefs.missedCallTemplate,
             "updatedAt" to FieldValue.serverTimestamp()
+        )
+        RealtimeDatabaseSync.pushUserFields(
+            uid,
+            mapOf(
+                "autoRecordEnabled" to prefs.autoCallRecording,
+                "autoCallRecording" to prefs.autoCallRecording,
+                "themeMode" to themeStr,
+                "dialpadTonesEnabled" to prefs.dialpadTonesEnabled,
+                "announcerEnabled" to prefs.announcerEnabled,
+                "announcerHeadsetOnly" to prefs.announcerHeadsetOnly,
+                "unknownShieldMode" to prefs.unknownShieldMode,
+                "autoSmsFollowUp" to prefs.autoSmsFollowUp,
+                "autoWhatsappFollowUp" to prefs.autoWhatsappFollowUp,
+                "followUpTrigger" to prefs.followUpTrigger,
+                "completedCallTemplate" to prefs.completedCallTemplate,
+                "missedCallTemplate" to prefs.missedCallTemplate,
+                "updatedAtMs" to System.currentTimeMillis()
+            )
         )
         val docRef = firestore.collection(DeviceTrialRepository.COLLECTION_USERS).document(uid)
         return try {
@@ -209,7 +374,7 @@ class SettingsManager(
         ) {
             if (snapshot == null || !snapshot.exists() || user == null) return
 
-            if (snapshot.contains("autoCallRecording")) {
+            if (snapshot.contains("autoCallRecording") || snapshot.contains("autoRecordEnabled")) {
                 val allowed = prefs.allowCallRecordingConfig
                 prefs.autoCallRecording = allowed && user.autoCallRecording
             }
@@ -242,6 +407,66 @@ class SettingsManager(
 
             if (snapshot.contains("quickDeclineResponses") && user.quickDeclineResponses.isNotEmpty()) {
                 prefs.setQuickDeclineResponses(user.quickDeclineResponses)
+            }
+
+            if (snapshot.contains("announcerEnabled")) {
+                prefs.announcerEnabled = user.announcerEnabled
+            }
+            if (snapshot.contains("announcerHeadsetOnly")) {
+                prefs.announcerHeadsetOnly = user.announcerHeadsetOnly
+            }
+            if (snapshot.contains("unknownShieldMode")) {
+                prefs.unknownShieldMode = user.unknownShieldMode
+            }
+            if (snapshot.contains("autoSmsFollowUp")) {
+                prefs.autoSmsFollowUp = user.autoSmsFollowUp
+            }
+            if (snapshot.contains("autoWhatsappFollowUp")) {
+                prefs.autoWhatsappFollowUp = user.autoWhatsappFollowUp
+            }
+            if (snapshot.contains("followUpTrigger")) {
+                prefs.followUpTrigger = user.followUpTrigger
+            }
+            if (snapshot.contains("completedCallTemplate")) {
+                prefs.completedCallTemplate = user.completedCallTemplate
+            }
+            if (snapshot.contains("missedCallTemplate")) {
+                prefs.missedCallTemplate = user.missedCallTemplate
+            }
+        }
+
+        /**
+         * Synchronizes incoming real-time RTDB `/users/{uid}` preferences into local [DialerPreferences].
+         */
+        fun applyRtdbUserEntitlement(
+            user: UserEntitlement,
+            prefs: DialerPreferences
+        ) {
+            val allowed = prefs.allowCallRecordingConfig
+            prefs.autoCallRecording = allowed && user.autoCallRecording
+            prefs.dialpadTonesEnabled = user.dialpadTonesEnabled
+            prefs.announcerEnabled = user.announcerEnabled
+            prefs.announcerHeadsetOnly = user.announcerHeadsetOnly
+            prefs.unknownShieldMode = user.unknownShieldMode
+            prefs.autoSmsFollowUp = user.autoSmsFollowUp
+            prefs.autoWhatsappFollowUp = user.autoWhatsappFollowUp
+            prefs.followUpTrigger = user.followUpTrigger
+            prefs.completedCallTemplate = user.completedCallTemplate
+            prefs.missedCallTemplate = user.missedCallTemplate
+            if (prefs.configuredForceThemeMode == AppConfig.THEME_USER) {
+                val desiredMode = if (user.themeMode == UserEntitlement.THEME_DARK) {
+                    AppCompatDelegate.MODE_NIGHT_YES
+                } else {
+                    AppCompatDelegate.MODE_NIGHT_NO
+                }
+                if (prefs.displayThemeMode != desiredMode) {
+                    prefs.displayThemeMode = desiredMode
+                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
+                        AppCompatDelegate.getDefaultNightMode() != desiredMode
+                    ) {
+                        AppCompatDelegate.setDefaultNightMode(desiredMode)
+                    }
+                }
             }
         }
 

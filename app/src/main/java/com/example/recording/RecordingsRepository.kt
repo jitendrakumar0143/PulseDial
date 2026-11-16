@@ -7,18 +7,22 @@ import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.example.data.DialerPreferences
 import com.example.data.RecordingEntry
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Scans both the user-selected SAF recording folder (DocumentFile) and
- * MediaStore.Audio.Media.EXTERNAL_CONTENT_URI so all call recordings appear
- * in a single vertical song-like playlist.
+ * Scans:
+ * 1. The user-selected SAF recording folder (DocumentFile)
+ * 2. The public `Music/PulseDial` directory
+ * 3. `MediaStore.Audio.Media.EXTERNAL_CONTENT_URI` (`Music/PulseDial` & `Number_yyyyMMdd_HHmmss.mp3`/`.m4a`)
+ * so all call recordings appear in a single vertical song-like playlist.
  */
 class RecordingsRepository(private val context: Context) {
 
@@ -43,6 +47,7 @@ class RecordingsRepository(private val context: Context) {
                 tree?.listFiles()?.forEach { doc ->
                     val name = doc.name ?: return@forEach
                     if (doc.isFile && (name.endsWith(".mp3", ignoreCase = true) ||
+                            name.endsWith(".m4a", ignoreCase = true) ||
                             doc.type?.startsWith("audio/") == true) &&
                         doc.length() > 0L
                     ) {
@@ -60,17 +65,29 @@ class RecordingsRepository(private val context: Context) {
             }
         }
 
-        // 2. Scan MediaStore.Audio.Media.EXTERNAL_CONTENT_URI for call recordings
+        // 2. Scan MediaStore.Audio.Media.EXTERNAL_CONTENT_URI for PulseDial / Call recordings
         if (hasAudioReadPermission()) {
-            val projection = arrayOf(
-                MediaStore.Audio.Media._ID,
-                MediaStore.Audio.Media.DISPLAY_NAME,
-                MediaStore.Audio.Media.DATE_MODIFIED,
-                MediaStore.Audio.Media.DURATION,
-                MediaStore.Audio.Media.SIZE
-            )
-            val selection = "${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf("Call_%")
+            val projection = buildList {
+                add(MediaStore.Audio.Media._ID)
+                add(MediaStore.Audio.Media.DISPLAY_NAME)
+                add(MediaStore.Audio.Media.DATE_MODIFIED)
+                add(MediaStore.Audio.Media.DURATION)
+                add(MediaStore.Audio.Media.SIZE)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    add(MediaStore.Audio.Media.RELATIVE_PATH)
+                }
+            }.toTypedArray()
+
+            val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                "(${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ?)"
+            } else {
+                "(${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ?)"
+            }
+            val selectionArgs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                arrayOf("%PulseDial%", "Call_%", "%_20%.mp3")
+            } else {
+                arrayOf("Call_%", "%_20%.mp3")
+            }
 
             runCatching {
                 context.contentResolver.query(
@@ -102,7 +119,35 @@ class RecordingsRepository(private val context: Context) {
                             timestampMillis = cursor.getLong(dateIdx) * 1000L,
                             durationMs = cursor.getLong(durIdx),
                             sizeBytes = size,
-                            sourceLabel = "Music"
+                            sourceLabel = "Music/PulseDial"
+                        )
+                    }
+                }
+            }
+        }
+
+        // 3. Direct fallback scan of Music/PulseDial directory (covers newly created recordings before MediaScanner indexes them)
+        runCatching {
+            val musicDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                "PulseDial"
+            )
+            if (musicDir.exists() && musicDir.isDirectory) {
+                musicDir.listFiles()?.forEach { file ->
+                    val name = file.name
+                    if (file.isFile &&
+                        (name.endsWith(".mp3", ignoreCase = true) || name.endsWith(".m4a", ignoreCase = true)) &&
+                        file.length() > 0L &&
+                        !byName.containsKey(name)
+                    ) {
+                        val fileUri = Uri.fromFile(file)
+                        byName[name] = RecordingEntry(
+                            uri = fileUri,
+                            displayName = name,
+                            timestampMillis = file.lastModified(),
+                            durationMs = extractDurationMs(fileUri),
+                            sizeBytes = file.length(),
+                            sourceLabel = "Music/PulseDial"
                         )
                     }
                 }

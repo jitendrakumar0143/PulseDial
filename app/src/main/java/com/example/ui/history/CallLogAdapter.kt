@@ -68,7 +68,14 @@ class CallLogAdapter(
             }
             val typeLabel = ctx.getString(labelRes)
             val subNumber = if (entry.name != null) "${entry.number} • " else ""
-            binding.tvCallMeta.text = "$subNumber$typeLabel • $relTime$durationText"
+            val shieldBadge = if (entry.name == null &&
+                com.example.data.DialerPreferences(ctx).isRejectedByShield(entry.number)
+            ) {
+                " • Blocked by Shield"
+            } else {
+                ""
+            }
+            binding.tvCallMeta.text = "$subNumber$typeLabel • $relTime$durationText$shieldBadge"
 
             binding.root.setOnClickListener { onRowClick(entry) }
             binding.btnCallBack.setOnClickListener { onCallClick(entry) }

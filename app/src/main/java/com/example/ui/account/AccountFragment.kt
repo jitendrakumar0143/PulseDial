@@ -178,6 +178,14 @@ class AccountFragment : Fragment() {
                         }
                     }
                 }
+
+                launch {
+                    com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
+                        if (enfState.lastEvaluatedAtMs > 0L && _binding != null) {
+                            refreshTrialUi()
+                        }
+                    }
+                }
             }
         }
     }

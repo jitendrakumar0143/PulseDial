@@ -202,10 +202,12 @@ class DeviceTrialRepository(
                 )
                 userDocRef.set(createUserPayload).awaitTask()
                 val createdUserSnap = userDocRef.snapshots().first()
-                createdUserSnap.toObject(
+                val created = createdUserSnap.toObject(
                     UserEntitlement::class.java,
                     DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                 ) ?: UserEntitlement(userId = uid, deviceHash = deviceHash, isPremiumUser = false)
+                RealtimeDatabaseSync.pushUserEntitlement(created)
+                created
             } else {
                 val updateUserPayload = mapOf(
                     "displayName" to (currentUser?.displayName?.take(120) ?: existingUser.displayName),
@@ -221,6 +223,7 @@ class DeviceTrialRepository(
                     DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                 ) ?: existingUser
                 prefs?.let { SettingsManager.applyCloudUserSettings(refreshedUserSnap, refreshedUser, it) }
+                RealtimeDatabaseSync.pushUserEntitlement(refreshedUser)
                 refreshedUser
             }
         } catch (e: Exception) {
@@ -380,13 +383,24 @@ class DeviceTrialRepository(
         }
         val userDocRef = db.collection(COLLECTION_USERS).document(uid)
         return try {
+            val cleanName = displayName.trim().take(120)
+            val cleanPhone = phoneNumber.trim().take(32)
             userDocRef.update(
                 mapOf(
-                    "displayName" to displayName.trim().take(120),
-                    "phoneNumber" to phoneNumber.trim().take(32),
+                    "displayName" to cleanName,
+                    "phoneNumber" to cleanPhone,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).awaitTask()
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "displayName" to cleanName,
+                    "phone" to cleanPhone,
+                    "phoneNumber" to cleanPhone,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e

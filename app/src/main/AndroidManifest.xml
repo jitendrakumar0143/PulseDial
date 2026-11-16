@@ -21,6 +21,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- MediaStore Audio Read Permission for Android 13+ (API 33+) and legacy fallback -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />

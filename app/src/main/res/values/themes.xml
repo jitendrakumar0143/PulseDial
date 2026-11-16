@@ -31,6 +31,8 @@
 
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="fontFamily">@font/plus_jakarta_sans</item>
+        <item name="android:fontFamily">@font/plus_jakarta_sans</item>
     </style>
 
     <style name="Theme.PulseDial.InCall" parent="Theme.Material3.Dark.NoActionBar">
@@ -40,6 +42,8 @@
         <item name="colorOnSurface">#FFFFFF</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="fontFamily">@font/plus_jakarta_sans</item>
+        <item name="android:fontFamily">@font/plus_jakarta_sans</item>
     </style>
 
     <style name="ShapeAppearanceOverlay.PulseDial.Circle" parent="">

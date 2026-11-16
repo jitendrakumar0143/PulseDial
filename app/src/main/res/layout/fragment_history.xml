@@ -5,7 +5,39 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- Top Search Bar for Recent Calls -->
+    <!-- Segmented Mode Toggle: Recent Calls vs Recordings Playlist -->
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/toggle_history_mode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="10dp"
+        app:checkedButton="@id/btn_mode_calls"
+        app:selectionRequired="true"
+        app:singleSelection="true">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_mode_calls"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="@string/tab_recent_calls"
+            app:icon="@drawable/ic_history"
+            app:iconGravity="textStart" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_mode_recordings"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="@string/tab_recordings"
+            app:icon="@drawable/ic_record_dot"
+            app:iconGravity="textStart" />
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <!-- Top Pill Search Bar for Recent Calls -->
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/til_history_search"
         style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
@@ -15,12 +47,15 @@
         android:layout_marginTop="8dp"
         android:layout_marginBottom="4dp"
         android:hint="@string/history_search_hint"
+        app:boxBackgroundColor="@color/md_theme_surface"
         app:boxCornerRadiusBottomEnd="28dp"
         app:boxCornerRadiusBottomStart="28dp"
         app:boxCornerRadiusTopEnd="28dp"
         app:boxCornerRadiusTopStart="28dp"
+        app:boxStrokeColor="@color/md_theme_outline"
         app:endIconMode="clear_text"
-        app:startIconDrawable="@drawable/ic_search">
+        app:startIconDrawable="@drawable/ic_search"
+        app:startIconTint="@color/md_theme_primary">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/et_history_search"
@@ -30,6 +65,71 @@
             android:inputType="text"
             android:maxLines="1" />
     </com.google.android.material.textfield.TextInputLayout>
+
+    <!-- Recording Folder Selection Banner (visible in Recordings mode) -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/card_recording_folder_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="4dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/md_theme_surfaceVariant"
+        app:cardCornerRadius="18dp"
+        app:cardElevation="0dp"
+        app:strokeColor="@color/md_theme_outline"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="14dp">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="12dp"
+                android:contentDescription="@string/setting_folder_title"
+                android:src="@drawable/ic_folder"
+                app:tint="@color/md_theme_primary" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tv_recording_folder_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/recordings_folder_banner_title"
+                    android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+                    android:textColor="@color/md_theme_onSurface"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_recording_folder_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/recordings_folder_banner_subtitle"
+                    android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                    android:textColor="@color/md_theme_onSurfaceVariant" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_select_recording_folder"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginStart="8dp"
+                android:text="@string/action_choose_folder" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 
     <!-- Default Dialer Prompt Banner -->
     <com.google.android.material.card.MaterialCardView
@@ -41,16 +141,17 @@
         android:layout_marginBottom="4dp"
         android:visibility="gone"
         app:cardBackgroundColor="@color/md_theme_primaryContainer"
-        app:cardCornerRadius="16dp"
+        app:cardCornerRadius="20dp"
         app:cardElevation="0dp"
-        app:strokeWidth="0dp">
+        app:strokeColor="@color/md_theme_primary"
+        app:strokeWidth="1dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="14dp">
+            android:padding="16dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -63,12 +164,13 @@
                     android:layout_height="wrap_content"
                     android:text="@string/default_dialer_banner_title"
                     android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
-                    android:textColor="@color/md_theme_onPrimaryContainer" />
+                    android:textColor="@color/md_theme_onPrimaryContainer"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="3dp"
                     android:text="@string/default_dialer_banner_subtitle"
                     android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                     android:textColor="@color/md_theme_onPrimaryContainer" />
@@ -79,10 +181,11 @@
                 style="@style/Widget.Material3.Button"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="10dp"
                 android:text="@string/action_set_default_dialer"
                 android:textColor="@color/md_theme_onPrimary"
-                app:backgroundTint="@color/md_theme_primary" />
+                app:backgroundTint="@color/md_theme_primary"
+                app:cornerRadius="14dp" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
@@ -96,7 +199,7 @@
         android:layout_marginBottom="4dp"
         android:visibility="gone"
         app:cardBackgroundColor="@color/md_theme_secondaryContainer"
-        app:cardCornerRadius="16dp"
+        app:cardCornerRadius="20dp"
         app:cardElevation="0dp"
         app:strokeWidth="0dp">
 
@@ -105,7 +208,7 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="14dp">
+            android:padding="16dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -118,12 +221,13 @@
                     android:layout_height="wrap_content"
                     android:text="@string/permission_banner_title"
                     android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
-                    android:textColor="@color/md_theme_onSecondaryContainer" />
+                    android:textColor="@color/md_theme_onSecondaryContainer"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="3dp"
                     android:text="@string/permission_banner_subtitle"
                     android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                     android:textColor="@color/md_theme_onSecondaryContainer" />
@@ -134,8 +238,9 @@
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
-                android:layout_marginStart="8dp"
-                android:text="@string/action_grant_permissions" />
+                android:layout_marginStart="10dp"
+                android:text="@string/action_grant_permissions"
+                app:cornerRadius="14dp" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
@@ -146,8 +251,8 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="18dp"
-        android:paddingTop="4dp"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="6dp"
         android:visibility="gone">
 
         <TextView
@@ -157,7 +262,8 @@
             android:layout_weight="1"
             android:text="@string/history_calls_count_header"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/md_theme_onSurfaceVariant" />
+            android:textColor="@color/md_theme_primary"
+            android:textStyle="bold" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_delete_all_calls"
@@ -170,7 +276,7 @@
             app:iconTint="@color/md_theme_error" />
     </LinearLayout>
 
-    <!-- Recent Calls List -->
+    <!-- Recent Calls List + Recordings Playlist -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -185,6 +291,16 @@
             android:paddingTop="8dp"
             android:paddingBottom="96dp" />
 
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recycler_recordings"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="96dp"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/layout_history_empty"
             android:layout_width="match_parent"
@@ -194,22 +310,29 @@
             android:padding="32dp"
             android:visibility="gone">
 
-            <ImageView
-                android:layout_width="64dp"
-                android:layout_height="64dp"
-                android:alpha="0.45"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_history"
-                app:tint="@color/md_theme_primary" />
+            <FrameLayout
+                android:layout_width="84dp"
+                android:layout_height="84dp"
+                android:background="@drawable/bg_circle_avatar">
+
+                <ImageView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="center"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_history"
+                    app:tint="@color/md_theme_primary" />
+            </FrameLayout>
 
             <TextView
                 android:id="@+id/tv_history_empty_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="18dp"
                 android:text="@string/history_empty_title"
                 android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
-                android:textColor="@color/md_theme_onSurface" />
+                android:textColor="@color/md_theme_onSurface"
+                android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tv_history_empty_subtitle"
@@ -222,4 +345,84 @@
                 android:textColor="@color/md_theme_onSurfaceVariant" />
         </LinearLayout>
     </FrameLayout>
+
+    <!-- Bottom Mini Audio Player for Recordings -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/card_mini_player"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="12dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/md_theme_primaryContainer"
+        app:cardCornerRadius="20dp"
+        app:cardElevation="2dp"
+        app:strokeColor="@color/md_theme_primary"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageButton
+                    android:id="@+id/btn_mini_play_pause"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/action_play"
+                    android:src="@drawable/ic_play_arrow"
+                    app:tint="@color/md_theme_primary" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginHorizontal="8dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/tv_mini_player_title"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+                        android:textColor="@color/md_theme_onPrimaryContainer"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tv_mini_player_time"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+                        android:textColor="@color/md_theme_onPrimaryContainer" />
+                </LinearLayout>
+
+                <ImageButton
+                    android:id="@+id/btn_mini_stop"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/action_stop_playback"
+                    android:src="@drawable/ic_call_end"
+                    app:tint="@color/md_theme_error" />
+            </LinearLayout>
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/progress_mini_player"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                app:indicatorColor="@color/md_theme_primary"
+                app:trackCornerRadius="4dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 </LinearLayout>

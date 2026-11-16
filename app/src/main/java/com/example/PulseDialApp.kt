@@ -17,6 +17,8 @@ class PulseDialApp : Application() {
         prefs.ensureFirstLaunchRecorded()
         AppCompatDelegate.setDefaultNightMode(prefs.displayThemeMode)
         createNotificationChannels()
+        com.example.data.firebase.RealtimeDatabaseSync.init(this)
+        com.example.billing.SubscriptionEnforcementService.init(this)
         com.example.data.firebase.RealtimeSyncManager.init(this)
     }
 

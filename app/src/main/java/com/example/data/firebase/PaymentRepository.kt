@@ -174,6 +174,42 @@ class PaymentRepository(
         )
 
         return try {
+            val effectiveRefId = upiTxnId.trim()
+                .ifBlank { approvalRefNo.trim() }
+                .ifBlank { cleanTxnRef }
+                .take(64)
+            val nowTs = Timestamp(Date(System.currentTimeMillis()))
+            val rtdbRequest = PaymentRequest(
+                id = docRef.id,
+                userId = uid,
+                userName = userName.trim().ifBlank { "PulseDial User" }.take(120),
+                userEmail = userEmail.trim().take(254),
+                deviceHash = deviceHash,
+                shortDeviceTag = shortDeviceTag.ifBlank {
+                    DeviceIdentityProvider.formatShortDeviceTag(deviceHash)
+                }.take(32),
+                upiId = upiId.trim().ifBlank { UpiPaymentHelper.UPI_VPA }.take(100),
+                amountInr = amountInr.coerceIn(1L, 100000L),
+                txnRef = cleanTxnRef,
+                upiTxnId = upiTxnId.trim().take(64),
+                approvalRefNo = approvalRefNo.trim().take(64),
+                upiResponseStatus = cleanStatus,
+                status = PaymentRequest.STATUS_PENDING,
+                reviewedByUid = "",
+                reviewNote = "",
+                createdAt = nowTs,
+                updatedAt = nowTs
+            )
+            // Push to Firebase Realtime Database (/payment_requests & /users/{uid})
+            RealtimeDatabaseSync.pushPaymentRequest(rtdbRequest)
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "subscriptionStatus" to UserEntitlement.STATUS_PENDING_APPROVAL,
+                    "paymentRefId" to effectiveRefId,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
             docRef.set(payload).awaitTask()
             runCatching {
                 val userSnap = userRef.snapshots().first()
@@ -181,6 +217,7 @@ class PaymentRepository(
                     userRef.update(
                         mapOf(
                             "subscriptionStatus" to UserEntitlement.STATUS_PENDING_APPROVAL,
+                            "paymentRefId" to effectiveRefId,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).awaitTask()
@@ -212,6 +249,7 @@ class PaymentRepository(
         val reqRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document(request.id)
         val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(request.userId)
         val deviceRef = db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS).document(request.deviceHash)
+        val cleanNote = reviewNote.trim().take(240)
 
         return try {
             val userSnap = userRef.snapshots().first()
@@ -223,13 +261,30 @@ class PaymentRepository(
             val renewalBaseMs = maxOf(nowMs, existingUserExpMs, existingDeviceExpMs)
             val nextExpiresAt = Timestamp(Date(renewalBaseMs + DialerPreferences.ONE_MONTH_MILLIS))
 
+            RealtimeDatabaseSync.updatePaymentRequestStatus(
+                requestId = request.id,
+                status = PaymentRequest.STATUS_APPROVED,
+                reviewedByUid = adminUid,
+                reviewNote = cleanNote
+            )
+            RealtimeDatabaseSync.pushUserFields(
+                request.userId,
+                mapOf(
+                    "isPremium" to true,
+                    "isPremiumUser" to true,
+                    "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                    "subscriptionExpiresAtMs" to nextExpiresAt.toDate().time,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+
             val batch = db.batch()
             batch.update(
                 reqRef,
                 mapOf(
                     "status" to PaymentRequest.STATUS_APPROVED,
                     "reviewedByUid" to adminUid,
-                    "reviewNote" to reviewNote.trim().take(240),
+                    "reviewNote" to cleanNote,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
@@ -286,10 +341,28 @@ class PaymentRepository(
         val reqRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document(request.id)
         val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(request.userId)
         val deviceRef = db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS).document(request.deviceHash)
+        val cleanNote = reviewNote.trim().take(240)
 
         return try {
             val userSnap = userRef.snapshots().first()
             val deviceSnap = deviceRef.snapshots().first()
+
+            RealtimeDatabaseSync.updatePaymentRequestStatus(
+                requestId = request.id,
+                status = PaymentRequest.STATUS_REJECTED,
+                reviewedByUid = adminUid,
+                reviewNote = cleanNote
+            )
+            RealtimeDatabaseSync.pushUserFields(
+                request.userId,
+                mapOf(
+                    "isPremium" to false,
+                    "isPremiumUser" to false,
+                    "subscriptionStatus" to UserEntitlement.STATUS_EXPIRED,
+                    "subscriptionExpiresAtMs" to null,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
 
             val batch = db.batch()
             batch.update(
@@ -297,7 +370,7 @@ class PaymentRepository(
                 mapOf(
                     "status" to PaymentRequest.STATUS_REJECTED,
                     "reviewedByUid" to adminUid,
-                    "reviewNote" to reviewNote.trim().take(240),
+                    "reviewNote" to cleanNote,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )

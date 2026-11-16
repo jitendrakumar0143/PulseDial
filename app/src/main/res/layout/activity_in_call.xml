@@ -4,7 +4,7 @@
     android:id="@+id/incall_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/incall_bg_start"
+    android:background="@drawable/bg_incall_gradient"
     android:padding="24dp">
 
     <!-- Caller Info Section -->
@@ -12,15 +12,15 @@
         android:id="@+id/layout_caller_header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="28dp"
+        android:layout_marginTop="32dp"
         android:gravity="center_horizontal"
         android:orientation="vertical"
         app:layout_constraintTop_toTopOf="parent">
 
         <TextView
             android:id="@+id/tv_incall_avatar"
-            android:layout_width="84dp"
-            android:layout_height="84dp"
+            android:layout_width="96dp"
+            android:layout_height="96dp"
             android:background="@drawable/bg_circle_avatar"
             android:gravity="center"
             android:text="?"
@@ -32,12 +32,13 @@
             android:id="@+id/tv_incall_name"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="18dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:text="@string/incall_unknown_caller"
             android:textAppearance="@style/TextAppearance.Material3.HeadlineMedium"
-            android:textColor="#FFFFFF" />
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tv_incall_number"

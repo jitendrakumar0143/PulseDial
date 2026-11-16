@@ -377,4 +377,53 @@
     <string name="auth_gate_trial_badge">7-Day Free Trial • One Per Device</string>
     <string name="auth_gate_btn_google">Sign in with Google</string>
     <string name="auth_gate_verifying">Verifying device trial status…</string>
+
+    <!-- Full-Screen Account Blocked Overlay & Live Real-Time Controls -->
+    <string name="blocked_overlay_title">Account Blocked by Admin</string>
+    <string name="blocked_overlay_message">Your PulseDial account has been suspended by the Administrator. Outgoing dialer access and call recording are locked. Contact WhatsApp support (%1$s) for assistance.</string>
+    <string name="blocked_overlay_whatsapp">Contact WhatsApp Support</string>
+    <string name="admin_approve_utr">Approve UTR</string>
+    <string name="admin_reject_utr">Reject UTR</string>
+    <string name="admin_switch_block_user">Block / Unblock User</string>
+    <string name="admin_switch_premium_access">Premium Access</string>
+    <string name="admin_pending_utr_banner">PENDING UTR APPROVAL • Phone: %1$s • UTR: %2$s</string>
+    <string name="admin_user_status_pending_utr">Pending UTR</string>
+    <string name="setting_accessibility_title">Accessibility Service Status</string>
+    <string name="setting_accessibility_enabled">Active • Two-way call audio capture enabled</string>
+    <string name="setting_accessibility_disabled">Inactive • Tap to enable in Accessibility Settings</string>
+
+    <!-- VIP Smart Call Announcer & Unknown Shield + VIP Business Auto Follow-Up -->
+    <string name="vip_announcer_card_title">VIP Smart Call Announcer &amp; Unknown Shield</string>
+    <string name="vip_announcer_card_subtitle">Hands-free caller name announcer for bike/earphone use &amp; silent spam shield</string>
+    <string name="vip_announcer_switch_title">Call Name Announcer (TTS)</string>
+    <string name="vip_announcer_switch_desc">Speaks caller name or spaced digits clearly over ringtone</string>
+    <string name="vip_announcer_headset_title">Earphone / Bluetooth-Only Mode</string>
+    <string name="vip_announcer_headset_desc">Only announce when wired earphones, neckbands, or helmet Bluetooth are connected</string>
+    <string name="vip_unknown_shield_label">Unknown Caller Shield (Unsaved Numbers)</string>
+    <string name="vip_shield_off">Off (Normal Ringing)</string>
+    <string name="vip_shield_silent_record">Silent Ring + Bell-to-Bell Record</string>
+    <string name="vip_shield_auto_reject">Auto-Reject Unsaved Numbers</string>
+
+    <string name="vip_followup_card_title">VIP Business Auto Follow-Up (WhatsApp &amp; SMS)</string>
+    <string name="vip_followup_card_subtitle">Automatically send custom WhatsApp &amp; SMS replies after calls (24h anti-spam cooldown)</string>
+    <string name="vip_auto_sms_title">Auto Background SMS Follow-Up</string>
+    <string name="vip_auto_sms_desc">Automatically send custom SMS template in background on call end</string>
+    <string name="vip_auto_whatsapp_title">Auto WhatsApp Business Follow-Up</string>
+    <string name="vip_auto_whatsapp_desc">Launch pre-filled WhatsApp message immediately when call disconnects</string>
+    <string name="vip_followup_trigger_label">Follow-Up Trigger Condition</string>
+    <string name="vip_trigger_all_calls">All Calls (Completed &amp; Missed)</string>
+    <string name="vip_trigger_missed_only">Missed Calls Only</string>
+    <string name="vip_trigger_completed_only">Completed Calls Only</string>
+    <string name="vip_completed_template_hint">Completed Call Reply Template</string>
+    <string name="vip_missed_template_hint">Missed / Busy Call Reply Template</string>
+    <string name="vip_save_templates_btn">Save Templates</string>
+    <string name="vip_templates_saved_toast">Follow-up templates saved &amp; synced in real time!</string>
+    <string name="vip_feature_locked_title">VIP ₹299/Month Feature — Unlock in Account Tab</string>
+    <string name="vip_business_feature_locked_title">VIP ₹299/Month Business Feature — Unlock in Account Tab</string>
+    <string name="vip_feature_locked_message">Your 7-day free trial has expired. Upgrade to PulseDial VIP (₹299/month) in the Account tab to unlock Smart Call Announcer, Unknown Caller Shield, and Auto WhatsApp/SMS Business Follow-Up.</string>
+    <string name="vip_unlock_in_account_btn">Unlock in Account Tab</string>
+
+    <string name="benefit_vip_followup">Auto WhatsApp &amp; SMS Business Follow-up</string>
+    <string name="benefit_vip_announcer">Smart Call Name Announcer (Bike/Earphone Mode)</string>
+    <string name="benefit_vip_shield">Unknown &amp; Spam Caller Shield</string>
 </resources>

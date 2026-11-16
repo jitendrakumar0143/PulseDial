@@ -439,6 +439,13 @@ class AdminRepository(
         )
 
         return try {
+            RealtimeDatabaseSync.pushAppConfig(
+                config.copy(
+                    upiVpa = cleanUpi,
+                    whatsappNumber = cleanWhatsapp,
+                    forceThemeMode = cleanTheme
+                )
+            )
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -456,7 +463,8 @@ class AdminRepository(
         bonusTrialDays: Long,
         adminNote: String,
         hideSubscriptionUI: Boolean = user.hideSubscriptionUI,
-        subscriptionExpiresAt: Timestamp? = null
+        subscriptionExpiresAt: Timestamp? = null,
+        explicitSubscriptionStatus: String? = null
     ): Result<Unit> {
         try {
             requireAdminUid()
@@ -482,13 +490,27 @@ class AdminRepository(
             null
         }
 
-        val resolvedStatus = when {
+        val resolvedStatus = explicitSubscriptionStatus ?: when {
             isBlocked -> UserEntitlement.STATUS_BLOCKED
             isPremium -> UserEntitlement.STATUS_ACTIVE
             else -> UserEntitlement.STATUS_TRIAL
         }
 
         return try {
+            RealtimeDatabaseSync.pushUserFields(
+                targetUid,
+                mapOf(
+                    "isPremium" to isPremium,
+                    "isPremiumUser" to isPremium,
+                    "subscriptionStatus" to resolvedStatus,
+                    "subscriptionExpiresAtMs" to resolvedExpiry?.toDate()?.time,
+                    "isBlocked" to isBlocked,
+                    "bonusTrialDays" to bonusTrialDays.coerceIn(0L, 3650L),
+                    "adminNote" to adminNote.trim().take(240),
+                    "hideSubscriptionUI" to hideSubscriptionUI,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
             val deviceSnap = deviceRef?.snapshots()?.first()
             val batch = db.batch()
             batch.update(
@@ -535,6 +557,44 @@ class AdminRepository(
             handleFirestoreError(actualError, OperationType.UPDATE, userRef.path, auth)
             Result.failure(actualError)
         }
+    }
+
+    /**
+     * Approves a user's pending UTR directly from the Admin User Card:
+     * sets `isPremium = true`, `subscriptionStatus = "active"`, and extends expiry by 30 days.
+     */
+    suspend fun approveUserUtrDirect(user: UserEntitlement): Result<Unit> {
+        val nowMs = System.currentTimeMillis()
+        val existingExpMs = resolveEffectiveExpiryMs(user)
+        val baseMs = maxOf(nowMs, existingExpMs)
+        val nextExpiry = Timestamp(Date(baseMs + DialerPreferences.ONE_MONTH_MILLIS))
+        return updateUserAdminDetails(
+            user = user,
+            isPremium = true,
+            isBlocked = false,
+            bonusTrialDays = user.bonusTrialDays,
+            adminNote = user.adminNote,
+            hideSubscriptionUI = user.hideSubscriptionUI,
+            subscriptionExpiresAt = nextExpiry,
+            explicitSubscriptionStatus = UserEntitlement.STATUS_ACTIVE
+        )
+    }
+
+    /**
+     * Rejects a user's pending UTR directly from the Admin User Card:
+     * sets `isPremium = false` and `subscriptionStatus = "expired"`.
+     */
+    suspend fun rejectUserUtrDirect(user: UserEntitlement): Result<Unit> {
+        return updateUserAdminDetails(
+            user = user,
+            isPremium = false,
+            isBlocked = user.isBlocked,
+            bonusTrialDays = user.bonusTrialDays,
+            adminNote = user.adminNote,
+            hideSubscriptionUI = user.hideSubscriptionUI,
+            subscriptionExpiresAt = null,
+            explicitSubscriptionStatus = UserEntitlement.STATUS_EXPIRED
+        )
     }
 
     suspend fun renewUserMonthlySubscription(
@@ -619,6 +679,7 @@ class AdminRepository(
             "updatedAt" to FieldValue.serverTimestamp()
         )
         return try {
+            RealtimeDatabaseSync.setNavigationTabs(normalized, adminUid)
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -692,6 +753,7 @@ class AdminRepository(
             "updatedAt" to FieldValue.serverTimestamp()
         )
         return try {
+            RealtimeDatabaseSync.setDynamicSettings(normalized, adminUid)
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -759,6 +821,7 @@ class AdminRepository(
             "updatedAt" to FieldValue.serverTimestamp()
         )
         return try {
+            RealtimeDatabaseSync.setLiveBroadcast(broadcast, adminUid)
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -878,12 +941,20 @@ class AdminRepository(
                 }
                 user.displayName.lowercase().contains(trimmed) ||
                     user.email.lowercase().contains(trimmed) ||
+                    user.phoneNumber.lowercase().contains(trimmed) ||
+                    user.paymentRefId.lowercase().contains(trimmed) ||
                     user.userId.lowercase().contains(trimmed) ||
                     user.id.lowercase().contains(trimmed) ||
                     user.deviceHash.lowercase().contains(trimmed) ||
                     deviceTag.contains(trimmed) ||
                     user.adminNote.lowercase().contains(trimmed)
-            }
+            }.sortedWith(
+                compareBy<UserEntitlement> {
+                    if (it.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL) 0 else 1
+                }.thenByDescending {
+                    it.updatedAt?.toDate()?.time ?: it.createdAt?.toDate()?.time ?: 0L
+                }
+            )
         }
 
         fun filterSubscribers(

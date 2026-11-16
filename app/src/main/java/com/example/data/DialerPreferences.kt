@@ -599,6 +599,125 @@ class DialerPreferences(context: Context) {
         prefs.edit { putString(KEY_QUICK_DECLINE_RESPONSES, items.joinToString(DELIMITER)) }
     }
 
+    // --- VIP Module 1: Smart Call Announcer & Unknown Caller Shield ---
+    var announcerEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ANNOUNCER_ENABLED, false)
+        set(value) = prefs.edit { putBoolean(KEY_ANNOUNCER_ENABLED, value) }
+
+    var announcerHeadsetOnly: Boolean
+        get() = prefs.getBoolean(KEY_ANNOUNCER_HEADSET_ONLY, false)
+        set(value) = prefs.edit { putBoolean(KEY_ANNOUNCER_HEADSET_ONLY, value) }
+
+    var unknownShieldMode: String
+        get() = prefs.getString(KEY_UNKNOWN_SHIELD_MODE, com.example.data.firebase.UserEntitlement.SHIELD_OFF)
+            ?: com.example.data.firebase.UserEntitlement.SHIELD_OFF
+        set(value) {
+            val normalized = when (value.trim().uppercase()) {
+                com.example.data.firebase.UserEntitlement.SHIELD_SILENT_RECORD ->
+                    com.example.data.firebase.UserEntitlement.SHIELD_SILENT_RECORD
+                com.example.data.firebase.UserEntitlement.SHIELD_AUTO_REJECT ->
+                    com.example.data.firebase.UserEntitlement.SHIELD_AUTO_REJECT
+                else -> com.example.data.firebase.UserEntitlement.SHIELD_OFF
+            }
+            prefs.edit { putString(KEY_UNKNOWN_SHIELD_MODE, normalized) }
+        }
+
+    fun recordShieldRejectedNumber(number: String) {
+        val clean = normalizePhone(number)
+        if (clean.isEmpty()) return
+        val updated = prefs.getStringSet(KEY_SHIELD_REJECTED_NUMBERS, emptySet()).orEmpty().toMutableSet()
+        updated.add(clean)
+        if (updated.size > 300) {
+            val trimmed = updated.toList().takeLast(300).toSet()
+            prefs.edit { putStringSet(KEY_SHIELD_REJECTED_NUMBERS, trimmed) }
+        } else {
+            prefs.edit { putStringSet(KEY_SHIELD_REJECTED_NUMBERS, updated) }
+        }
+    }
+
+    fun isRejectedByShield(number: String): Boolean {
+        val target = normalizePhone(number)
+        if (target.isEmpty()) return false
+        val rejected = prefs.getStringSet(KEY_SHIELD_REJECTED_NUMBERS, emptySet()).orEmpty()
+        return rejected.any { item ->
+            item.isNotEmpty() && (
+                target == item ||
+                    target.endsWith(item) ||
+                    item.endsWith(target) ||
+                    ContactsRepository.numbersMatch(target, item)
+                )
+        }
+    }
+
+    // --- VIP Module 2: Auto WhatsApp & SMS Follow-up ---
+    var autoSmsFollowUp: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_SMS_FOLLOW_UP, false)
+        set(value) = prefs.edit { putBoolean(KEY_AUTO_SMS_FOLLOW_UP, value) }
+
+    var autoWhatsappFollowUp: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_WHATSAPP_FOLLOW_UP, false)
+        set(value) = prefs.edit { putBoolean(KEY_AUTO_WHATSAPP_FOLLOW_UP, value) }
+
+    var followUpTrigger: String
+        get() = prefs.getString(KEY_FOLLOW_UP_TRIGGER, com.example.data.firebase.UserEntitlement.TRIGGER_ALL_CALLS)
+            ?: com.example.data.firebase.UserEntitlement.TRIGGER_ALL_CALLS
+        set(value) {
+            val normalized = when (value.trim().uppercase()) {
+                com.example.data.firebase.UserEntitlement.TRIGGER_MISSED_ONLY ->
+                    com.example.data.firebase.UserEntitlement.TRIGGER_MISSED_ONLY
+                com.example.data.firebase.UserEntitlement.TRIGGER_COMPLETED_ONLY ->
+                    com.example.data.firebase.UserEntitlement.TRIGGER_COMPLETED_ONLY
+                else -> com.example.data.firebase.UserEntitlement.TRIGGER_ALL_CALLS
+            }
+            prefs.edit { putString(KEY_FOLLOW_UP_TRIGGER, normalized) }
+        }
+
+    var completedCallTemplate: String
+        get() = prefs.getString(
+            KEY_COMPLETED_CALL_TEMPLATE,
+            com.example.data.firebase.UserEntitlement.DEFAULT_COMPLETED_CALL_TEMPLATE
+        )?.ifBlank {
+            com.example.data.firebase.UserEntitlement.DEFAULT_COMPLETED_CALL_TEMPLATE
+        } ?: com.example.data.firebase.UserEntitlement.DEFAULT_COMPLETED_CALL_TEMPLATE
+        set(value) {
+            val clean = value.trim().take(500).ifBlank {
+                com.example.data.firebase.UserEntitlement.DEFAULT_COMPLETED_CALL_TEMPLATE
+            }
+            prefs.edit { putString(KEY_COMPLETED_CALL_TEMPLATE, clean) }
+        }
+
+    var missedCallTemplate: String
+        get() = prefs.getString(
+            KEY_MISSED_CALL_TEMPLATE,
+            com.example.data.firebase.UserEntitlement.DEFAULT_MISSED_CALL_TEMPLATE
+        )?.ifBlank {
+            com.example.data.firebase.UserEntitlement.DEFAULT_MISSED_CALL_TEMPLATE
+        } ?: com.example.data.firebase.UserEntitlement.DEFAULT_MISSED_CALL_TEMPLATE
+        set(value) {
+            val clean = value.trim().take(500).ifBlank {
+                com.example.data.firebase.UserEntitlement.DEFAULT_MISSED_CALL_TEMPLATE
+            }
+            prefs.edit { putString(KEY_MISSED_CALL_TEMPLATE, clean) }
+        }
+
+    /**
+     * 24-hour anti-spam cooldown per phone number so the same caller does not receive
+     * repeated automated follow-up messages on the same day.
+     */
+    fun canSendFollowUpToday(phoneNumber: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val key = normalizePhone(phoneNumber).takeLast(10)
+        if (key.isEmpty()) return false
+        val lastSentMs = prefs.getLong(KEY_FOLLOW_UP_COOLDOWN_PREFIX + key, 0L)
+        if (lastSentMs <= 0L) return true
+        return (nowMs - lastSentMs) >= ONE_DAY_MILLIS
+    }
+
+    fun recordFollowUpSent(phoneNumber: String, nowMs: Long = System.currentTimeMillis()) {
+        val key = normalizePhone(phoneNumber).takeLast(10)
+        if (key.isEmpty()) return
+        prefs.edit { putLong(KEY_FOLLOW_UP_COOLDOWN_PREFIX + key, nowMs) }
+    }
+
     private fun normalizePhone(raw: String): String = raw.filter { it.isDigit() }
 
     companion object {
@@ -644,6 +763,17 @@ class DialerPreferences(context: Context) {
         private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_USER_NUMBER = "user_number"
         private const val DELIMITER = "|||"
+
+        const val KEY_ANNOUNCER_ENABLED = "announcer_enabled"
+        const val KEY_ANNOUNCER_HEADSET_ONLY = "announcer_headset_only"
+        const val KEY_UNKNOWN_SHIELD_MODE = "unknown_shield_mode"
+        private const val KEY_SHIELD_REJECTED_NUMBERS = "shield_rejected_numbers"
+        const val KEY_AUTO_SMS_FOLLOW_UP = "auto_sms_follow_up"
+        const val KEY_AUTO_WHATSAPP_FOLLOW_UP = "auto_whatsapp_follow_up"
+        const val KEY_FOLLOW_UP_TRIGGER = "follow_up_trigger"
+        const val KEY_COMPLETED_CALL_TEMPLATE = "completed_call_template"
+        const val KEY_MISSED_CALL_TEMPLATE = "missed_call_template"
+        private const val KEY_FOLLOW_UP_COOLDOWN_PREFIX = "follow_up_cooldown_"
 
         const val TRIAL_DAYS = 7
         const val MONTHLY_SUBSCRIPTION_DAYS = 30
