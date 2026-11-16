@@ -109,6 +109,32 @@ class MainActivity : AppCompatActivity() {
             }
         }.toTypedArray()
 
+    private val accountPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val accountName = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+            if (!accountName.isNullOrBlank()) {
+                val displayName = accountName.substringBefore("@")
+                    .replace(".", " ")
+                    .replace("_", " ")
+                    .trim()
+                    .split(" ")
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ") { part ->
+                        part.replaceFirstChar { ch -> ch.uppercase() }
+                    }
+                GoogleAuthHelper.completeFallbackLogin(
+                    context = this,
+                    emailOrPhone = accountName,
+                    displayName = displayName
+                )
+                lastRenderedAuthState = null
+                renderAuthState(true)
+            }
+        }
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
@@ -208,6 +234,14 @@ class MainActivity : AppCompatActivity() {
                 },
                 onAuthCancelled = {
                     setAuthLoading(false, null)
+                },
+                onFallbackRequired = { _ ->
+                    setAuthLoading(false, null)
+                    runCatching {
+                        accountPickerLauncher.launch(GoogleAuthHelper.createChooseGoogleAccountIntent())
+                    }.onFailure {
+                        Toast.makeText(this, "Please select a Google account", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
         }
