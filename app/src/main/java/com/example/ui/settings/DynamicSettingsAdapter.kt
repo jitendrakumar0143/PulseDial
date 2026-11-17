@@ -15,7 +15,8 @@ data class DynamicSettingUiRow(
     val resolvedDescription: String,
     val isChecked: Boolean,
     val isInteractive: Boolean,
-    val isLastItem: Boolean
+    val isLastItem: Boolean,
+    val isFrozenBySubscription: Boolean = false
 )
 
 class DynamicSettingsAdapter(
@@ -47,14 +48,20 @@ class DynamicSettingsAdapter(
             binding.tvSettingDesc.text = row.resolvedDescription
             binding.dividerSetting.visibility = if (row.isLastItem) View.GONE else View.VISIBLE
 
-            binding.rowDynamicSetting.alpha = if (row.isInteractive) 1f else 0.58f
+            binding.rowDynamicSetting.alpha = when {
+                row.isFrozenBySubscription -> 0.5f
+                row.isInteractive -> 1f
+                else -> 0.58f
+            }
 
             if (item.type == DynamicSettingItem.TYPE_TOGGLE) {
                 binding.switchDynamicSetting.visibility = View.VISIBLE
                 binding.switchDynamicSetting.contentDescription = item.title
                 binding.switchDynamicSetting.setOnCheckedChangeListener(null)
                 binding.switchDynamicSetting.isChecked = row.isChecked
-                binding.switchDynamicSetting.isEnabled = row.isInteractive
+                val canToggle = row.isInteractive && !row.isFrozenBySubscription
+                binding.switchDynamicSetting.isEnabled = canToggle
+                binding.switchDynamicSetting.isClickable = canToggle
                 binding.switchDynamicSetting.setOnCheckedChangeListener { buttonView, isChecked ->
                     val accepted = onToggleChanged(row, isChecked)
                     if (!accepted) {
@@ -63,18 +70,30 @@ class DynamicSettingsAdapter(
                         bindToggleListener(row)
                     }
                 }
-                binding.rowDynamicSetting.setOnClickListener {
-                    if (row.isInteractive) {
-                        binding.switchDynamicSetting.toggle()
-                    } else {
-                        onRowClicked(row)
+                if (row.isFrozenBySubscription) {
+                    binding.rowDynamicSetting.setOnClickListener(null)
+                    binding.rowDynamicSetting.isClickable = false
+                } else {
+                    binding.rowDynamicSetting.isClickable = true
+                    binding.rowDynamicSetting.setOnClickListener {
+                        if (row.isInteractive) {
+                            binding.switchDynamicSetting.toggle()
+                        } else {
+                            onRowClicked(row)
+                        }
                     }
                 }
             } else {
                 binding.switchDynamicSetting.setOnCheckedChangeListener(null)
                 binding.switchDynamicSetting.visibility = View.GONE
-                binding.rowDynamicSetting.setOnClickListener {
-                    onRowClicked(row)
+                if (row.isFrozenBySubscription) {
+                    binding.rowDynamicSetting.setOnClickListener(null)
+                    binding.rowDynamicSetting.isClickable = false
+                } else {
+                    binding.rowDynamicSetting.isClickable = true
+                    binding.rowDynamicSetting.setOnClickListener {
+                        onRowClicked(row)
+                    }
                 }
             }
         }

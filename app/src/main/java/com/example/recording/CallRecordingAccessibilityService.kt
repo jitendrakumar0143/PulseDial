@@ -56,7 +56,10 @@ class CallRecordingAccessibilityService : AccessibilityService() {
                 lower.contains("ongoing") ||
                 lower.contains("meet") ||
                 lower.contains("voip") ||
-                lower.contains("video")
+                lower.contains("video") ||
+                lower.contains("instagram") ||
+                lower.contains("audio chat") ||
+                lower.contains("video chat")
             VoipCallRecorderManager.onVoipAppEvent(
                 context = applicationContext,
                 source = voipSource,

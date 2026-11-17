@@ -19,14 +19,37 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isSuperAdmin() {
+      return isSignedIn() &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email is string &&
+        request.auth.token.email.lower() in [
+          '0143pushpendra@gmail.com',
+          'jitendrakumar888126@gmail.com'
+        ] &&
+        ('email_verified' in request.auth.token) &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isDelegatedAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBlocked != true &&
+        ('adminGrantedBy' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.adminGrantedBy is string &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.adminGrantedBy.lower() in [
+          '0143pushpendra@gmail.com',
+          'jitendrakumar888126@gmail.com'
+        ];
+    }
+
     function isAdmin() {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (('email' in request.auth.token) &&
-         request.auth.token.email is string &&
-         request.auth.token.email.lower() == 'jitendrakumar888126@gmail.com' &&
-         ('email_verified' in request.auth.token) &&
-         request.auth.token.email_verified == true)
+      return isSuperAdmin() || (
+        isSignedIn() && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+          isDelegatedAdmin()
+        )
       );
     }
 
@@ -62,7 +85,7 @@ service cloud.firestore {
              data.email is string &&
              data.email.size() <= 254 &&
              (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 32)) &&
-             isValidDeviceHash(data.deviceHash) &&
+             (data.deviceHash == '' || isValidDeviceHash(data.deviceHash)) &&
              data.trialStartedAt is timestamp &&
              data.trialStartedAt <= request.time &&
              data.isPremiumUser is bool &&
@@ -74,6 +97,8 @@ service cloud.firestore {
              (!('paymentRefId' in data) || (data.paymentRefId is string && data.paymentRefId.size() <= 64)) &&
              (!('subscriptionExpiresAt' in data) || data.subscriptionExpiresAt == null || data.subscriptionExpiresAt is timestamp) &&
              (!('isBlocked' in data) || data.isBlocked is bool) &&
+             (!('isAdmin' in data) || data.isAdmin is bool) &&
+             (!('adminGrantedBy' in data) || (data.adminGrantedBy is string && data.adminGrantedBy.size() <= 254)) &&
              (!('bonusTrialDays' in data) || (data.bonusTrialDays is int && data.bonusTrialDays >= 0 && data.bonusTrialDays <= 3650)) &&
              (!('adminNote' in data) || (data.adminNote is string && data.adminNote.size() <= 240)) &&
              (!('hideSubscriptionUI' in data) || data.hideSubscriptionUI is bool) &&
@@ -98,6 +123,11 @@ service cloud.firestore {
              (!('followUpTrigger' in data) || data.followUpTrigger in ['ALL_CALLS', 'MISSED_ONLY', 'COMPLETED_ONLY']) &&
              (!('completedCallTemplate' in data) || (data.completedCallTemplate is string && data.completedCallTemplate.size() <= 500)) &&
              (!('missedCallTemplate' in data) || (data.missedCallTemplate is string && data.missedCallTemplate.size() <= 500)) &&
+             (!('recordWhatsappCalls' in data) || data.recordWhatsappCalls is bool) &&
+             (!('recordWhatsappBusinessCalls' in data) || data.recordWhatsappBusinessCalls is bool) &&
+             (!('recordMeetCalls' in data) || data.recordMeetCalls is bool) &&
+             (!('recordTelegramCalls' in data) || data.recordTelegramCalls is bool) &&
+             (!('recordInstagramCalls' in data) || data.recordInstagramCalls is bool) &&
              data.createdAt is timestamp &&
              data.createdAt <= request.time &&
              data.updatedAt is timestamp &&
@@ -179,6 +209,16 @@ service cloud.firestore {
              (!('defaultAutoRecording' in data) || data.defaultAutoRecording is bool) &&
              (!('forceThemeMode' in data) || data.forceThemeMode in ['user', 'light', 'dark']) &&
              (!('hideSubscriptionUI' in data) || data.hideSubscriptionUI is bool) &&
+             (!('enableUpiGateway' in data) || data.enableUpiGateway is bool) &&
+             (!('enableRazorpayGateway' in data) || data.enableRazorpayGateway is bool) &&
+             (!('razorpayKeyId' in data) || (data.razorpayKeyId is string && data.razorpayKeyId.size() <= 100)) &&
+             (!('razorpayPaymentLink' in data) || (data.razorpayPaymentLink is string && data.razorpayPaymentLink.size() <= 500)) &&
+             (!('enablePayuGateway' in data) || data.enablePayuGateway is bool) &&
+             (!('payuMerchantKey' in data) || (data.payuMerchantKey is string && data.payuMerchantKey.size() <= 100)) &&
+             (!('payuPaymentLink' in data) || (data.payuPaymentLink is string && data.payuPaymentLink.size() <= 500)) &&
+             (!('enableCustomGateway' in data) || data.enableCustomGateway is bool) &&
+             (!('customGatewayName' in data) || (data.customGatewayName is string && data.customGatewayName.size() <= 80)) &&
+             (!('customGatewayUrl' in data) || (data.customGatewayUrl is string && data.customGatewayUrl.size() <= 500)) &&
              isValidId(data.updatedByUid) &&
              data.updatedAt is timestamp &&
              data.updatedAt <= request.time;
@@ -293,11 +333,14 @@ service cloud.firestore {
                        isValidId(userId) &&
                        request.auth.uid == userId &&
                        incoming().userId == request.auth.uid &&
+                       isValidDeviceHash(incoming().deviceHash) &&
                        incoming().isPremiumUser == false &&
                        (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus == 'trial') &&
                        incoming().subscriptionProductId == '' &&
                        incoming().purchaseToken == '' &&
                        (!('isBlocked' in incoming()) || incoming().isBlocked == false) &&
+                       (!('isAdmin' in incoming()) || incoming().isAdmin == false) &&
+                       (!('adminGrantedBy' in incoming()) || incoming().adminGrantedBy == '') &&
                        (!('bonusTrialDays' in incoming()) || incoming().bonusTrialDays == 0) &&
                        (!('adminNote' in incoming()) || incoming().adminNote == '') &&
                        (!('hideSubscriptionUI' in incoming()) || incoming().hideSubscriptionUI == false) &&
@@ -316,6 +359,8 @@ service cloud.firestore {
                          'announcerEnabled', 'announcerHeadsetOnly', 'unknownShieldMode',
                          'autoSmsFollowUp', 'autoWhatsappFollowUp', 'followUpTrigger',
                          'completedCallTemplate', 'missedCallTemplate',
+                         'recordWhatsappCalls', 'recordWhatsappBusinessCalls',
+                         'recordMeetCalls', 'recordTelegramCalls', 'recordInstagramCalls',
                          'createdAt', 'updatedAt'
                        ]) &&
                        isValidUserEntitlement(incoming());
@@ -331,6 +376,8 @@ service cloud.firestore {
                            incoming().isPremiumUser == existing().isPremiumUser &&
                            incoming().subscriptionProductId == existing().subscriptionProductId &&
                            incoming().purchaseToken == existing().purchaseToken &&
+                           incoming().get('isAdmin', false) == existing().get('isAdmin', false) &&
+                           incoming().get('adminGrantedBy', '') == existing().get('adminGrantedBy', '') &&
                            (!('subscriptionStatus' in incoming().diff(existing()).affectedKeys()) ||
                             incoming().subscriptionStatus == 'pending_approval') &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
@@ -340,19 +387,52 @@ service cloud.firestore {
                              'announcerEnabled', 'announcerHeadsetOnly', 'unknownShieldMode',
                              'autoSmsFollowUp', 'autoWhatsappFollowUp', 'followUpTrigger',
                              'completedCallTemplate', 'missedCallTemplate',
+                             'recordWhatsappCalls', 'recordWhatsappBusinessCalls',
+                             'recordMeetCalls', 'recordTelegramCalls', 'recordInstagramCalls',
                              'updatedAt'
                            ])
                          ) || (
                            isAdmin() &&
+                           (
+                             isSuperAdmin() ||
+                             (
+                               incoming().get('isAdmin', false) == existing().get('isAdmin', false) &&
+                               incoming().get('adminGrantedBy', '') == existing().get('adminGrantedBy', '')
+                             )
+                           ) &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
+                             'displayName', 'phoneNumber', 'deviceHash',
                              'isPremiumUser', 'subscriptionStatus', 'subscriptionProductId',
                              'purchaseToken', 'paymentRefId', 'subscriptionExpiresAt', 'isBlocked',
-                             'bonusTrialDays', 'adminNote', 'hideSubscriptionUI', 'updatedAt'
+                             'bonusTrialDays', 'autoCallRecording', 'adminNote', 'hideSubscriptionUI',
+                             'isAdmin', 'adminGrantedBy', 'updatedAt'
                            ])
                          )
                        );
 
       allow delete: if false;
+    }
+
+    // One-time approved UTR registry: strictly create-once by verified admin, immutable thereafter.
+    match /approved_utrs/{utrKey} {
+      allow get: if isSignedIn() && isValidId(utrKey);
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isAdmin() &&
+                       isValidId(utrKey) &&
+                       incoming().utr == utrKey &&
+                       incoming().approvedByUid == request.auth.uid &&
+                       isValidId(incoming().userId) &&
+                       incoming().requestId is string &&
+                       incoming().requestId.size() <= 128 &&
+                       incoming().rawUtr is string &&
+                       incoming().rawUtr.size() >= 1 &&
+                       incoming().rawUtr.size() <= 64 &&
+                       incoming().approvedAt is timestamp &&
+                       incoming().approvedAt <= request.time;
+
+      allow update, delete: if false;
     }
 
     // UPI payment verification requests: user creates pending request matching configured UPI & price;
@@ -457,7 +537,12 @@ service cloud.firestore {
                                      'enforceSingleDeviceTrial', 'allowCallRecording', 'allowManualUtr',
                                      'maintenanceMode', 'maintenanceMessage', 'announcementText',
                                      'dialpadTonesDefault', 'defaultAutoRecording', 'forceThemeMode',
-                                     'hideSubscriptionUI', 'updatedByUid', 'updatedAt'
+                                     'hideSubscriptionUI',
+                                     'enableUpiGateway', 'enableRazorpayGateway',
+                                     'razorpayKeyId', 'razorpayPaymentLink',
+                                     'enablePayuGateway', 'payuMerchantKey', 'payuPaymentLink',
+                                     'enableCustomGateway', 'customGatewayName', 'customGatewayUrl',
+                                     'updatedByUid', 'updatedAt'
                                    ]) &&
                                    isValidAppConfig(incoming())
                                  )

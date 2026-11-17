@@ -23,7 +23,10 @@ import com.example.data.DialerPreferences
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.databinding.BottomSheetDialpadBinding
 import com.example.telecom.DialerHelper
+import com.example.telecom.DualSimManager
+import com.example.telecom.SimCardInfo
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -41,6 +44,8 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
     private var lastDialedNumber: String? = null
     private var rawInput: String = ""
     private var isAddCallMode: Boolean = false
+    private var availableSims: List<SimCardInfo> = emptyList()
+    private var selectedSimAccountId: String? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -62,7 +67,7 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         suggestionAdapter = T9SuggestionAdapter { entry ->
             rawInput = entry.number
             updateInputDisplay()
-            DialerHelper.placeCall(ctx, entry.number)
+            DialerHelper.initiateCall(activity ?: ctx, entry.number, getSelectedSimHandle())
             dismiss()
         }
 
@@ -72,9 +77,11 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
 
         rawInput = arguments?.getString(ARG_INITIAL_NUMBER).orEmpty()
         isAddCallMode = arguments?.getBoolean(ARG_ADD_CALL_MODE, false) ?: false
+        selectedSimAccountId = prefs.preferredSimAccountId.takeIf { it.isNotBlank() }
         loadContactsAndLastCall()
         setupKeypadButtons()
         setupActionChips()
+        setupSimSelector()
         updateInputDisplay()
 
         viewLifecycleOwner.lifecycleScope.launch {
@@ -167,7 +174,7 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         binding.btnDialpadCall.setOnClickListener {
             val number = rawInput.trim()
             if (number.isNotEmpty()) {
-                DialerHelper.placeCall(requireContext(), number)
+                DialerHelper.initiateCall(activity ?: requireContext(), number, getSelectedSimHandle())
                 dismiss()
             } else {
                 val redial = lastDialedNumber
@@ -201,6 +208,62 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (_binding != null) {
+            refreshSimChipUi()
+        }
+    }
+
+    private fun setupSimSelector() {
+        refreshSimChipUi()
+        binding.chipDialpadSim.setOnClickListener {
+            showDialpadSimPicker()
+        }
+    }
+
+    private fun refreshSimChipUi() {
+        val ctx = context ?: return
+        availableSims = DualSimManager.getAvailableSims(ctx)
+        if (availableSims.size < 2) {
+            binding.chipDialpadSim.visibility = View.GONE
+            return
+        }
+        binding.chipDialpadSim.visibility = View.VISIBLE
+        val matched = DualSimManager.findSimByAccountId(availableSims, selectedSimAccountId)
+        val chipLabel = if (matched != null) {
+            getString(R.string.dialpad_sim_chip_format, matched.shortLabel())
+        } else {
+            selectedSimAccountId = null
+            getString(R.string.dialpad_sim_chip_default)
+        }
+        binding.chipDialpadSim.text = chipLabel
+        binding.chipDialpadSim.contentDescription = chipLabel
+    }
+
+    private fun getSelectedSimHandle(): android.telecom.PhoneAccountHandle? {
+        if (availableSims.isEmpty()) return null
+        return DualSimManager.findSimByAccountId(availableSims, selectedSimAccountId)?.accountHandle
+    }
+
+    private fun showDialpadSimPicker() {
+        if (availableSims.size < 2) return
+        val askOption = getString(R.string.setting_default_sim_always_ask)
+        val labels = (listOf(askOption) + availableSims.map { it.fullDescription() }).toTypedArray()
+        val matchedIndex = availableSims.indexOfFirst { it.accountId == selectedSimAccountId }
+        val checked = if (matchedIndex >= 0) matchedIndex + 1 else 0
+
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.setting_default_sim_dialog_title)
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                selectedSimAccountId = if (which == 0) null else availableSims.getOrNull(which - 1)?.accountId
+                refreshSimChipUi()
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
     }
 
     private fun appendChar(ch: Char, tone: Int, view: View) {

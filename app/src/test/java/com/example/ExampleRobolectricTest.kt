@@ -477,19 +477,28 @@ class ExampleRobolectricTest {
         assertEquals(0, manager.getTrialDaysRemaining(exactSevenDays))
         assertFalse(manager.isSubscriptionActive(exactSevenDays))
 
-        // Opening protected screen while expired/unpaid redirects straight to MainActivity Payment Page
+        // Normal dialer & call details remain unlocked even when trial expires (only premium services freeze silently)
         prefs.firstLaunchTime = System.currentTimeMillis() - DialerPreferences.TRIAL_DURATION_MILLIS - 10_000L
         prefs.isPremiumUser = false
         val detailIntent = com.example.ui.history.CallDetailActivity.createIntent(
             context = app,
             phoneNumber = "+91 98765 43210"
         )
-        val controller = org.robolectric.Robolectric.buildActivity(
+        val unlockedController = org.robolectric.Robolectric.buildActivity(
             com.example.ui.history.CallDetailActivity::class.java,
             detailIntent
         ).create()
-        val activity = controller.get()
-        assertTrue(activity.isFinishing)
+        assertFalse(unlockedController.get().isFinishing)
+        unlockedController.destroy()
+
+        // Admin-blocked or tampered devices still redirect to MainActivity Account/Overlay screen
+        prefs.adminBlockedUser = true
+        val blockedController = org.robolectric.Robolectric.buildActivity(
+            com.example.ui.history.CallDetailActivity::class.java,
+            detailIntent
+        ).create()
+        val blockedActivity = blockedController.get()
+        assertTrue(blockedActivity.isFinishing)
         val startedIntent = org.robolectric.Shadows.shadowOf(app).nextStartedActivity
         assertEquals(com.example.ui.MainActivity::class.java.name, startedIntent.component?.className)
         assertTrue(startedIntent.getBooleanExtra(com.example.ui.MainActivity.EXTRA_OPEN_ACCOUNT_TAB, false))
@@ -1740,15 +1749,24 @@ class ExampleRobolectricTest {
             com.example.recording.CallRecordingSource.TELEGRAM,
             com.example.recording.CallRecordingSource.fromPackageName("org.telegram.messenger")
         )
+        assertEquals(
+            com.example.recording.CallRecordingSource.INSTAGRAM,
+            com.example.recording.CallRecordingSource.fromPackageName("com.instagram.android")
+        )
+        assertEquals(
+            com.example.recording.CallRecordingSource.INSTAGRAM,
+            com.example.recording.CallRecordingSource.fromPackageName("com.instagram.lite")
+        )
         assertEquals(null, com.example.recording.CallRecordingSource.fromPackageName("com.example.other"))
 
         val paths = com.example.recording.CallRecordingSource.entries.map { it.relativePublicPath() }
-        assertEquals(5, paths.toSet().size)
+        assertEquals(6, paths.toSet().size)
         assertEquals("Music/PulseDial/Cellular Call Recordings", com.example.recording.CallRecordingSource.CELLULAR.relativePublicPath())
         assertEquals("Music/PulseDial/WhatsApp Call Recordings", com.example.recording.CallRecordingSource.WHATSAPP.relativePublicPath())
         assertEquals("Music/PulseDial/WhatsApp Business Call Recordings", com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS.relativePublicPath())
         assertEquals("Music/PulseDial/Meet Call Recordings", com.example.recording.CallRecordingSource.GOOGLE_MEET.relativePublicPath())
         assertEquals("Music/PulseDial/Telegram Call Recordings", com.example.recording.CallRecordingSource.TELEGRAM.relativePublicPath())
+        assertEquals("Music/PulseDial/Instagram Call Recordings", com.example.recording.CallRecordingSource.INSTAGRAM.relativePublicPath())
 
         assertEquals(
             "+91_98765_43210_20261116_093000.mp3",
@@ -1782,17 +1800,36 @@ class ExampleRobolectricTest {
                 "20261116_093000"
             )
         )
+        assertEquals(
+            "Instagram_Friend_20261116_093000.mp3",
+            com.example.recording.CallRecorder.buildFileName(
+                "Friend",
+                com.example.recording.CallRecordingSource.INSTAGRAM,
+                "20261116_093000"
+            )
+        )
 
         // 3. VoIP entitlement, per-app toggles, Cellular preemption & Admin kill-switch
         prefs.recordWhatsappCalls = true
         prefs.recordWhatsappBusinessCalls = false
         prefs.recordMeetCalls = true
         prefs.recordTelegramCalls = true
+        prefs.recordInstagramCalls = true
 
         assertTrue(
             com.example.recording.VoipCallRecorderManager.shouldRecordVoipSource(
                 prefs = prefs,
                 source = com.example.recording.CallRecordingSource.WHATSAPP,
+                subscriptionActive = true,
+                policyAllowed = true,
+                adminBlocked = false,
+                cellularCallActive = false
+            )
+        )
+        assertTrue(
+            com.example.recording.VoipCallRecorderManager.shouldRecordVoipSource(
+                prefs = prefs,
+                source = com.example.recording.CallRecordingSource.INSTAGRAM,
                 subscriptionActive = true,
                 policyAllowed = true,
                 adminBlocked = false,
@@ -1830,14 +1867,15 @@ class ExampleRobolectricTest {
             )
         )
 
-        // 4. RealtimeDatabaseSync round-trip & SettingsManager apply for all 4 VoIP flags
+        // 4. RealtimeDatabaseSync round-trip & SettingsManager apply for all 5 VoIP flags (including Instagram)
         val voipUser = com.example.data.firebase.UserEntitlement(
             id = "u_voip_1",
             userId = "u_voip_1",
             recordWhatsappCalls = false,
             recordWhatsappBusinessCalls = true,
             recordMeetCalls = false,
-            recordTelegramCalls = true
+            recordTelegramCalls = true,
+            recordInstagramCalls = false
         )
         val rtdbMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbUserMap(voipUser)
         val parsedVoip = com.example.data.firebase.RealtimeDatabaseSync.parseUserSnapshot("u_voip_1", rtdbMap, null)
@@ -1845,20 +1883,24 @@ class ExampleRobolectricTest {
         assertTrue(parsedVoip.recordWhatsappBusinessCalls)
         assertFalse(parsedVoip.recordMeetCalls)
         assertTrue(parsedVoip.recordTelegramCalls)
+        assertFalse(parsedVoip.recordInstagramCalls)
 
         com.example.data.firebase.SettingsManager.applyRtdbUserEntitlement(parsedVoip, prefs)
         assertFalse(prefs.recordWhatsappCalls)
         assertTrue(prefs.recordWhatsappBusinessCalls)
         assertFalse(prefs.recordMeetCalls)
         assertTrue(prefs.recordTelegramCalls)
+        assertFalse(prefs.recordInstagramCalls)
 
-        // 5. Settings UI renders all 4 VoIP switches & separate File Manager folder button
+        // 5. Settings UI renders all 5 VoIP switches (incl. Instagram) & separate File Manager folder button
         val settingsView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_settings, null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.card_voip_call_recording) != null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_whatsapp) != null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_whatsapp_business) != null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_meet) != null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_telegram) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_instagram) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.btn_folder_instagram) != null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.tv_voip_folders_guide) != null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.btn_open_file_manager_recordings) != null)
     }
@@ -2585,6 +2627,541 @@ class ExampleRobolectricTest {
         assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_target_url) != null)
         assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_countdown) != null)
         assertTrue(panelRoot.findViewById<android.view.View>(R.id.btn_publish_custom_popup_ad) != null)
+    }
+
+    @Test
+    fun `strict dual super admin emails, delegation, anti tamper, and non leaking denied guard work`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+
+        // 1. Only the two exact Super-Admin emails are Super-Admins
+        assertTrue(com.example.billing.UpiPaymentHelper.isSuperAdminEmail("0143pushpendra@gmail.com"))
+        assertTrue(com.example.billing.UpiPaymentHelper.isSuperAdminEmail("  0143PUSHPENDRA@gmail.com "))
+        assertTrue(com.example.billing.UpiPaymentHelper.isSuperAdminEmail("jitendrakumar888126@gmail.com"))
+        assertFalse(com.example.billing.UpiPaymentHelper.isSuperAdminEmail("random@gmail.com"))
+        assertFalse(com.example.billing.UpiPaymentHelper.isSuperAdminEmail(""))
+
+        // 2. Normal user without Super-Admin delegation cannot access Admin even when signed in
+        prefs.isLoggedIn = true
+        prefs.userEmail = "normal.user@gmail.com"
+        prefs.setDelegatedAdmin(authorized = false, grantedBy = "")
+        assertFalse(com.example.billing.UpiPaymentHelper.isAuthorizedAdmin(app, prefs))
+
+        // Forging delegated admin with a non-super-admin granter is rejected
+        prefs.setDelegatedAdmin(authorized = true, grantedBy = "fake.admin@gmail.com")
+        assertFalse(com.example.billing.UpiPaymentHelper.isAuthorizedAdmin(app, prefs))
+
+        // Valid delegation from either Super-Admin is accepted (when not blocked/tampered)
+        prefs.adminBlockedUser = false
+        prefs.setDelegatedAdmin(authorized = true, grantedBy = "0143pushpendra@gmail.com")
+        assertTrue(com.example.billing.UpiPaymentHelper.isAuthorizedAdmin(app, prefs))
+
+        // 3. Raw SharedPreferences XML tampering is caught by HMAC and strips delegated/premium flags
+        val rawPrefs = app.getSharedPreferences("pulsedial_preferences", Context.MODE_PRIVATE)
+        rawPrefs.edit().putBoolean(DialerPreferences.KEY_IS_PREMIUM_USER, true).commit()
+        assertFalse(prefs.verifyIntegrityOrReset())
+        assertTrue(prefs.tamperDetected)
+        assertFalse(prefs.delegatedAdminAuthorized)
+        assertFalse(com.example.billing.UpiPaymentHelper.isAuthorizedAdmin(app, prefs))
+
+        // 4. Denied message never exposes either Super-Admin email
+        val deniedMessage = app.getString(R.string.admin_access_denied)
+        assertFalse(deniedMessage.contains("0143pushpendra", ignoreCase = true))
+        assertFalse(deniedMessage.contains("jitendrakumar888126", ignoreCase = true))
+
+        // 5. Unauthorized launch of AdminPanelActivity immediately finishes without exposing panel
+        val cleanPrefs = DialerPreferences(app)
+        cleanPrefs.userEmail = "intruder@gmail.com"
+        cleanPrefs.isLoggedIn = true
+        cleanPrefs.setDelegatedAdmin(authorized = false, grantedBy = "")
+        val adminController = org.robolectric.Robolectric.buildActivity(com.example.ui.admin.AdminPanelActivity::class.java)
+        adminController.create()
+        val adminActivity = adminController.get()
+        assertTrue(adminActivity.isFinishing)
+        assertEquals(deniedMessage, org.robolectric.shadows.ShadowToast.getTextOfLatestToast())
+        adminController.destroy()
+
+        // 6. Clock rollback beyond tolerance triggers SecurityIntegrityGuard.isClockTampered
+        val baseNow = 1_750_000_000_000L
+        cleanPrefs.serverClockOffsetMs = 0L
+        rawPrefs.edit().putLong(DialerPreferences.KEY_LAST_SEEN_TIME, baseNow).commit()
+        assertTrue(com.example.data.SecurityIntegrityGuard.isClockTampered(cleanPrefs, baseNow - (20L * 60L * 1000L)))
+        assertFalse(com.example.data.SecurityIntegrityGuard.isClockTampered(cleanPrefs, baseNow + 5_000L))
+    }
+
+    @Test
+    fun `one time utr lock and subscription day addition or subtraction work accurately`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+
+        // 1. Canonical UTR extraction & normalization
+        val req1 = com.example.data.firebase.PaymentRequest(
+            id = "req_1",
+            userId = "user_a",
+            userName = "User A",
+            userEmail = "a@example.com",
+            upiTxnId = "4123-4567-8901",
+            status = com.example.data.firebase.PaymentRequest.STATUS_PENDING
+        )
+        val canonical = com.example.data.firebase.PaymentRepository.extractCanonicalUtr(req1)
+        val utrKey = com.example.data.firebase.PaymentRepository.normalizeUtrKey(canonical)
+        assertEquals("4123-4567-8901", canonical)
+        assertEquals("4123-4567-8901", utrKey)
+        assertEquals("UTR41234567", com.example.data.firebase.PaymentRepository.normalizeUtrKey("  utr 4123/4567  "))
+
+        // 2. PaymentRequestsAdapter hides Approve button once UTR is in approvedUtrKeys
+        val payAdapter = com.example.ui.account.PaymentRequestsAdapter(onApproveClick = {}, onRejectClick = {})
+        payAdapter.approvedUtrKeys = setOf(utrKey)
+        payAdapter.submitList(listOf(req1))
+        val parent = android.widget.FrameLayout(themedContext)
+        val payHolder = payAdapter.onCreateViewHolder(parent, 0)
+        payAdapter.onBindViewHolder(payHolder, 0)
+        assertEquals(
+            android.view.View.GONE,
+            payHolder.itemView.findViewById<android.view.View>(R.id.btn_approve_request).visibility
+        )
+        assertTrue(
+            payHolder.itemView.findViewById<android.widget.TextView>(R.id.tv_req_txn_details)
+                .text.toString()
+                .contains(app.getString(R.string.admin_utr_already_approved_once))
+        )
+
+        // 3. AdminUsersAdapter hides UTR Approve button when user's pending UTR is already locked
+        val pendingUser = com.example.data.firebase.UserEntitlement(
+            id = "user_b",
+            userId = "user_b",
+            displayName = "User B",
+            email = "b@example.com",
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_PENDING_APPROVAL,
+            paymentRefId = "4123-4567-8901",
+            isAdmin = true,
+            adminGrantedBy = "0143pushpendra@gmail.com"
+        )
+        val usersAdapter = com.example.ui.admin.AdminUsersAdapter(
+            onToggleProClick = {},
+            onRenewMonthClick = {},
+            onExtendTrialClick = {},
+            onToggleBlockClick = {},
+            onManageClick = {}
+        )
+        usersAdapter.approvedUtrKeys = setOf(utrKey)
+        usersAdapter.submitList(listOf(pendingUser))
+        val userHolder = usersAdapter.onCreateViewHolder(parent, 0)
+        usersAdapter.onBindViewHolder(userHolder, 0)
+        assertEquals(
+            android.view.View.GONE,
+            userHolder.itemView.findViewById<android.view.View>(R.id.btn_user_approve_utr).visibility
+        )
+        assertTrue(
+            userHolder.itemView.findViewById<android.widget.TextView>(R.id.tv_admin_user_name)
+                .text.toString()
+                .contains("[Admin]")
+        )
+
+        // 4. Subscription days addition and subtraction
+        val nowMs = 1_750_000_000_000L
+        val freeUser = com.example.data.firebase.UserEntitlement(userId = "u_sub")
+        val addedMs = com.example.data.firebase.AdminRepository.computeAdjustedSubscriptionExpiryMs(
+            user = freeUser,
+            deltaDays = 15L,
+            nowMs = nowMs
+        )
+        assertEquals(nowMs + 15L * DialerPreferences.ONE_DAY_MILLIS, addedMs)
+
+        val activeUser = freeUser.copy(
+            isPremiumUser = true,
+            subscriptionExpiresAt = com.google.firebase.Timestamp(java.util.Date(addedMs))
+        )
+        val reducedMs = com.example.data.firebase.AdminRepository.computeAdjustedSubscriptionExpiryMs(
+            user = activeUser,
+            deltaDays = -5L,
+            nowMs = nowMs
+        )
+        assertEquals(nowMs + 10L * DialerPreferences.ONE_DAY_MILLIS, reducedMs)
+
+        // Subtracting more days than remaining expires immediately (0L)
+        val expiredBySubMs = com.example.data.firebase.AdminRepository.computeAdjustedSubscriptionExpiryMs(
+            user = activeUser,
+            deltaDays = -20L,
+            nowMs = nowMs
+        )
+        assertEquals(0L, expiredBySubMs)
+    }
+
+    @Test
+    fun `sim number helper cleans numbers and caller id resolver identifies unknown caller and location`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+
+        // 1. SimNumberHelper formats valid SIM numbers and safely returns null without permission
+        assertEquals("+91 9876543210", com.example.data.SimNumberHelper.cleanPhoneNumber("9876543210"))
+        assertEquals("+14155551234", com.example.data.SimNumberHelper.cleanPhoneNumber("+1 415-555-1234"))
+        assertEquals(null, com.example.data.SimNumberHelper.cleanPhoneNumber("0000000000"))
+        assertEquals(null, com.example.data.SimNumberHelper.resolveDeviceSimNumber(app))
+
+        // 2. CallerIdResolver resolves unknown caller name, helpline, and location
+        val unknownMobile = com.example.telecom.CallerIdResolver.resolveInstant("+91 98765 43210")
+        assertTrue(unknownMobile.isUnknownNumber)
+        assertEquals("Unknown Caller", unknownMobile.displayName)
+        assertEquals("Delhi NCR, India", unknownMobile.location)
+
+        val cyberHelpline = com.example.telecom.CallerIdResolver.resolveInstant("1930")
+        assertTrue(cyberHelpline.isUnknownNumber)
+        assertEquals("Cyber Crime Helpline (1930)", cyberHelpline.displayName)
+
+        assertEquals("Mumbai • Maharashtra, India", com.example.telecom.CallerIdResolver.resolveLocation("02226543210"))
+        assertEquals("USA / Canada (+1)", com.example.telecom.CallerIdResolver.resolveLocation("+14155552671"))
+
+        // 3. In-Call XML contains caller location label & Caller ID popup card with dismiss control
+        val inCallRoot = android.view.LayoutInflater.from(themedContext).inflate(R.layout.activity_in_call, null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_incall_location) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.card_caller_id_popup) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.btn_dismiss_caller_popup) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_popup_caller_name) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_popup_caller_location) != null)
+    }
+
+    @Test
+    fun `future payment gateways default to disabled while upi stays active and admin toggles sync end to end`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+
+        // 1. Default AppConfig keeps UPI active and Razorpay / PayU / Custom OFF
+        val defaultConfig = com.example.data.firebase.AppConfig()
+        assertTrue(defaultConfig.enableUpiGateway)
+        assertFalse(defaultConfig.enableRazorpayGateway)
+        assertFalse(defaultConfig.enablePayuGateway)
+        assertFalse(defaultConfig.enableCustomGateway)
+        assertTrue(prefs.enableUpiGateway)
+        assertFalse(prefs.enableRazorpayGateway)
+        assertFalse(prefs.enablePayuGateway)
+        assertFalse(prefs.enableCustomGateway)
+
+        // 2. Enabling Razorpay, PayU & Custom Gateway syncs through RTDB map -> parser -> DialerPreferences + HMAC
+        val adminEnabled = defaultConfig.copy(
+            enableUpiGateway = true,
+            enableRazorpayGateway = true,
+            razorpayKeyId = "rzp_live_123456",
+            razorpayPaymentLink = "https://rzp.io/l/pulsedial",
+            enablePayuGateway = true,
+            payuMerchantKey = "payu_merch_99",
+            payuPaymentLink = "https://pmny.in/pulsedial",
+            enableCustomGateway = true,
+            customGatewayName = "PhonePe PG",
+            customGatewayUrl = "https://pay.pulsedial.example/checkout"
+        )
+        val rtdbMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbConfigMap(adminEnabled)
+        val parsed = com.example.data.firebase.RealtimeDatabaseSync.parseAppConfigSnapshot(rtdbMap, defaultConfig)
+        assertTrue(parsed.enableRazorpayGateway)
+        assertEquals("rzp_live_123456", parsed.razorpayKeyId)
+        assertEquals("https://rzp.io/l/pulsedial", parsed.razorpayPaymentLink)
+        assertTrue(parsed.enablePayuGateway)
+        assertEquals("payu_merch_99", parsed.payuMerchantKey)
+        assertEquals("https://pmny.in/pulsedial", parsed.payuPaymentLink)
+        assertTrue(parsed.enableCustomGateway)
+        assertEquals("PhonePe PG", parsed.customGatewayName)
+        assertEquals("https://pay.pulsedial.example/checkout", parsed.customGatewayUrl)
+
+        prefs.applyAppConfig(parsed)
+        assertTrue(prefs.verifyIntegrityOrReset())
+        assertTrue(prefs.enableRazorpayGateway)
+        assertEquals("https://rzp.io/l/pulsedial", prefs.configuredRazorpayPaymentLink)
+        assertTrue(prefs.enablePayuGateway)
+        assertEquals("payu_merch_99", prefs.configuredPayuMerchantKey)
+        assertTrue(prefs.enableCustomGateway)
+        assertEquals("PhonePe PG", prefs.configuredCustomGatewayName)
+
+        // 3. Admin & Account layouts include all gateway views and Account defaults hide them
+        val adminView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.activity_admin_panel, null)
+        assertTrue(adminView.findViewById<android.view.View>(R.id.switch_config_enable_upi) != null)
+        assertTrue(adminView.findViewById<android.view.View>(R.id.switch_config_enable_razorpay) != null)
+        assertTrue(adminView.findViewById<android.view.View>(R.id.switch_config_enable_payu) != null)
+        assertTrue(adminView.findViewById<android.view.View>(R.id.switch_config_enable_custom_gw) != null)
+
+        val accountView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_account, null)
+        assertEquals(android.view.View.GONE, accountView.findViewById<android.view.View>(R.id.btn_pay_razorpay).visibility)
+        assertEquals(android.view.View.GONE, accountView.findViewById<android.view.View>(R.id.btn_pay_payu).visibility)
+        assertEquals(android.view.View.GONE, accountView.findViewById<android.view.View>(R.id.btn_pay_custom_gateway).visibility)
+    }
+
+    @Test
+    fun `expired subscription freezes premium rows silently while keeping normal dialer unlocked and supports gmail contacts`() =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+            val prefs = DialerPreferences(app)
+            prefs.resetSessionEntitlementsOnSignOut()
+
+            // 1. Force expired trial (no Pro): normal app navigation stays unlocked
+            prefs.isLoggedIn = true
+            prefs.loggedInUserId = "usr_expired_1"
+            prefs.userEmail = "customer@gmail.com"
+            prefs.firstLaunchTime = System.currentTimeMillis() - (10L * DialerPreferences.ONE_DAY_MILLIS)
+            prefs.isPremiumUser = false
+            prefs.maintenanceMode = false
+            prefs.adminBlockedUser = false
+
+            val subMgr = com.example.billing.SubscriptionManager(app)
+            assertFalse(subMgr.isSubscriptionActive())
+
+            if (com.google.firebase.FirebaseApp.getApps(app).isEmpty()) {
+                val defaultInit = com.google.firebase.FirebaseApp.initializeApp(app)
+                if (defaultInit == null) {
+                    com.google.firebase.FirebaseApp.initializeApp(
+                        app,
+                        com.google.firebase.FirebaseOptions.Builder()
+                            .setApplicationId("1:113923036774:android:0000000000000000")
+                            .setProjectId("gen-lang-client-0353534085")
+                            .setApiKey("test-api-key")
+                            .setDatabaseUrl("https://gen-lang-client-0353534085-default-rtdb.firebaseio.com")
+                            .build()
+                    )
+                }
+            }
+
+            val mainController = org.robolectric.Robolectric.buildActivity(com.example.ui.MainActivity::class.java)
+            mainController.create()
+            val mainActivity = mainController.get()
+            assertFalse("Trial expiry must NOT lock normal calling/contacts tabs", mainActivity.isAppLockedByTrialExpiry())
+            mainController.destroy()
+
+            // 2. DynamicSettingsAdapter visually & functionally freezes premium rows cleanly
+            val frozenRow = com.example.ui.settings.DynamicSettingUiRow(
+                item = com.example.data.firebase.DynamicSettingItem.defaultItems()
+                    .first { it.key == com.example.data.firebase.DynamicSettingItem.KEY_AUTO_RECORDING },
+                resolvedDescription = "Auto record",
+                isChecked = false,
+                isInteractive = false,
+                isLastItem = false,
+                isFrozenBySubscription = true
+            )
+            var clickTriggered = false
+            val adapter = com.example.ui.settings.DynamicSettingsAdapter(
+                onRowClicked = { clickTriggered = true },
+                onToggleChanged = { _, _ -> true }
+            )
+            adapter.submitList(listOf(frozenRow))
+            val parent = android.widget.FrameLayout(themedContext)
+            val holder = adapter.onCreateViewHolder(parent, 0)
+            adapter.onBindViewHolder(holder, 0)
+            val switchView = holder.itemView.findViewById<android.view.View>(R.id.switch_dynamic_setting)
+            val rowView = holder.itemView.findViewById<android.view.View>(R.id.row_dynamic_setting)
+            assertFalse(switchView.isEnabled)
+            assertFalse(rowView.isClickable)
+            rowView.performClick()
+            assertFalse(clickTriggered)
+
+            // 3. Gmail account discovery & dialog_save_contact renders account selector
+            val repo = com.example.data.ContactsRepository(app)
+            val gmailList = repo.getGoogleAccountNames()
+            assertTrue(gmailList.contains("customer@gmail.com"))
+
+            val saveDialogView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.dialog_save_contact, null)
+            assertTrue(saveDialogView.findViewById<android.view.View>(R.id.tv_save_account_label) != null)
+            assertTrue(saveDialogView.findViewById<android.view.View>(R.id.rg_save_account) != null)
+            assertEquals("com.google", com.example.data.ContactsRepository.GOOGLE_ACCOUNT_TYPE)
+        }
+
+    @Test
+    fun `sync fixes enforce zero expiry, bonus trial reduction, and dual sim preferences persist across sign out`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+
+        // 1. Dual SIM preference survives resetSessionEntitlementsOnSignOut()
+        prefs.preferredSimAccountId = "sim_slot_2_sub_99"
+        prefs.resetSessionEntitlementsOnSignOut()
+        assertEquals("sim_slot_2_sub_99", prefs.preferredSimAccountId)
+
+        // 2. DualSimManager resolves preferred SIM & alternate SIM deterministically
+        val sim1 = com.example.telecom.SimCardInfo(
+            accountHandle = null,
+            accountId = "sub_1",
+            slotIndex = 1,
+            label = "SIM 1",
+            carrierName = "Jio",
+            number = "+919876543210"
+        )
+        val sim2 = com.example.telecom.SimCardInfo(
+            accountHandle = null,
+            accountId = "sub_2",
+            slotIndex = 2,
+            label = "SIM 2",
+            carrierName = "Airtel",
+            number = "+919123456789"
+        )
+        val sims = listOf(sim1, sim2)
+        assertEquals(sim2, com.example.telecom.DualSimManager.resolvePreferredSim(sims, "sub_2"))
+        assertEquals(null, com.example.telecom.DualSimManager.resolvePreferredSim(sims, ""))
+        assertEquals(sim2, com.example.telecom.DualSimManager.resolveAlternateSim(sims, "sub_1"))
+        assertEquals(sim1, com.example.telecom.DualSimManager.resolveAlternateSim(sims, "sub_2"))
+        assertEquals("SIM 1 • Jio", sim1.displayLabel())
+        assertEquals("SIM 2", sim2.shortLabel())
+
+        // 3. RealtimeDatabaseSync.parseUserSnapshot honors explicit null/0 subscriptionExpiresAtMs
+        val nowMs = System.currentTimeMillis()
+        val futureExp = com.google.firebase.Timestamp(java.util.Date(nowMs + 20L * DialerPreferences.ONE_DAY_MILLIS))
+        val fallbackPro = com.example.data.firebase.UserEntitlement(
+            id = "u_sync",
+            userId = "u_sync",
+            isPremiumUser = true,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            subscriptionExpiresAt = futureExp,
+            bonusTrialDays = 10L
+        )
+        val clearedSnap = com.example.data.firebase.RealtimeDatabaseSync.parseUserSnapshot(
+            uid = "u_sync",
+            map = mapOf(
+                "isPremium" to false,
+                "isPremiumUser" to false,
+                "subscriptionStatus" to com.example.data.firebase.UserEntitlement.STATUS_EXPIRED,
+                "subscriptionExpiresAtMs" to 0L,
+                "bonusTrialDays" to 0L
+            ),
+            fallback = fallbackPro
+        )
+        assertFalse(clearedSnap.isPremiumUser)
+        assertEquals(null, clearedSnap.subscriptionExpiresAt)
+        assertEquals(0L, clearedSnap.bonusTrialDays)
+
+        // 4. SubscriptionEnforcementService honors 0 bonusTrialDays and 0L expiry when cleared
+        prefs.applyEnforcementBatch(
+            isPremium = true,
+            isBlocked = false,
+            subscriptionExpiresAtMs = nowMs + 15L * DialerPreferences.ONE_DAY_MILLIS,
+            installDateMs = nowMs - 2L * DialerPreferences.ONE_DAY_MILLIS,
+            bonusTrialDays = 10
+        )
+        com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = app,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_TRIAL,
+            isPremium = false,
+            isBlocked = false,
+            subscriptionExpiresAtMs = 0L,
+            bonusTrialDays = 0,
+            nowMs = nowMs
+        )
+        assertFalse(prefs.isPremiumUser)
+        assertEquals(0L, prefs.subscriptionExpiresAtMs)
+        assertEquals(0, prefs.adminBonusTrialDays)
+    }
+
+    @Test
+    fun `admin subscriber cohorts include old expired and new trial users and inflate new layouts`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+
+        val nowMs = 1_700_000_000_000L
+        val expiringExp = com.google.firebase.Timestamp(java.util.Date(nowMs + 3L * DialerPreferences.ONE_DAY_MILLIS))
+        val healthyExp = com.google.firebase.Timestamp(java.util.Date(nowMs + 25L * DialerPreferences.ONE_DAY_MILLIS))
+        val activeTrialStart = com.google.firebase.Timestamp(java.util.Date(nowMs - 2L * DialerPreferences.ONE_DAY_MILLIS))
+        val oldTrialStart = com.google.firebase.Timestamp(java.util.Date(nowMs - 14L * DialerPreferences.ONE_DAY_MILLIS))
+
+        val expiringPro = com.example.data.firebase.UserEntitlement(
+            id = "u_expiring",
+            userId = "u_expiring",
+            displayName = "Expiring Pro",
+            trialStartedAt = oldTrialStart,
+            isPremiumUser = true,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            subscriptionExpiresAt = expiringExp
+        )
+        val activePro = com.example.data.firebase.UserEntitlement(
+            id = "u_active",
+            userId = "u_active",
+            displayName = "Healthy Pro",
+            trialStartedAt = oldTrialStart,
+            isPremiumUser = true,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            subscriptionExpiresAt = healthyExp
+        )
+        val oldExpired = com.example.data.firebase.UserEntitlement(
+            id = "u_old",
+            userId = "u_old",
+            displayName = "Old Expired",
+            trialStartedAt = oldTrialStart,
+            isPremiumUser = false,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_EXPIRED
+        )
+        val newTrial = com.example.data.firebase.UserEntitlement(
+            id = "u_new",
+            userId = "u_new",
+            displayName = "New Trial",
+            trialStartedAt = activeTrialStart,
+            isPremiumUser = false,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_TRIAL
+        )
+
+        val allUsers = listOf(expiringPro, activePro, oldExpired, newTrial)
+        assertEquals(
+            listOf("u_expiring"),
+            com.example.data.firebase.AdminRepository.filterSubscribers(
+                allUsers,
+                com.example.data.firebase.AdminSubscriberFilter.EXPIRING_SOON,
+                "",
+                nowMs,
+                7
+            ).map { it.userId }
+        )
+        assertEquals(
+            listOf("u_expiring", "u_active"),
+            com.example.data.firebase.AdminRepository.filterSubscribers(
+                allUsers,
+                com.example.data.firebase.AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS,
+                "",
+                nowMs,
+                7
+            ).map { it.userId }
+        )
+        assertEquals(
+            listOf("u_old"),
+            com.example.data.firebase.AdminRepository.filterSubscribers(
+                allUsers,
+                com.example.data.firebase.AdminSubscriberFilter.OLD_EXPIRED_USERS,
+                "",
+                nowMs,
+                7
+            ).map { it.userId }
+        )
+        assertEquals(
+            listOf("u_new"),
+            com.example.data.firebase.AdminRepository.filterSubscribers(
+                allUsers,
+                com.example.data.firebase.AdminSubscriberFilter.NEW_TRIAL_USERS,
+                "",
+                nowMs,
+                7
+            ).map { it.userId }
+        )
+
+        // Verify all new UI views inflate cleanly in XML
+        val inflater = android.view.LayoutInflater.from(themedContext)
+        val inCallRoot = inflater.inflate(R.layout.activity_in_call, null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_incall_sim_badge) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.container_switch_sim) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.btn_incall_switch_sim) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_incall_switch_sim_label) != null)
+
+        val dialpadRoot = inflater.inflate(R.layout.bottom_sheet_dialpad, null)
+        assertTrue(dialpadRoot.findViewById<android.view.View>(R.id.chip_dialpad_sim) != null)
+
+        val settingsRoot = inflater.inflate(R.layout.fragment_settings, null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.card_default_calling_sim) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.tv_default_sim_summary) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.btn_select_default_sim) != null)
+
+        val adminRoot = inflater.inflate(R.layout.activity_admin_panel, null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.rb_subscriber_old_expired) != null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.rb_subscriber_new_trial) != null)
+
+        val expiringItemRoot = inflater.inflate(R.layout.item_admin_expiring_user, null)
+        assertTrue(expiringItemRoot.findViewById<android.view.View>(R.id.btn_expiring_minus_7) != null)
+        assertTrue(expiringItemRoot.findViewById<android.view.View>(R.id.btn_expiring_minus_1) != null)
+        assertTrue(expiringItemRoot.findViewById<android.view.View>(R.id.btn_expiring_plus_7) != null)
+
+        val userItemRoot = inflater.inflate(R.layout.item_admin_user, null)
+        assertTrue(userItemRoot.findViewById<android.view.View>(R.id.btn_user_reduce_days) != null)
     }
 }
 

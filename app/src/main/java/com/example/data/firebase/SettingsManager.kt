@@ -370,6 +370,20 @@ class SettingsManager(
         }
     }
 
+    fun setRecordInstagramCalls(enabled: Boolean) {
+        prefs.recordInstagramCalls = enabled
+        pushFieldsAsync(mapOf("recordInstagramCalls" to enabled))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "recordInstagramCalls" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     suspend fun syncAllLocalPreferencesToCloud(): Result<Unit> {
         val firestore = db
             ?: return Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
@@ -398,6 +412,7 @@ class SettingsManager(
             "recordWhatsappBusinessCalls" to prefs.recordWhatsappBusinessCalls,
             "recordMeetCalls" to prefs.recordMeetCalls,
             "recordTelegramCalls" to prefs.recordTelegramCalls,
+            "recordInstagramCalls" to prefs.recordInstagramCalls,
             "updatedAt" to FieldValue.serverTimestamp()
         )
         RealtimeDatabaseSync.pushUserFields(
@@ -421,6 +436,7 @@ class SettingsManager(
                 "recordWhatsappBusinessCalls" to prefs.recordWhatsappBusinessCalls,
                 "recordMeetCalls" to prefs.recordMeetCalls,
                 "recordTelegramCalls" to prefs.recordTelegramCalls,
+                "recordInstagramCalls" to prefs.recordInstagramCalls,
                 "updatedAtMs" to System.currentTimeMillis()
             )
         )
@@ -551,6 +567,9 @@ class SettingsManager(
             if (snapshot.contains("recordTelegramCalls")) {
                 prefs.recordTelegramCalls = user.recordTelegramCalls
             }
+            if (snapshot.contains("recordInstagramCalls")) {
+                prefs.recordInstagramCalls = user.recordInstagramCalls
+            }
         }
 
         /**
@@ -582,6 +601,7 @@ class SettingsManager(
             prefs.recordWhatsappBusinessCalls = user.recordWhatsappBusinessCalls
             prefs.recordMeetCalls = user.recordMeetCalls
             prefs.recordTelegramCalls = user.recordTelegramCalls
+            prefs.recordInstagramCalls = user.recordInstagramCalls
             if (prefs.configuredForceThemeMode == AppConfig.THEME_USER) {
                 val desiredMode = if (user.themeMode == UserEntitlement.THEME_DARK) {
                     AppCompatDelegate.MODE_NIGHT_YES

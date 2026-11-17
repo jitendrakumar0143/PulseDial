@@ -2,6 +2,8 @@ package com.example.telecom
 
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
@@ -16,10 +18,14 @@ import kotlinx.coroutines.flow.update
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class ResolvedCallIdentity(
     val displayName: String,
-    val phoneNumber: String
+    val phoneNumber: String,
+    val location: String = "",
+    val isUnknownNumber: Boolean = false,
+    val identitySource: String = ""
 )
 
 data class ConferenceParticipantUi(
@@ -42,6 +48,9 @@ data class CallUiState(
     val hasActiveCall: Boolean = false,
     val callerName: String = "",
     val callerNumber: String = "",
+    val callerLocation: String = "",
+    val isUnknownCaller: Boolean = false,
+    val callerIdentitySource: String = "",
     val callState: Int = Call.STATE_NEW,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
@@ -60,10 +69,19 @@ data class CallUiState(
     val canMerge: Boolean = false,
     val isConference: Boolean = false,
     val conferenceParticipantCount: Int = 0,
-    val participants: List<ConferenceParticipantUi> = emptyList()
+    val participants: List<ConferenceParticipantUi> = emptyList(),
+    val activeSimLabel: String = "",
+    val activeSimAccountId: String = "",
+    val alternateSimLabel: String = "",
+    val alternateSimAccountId: String = "",
+    val canSwitchSim: Boolean = false,
+    val isSwitchingSim: Boolean = false
 )
 
 object CallManager {
+
+    private const val SIM_SWITCH_REDIAL_DELAY_MS = 350L
+    private const val SIM_SWITCH_SAFETY_TIMEOUT_MS = 3200L
 
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
@@ -73,6 +91,19 @@ object CallManager {
 
     private val trackedCalls = CopyOnWriteArrayList<Call>()
     private val callIdentities = ConcurrentHashMap<Call, ResolvedCallIdentity>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val isSimSwitchPending = AtomicBoolean(false)
+
+    @Volatile
+    private var pendingSwitchTargetSimLabel: String = ""
+
+    @Volatile
+    private var lastSwitchableNumber: String = ""
+
+    @Volatile
+    private var lastSwitchableAccountId: String = ""
+
+    private var simSwitchTimeoutRunnable: Runnable? = null
 
     private var serviceRef: WeakReference<InCallService>? = null
     private var recorder: CallRecorder? = null
@@ -89,9 +120,23 @@ object CallManager {
         trackedCalls.clear()
         callIdentities.clear()
         _callsFlow.value = emptyList()
-        _uiState.value = CallUiState()
+        if (isSimSwitchPending.get()) {
+            _uiState.update { prev ->
+                CallUiState(
+                    lastSavedRecordingName = prev.lastSavedRecordingName,
+                    callerName = prev.callerName,
+                    callerNumber = prev.callerNumber,
+                    alternateSimLabel = pendingSwitchTargetSimLabel,
+                    isSwitchingSim = true
+                )
+            }
+        } else {
+            _uiState.value = CallUiState()
+        }
         serviceRef = null
     }
+
+    fun isSimSwitchInProgress(): Boolean = isSimSwitchPending.get()
 
     /**
      * Updates the tracked multi-call list from CustomInCallService (or single-call compat callers).
@@ -123,7 +168,17 @@ object CallManager {
         if (snapshot.isEmpty()) {
             stopRecordingIfNeeded()
             _uiState.update { prev ->
-                CallUiState(lastSavedRecordingName = prev.lastSavedRecordingName)
+                if (isSimSwitchPending.get()) {
+                    CallUiState(
+                        lastSavedRecordingName = prev.lastSavedRecordingName,
+                        callerName = prev.callerName,
+                        callerNumber = prev.callerNumber,
+                        alternateSimLabel = pendingSwitchTargetSimLabel,
+                        isSwitchingSim = true
+                    )
+                } else {
+                    CallUiState(lastSavedRecordingName = prev.lastSavedRecordingName)
+                }
             }
             return
         }
@@ -189,11 +244,50 @@ object CallManager {
 
         val connectTime = primaryDetails?.connectTimeMillis ?: 0L
 
+        if (!isConference && primaryIdentity.phoneNumber.isNotBlank()) {
+            lastSwitchableNumber = primaryIdentity.phoneNumber
+            primaryDetails?.accountHandle?.id?.trim()?.takeIf { it.isNotBlank() }?.let { accId ->
+                lastSwitchableAccountId = accId
+            }
+        }
+
+        val sims = serviceRef?.get()?.applicationContext?.let { ctx ->
+            DualSimManager.getAvailableSims(ctx)
+        }.orEmpty()
+        val rawActiveAccountId = primaryDetails?.accountHandle?.id?.trim().orEmpty()
+        val activeSim = DualSimManager.findSimByAccountId(sims, rawActiveAccountId)
+            ?: primaryDetails?.accountHandle?.let { handle ->
+                sims.firstOrNull { it.accountHandle == handle }
+            }
+            ?: if (rawActiveAccountId.isBlank()) sims.firstOrNull() else null
+        val effectiveActiveId = activeSim?.accountId ?: rawActiveAccountId
+        val alternateSim = DualSimManager.resolveAlternateSim(sims, effectiveActiveId)
+        val canSwitchSim = !isConference &&
+            primaryState != Call.STATE_RINGING &&
+            primaryState != Call.STATE_DISCONNECTED &&
+            primaryState != Call.STATE_DISCONNECTING &&
+            sims.size >= 2 &&
+            alternateSim != null &&
+            (primaryIdentity.phoneNumber.isNotBlank() || lastSwitchableNumber.isNotBlank())
+
         _uiState.update { prev ->
             prev.copy(
                 hasActiveCall = true,
                 callerName = displayPrimaryName,
                 callerNumber = displayPrimaryNumber,
+                callerLocation = if (isConference) {
+                    "Multi-Party Conference (${participants.size.coerceAtLeast(2)})"
+                } else {
+                    primaryIdentity.location.ifBlank {
+                        CallerIdResolver.resolveLocation(primaryIdentity.phoneNumber)
+                    }
+                },
+                isUnknownCaller = !isConference && primaryIdentity.isUnknownNumber,
+                callerIdentitySource = if (isConference) {
+                    "Conference Call"
+                } else {
+                    primaryIdentity.identitySource
+                },
                 callState = primaryState,
                 connectTimeMillis = if (connectTime > 0L) connectTime else prev.connectTimeMillis,
                 topLevelCallCount = topLevelCalls.size,
@@ -208,7 +302,13 @@ object CallManager {
                 canMerge = canMerge,
                 isConference = isConference,
                 conferenceParticipantCount = participants.size,
-                participants = participants
+                participants = participants,
+                activeSimLabel = activeSim?.displayLabel().orEmpty(),
+                activeSimAccountId = effectiveActiveId,
+                alternateSimLabel = alternateSim?.shortLabel().orEmpty(),
+                alternateSimAccountId = alternateSim?.accountId.orEmpty(),
+                canSwitchSim = canSwitchSim,
+                isSwitchingSim = isSimSwitchPending.get()
             )
         }
     }
@@ -226,7 +326,17 @@ object CallManager {
             }
             return
         }
-        callIdentities[call] = ResolvedCallIdentity(callerName, callerNumber)
+        val info = CallerIdResolver.resolveInstant(
+            rawNumber = callerNumber,
+            telecomDisplayName = callerName
+        )
+        callIdentities[call] = ResolvedCallIdentity(
+            displayName = callerName.ifBlank { info.displayName },
+            phoneNumber = callerNumber,
+            location = info.location,
+            isUnknownNumber = callerName.isBlank() || info.isUnknownNumber,
+            identitySource = info.sourceLabel
+        )
         if (!trackedCalls.contains(call)) {
             trackedCalls.add(call)
         }
@@ -240,8 +350,97 @@ object CallManager {
         allCalls: List<Call>,
         resolver: ((Call) -> ResolvedCallIdentity)? = null
     ) {
-        callIdentities[call] = ResolvedCallIdentity(callerName, callerNumber)
+        if (isSimSwitchPending.compareAndSet(true, false)) {
+            simSwitchTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            simSwitchTimeoutRunnable = null
+            pendingSwitchTargetSimLabel = ""
+        }
+        val resolved = resolver?.invoke(call) ?: run {
+            val info = CallerIdResolver.resolveInstant(
+                rawNumber = callerNumber,
+                telecomDisplayName = callerName
+            )
+            ResolvedCallIdentity(
+                displayName = callerName.ifBlank { info.displayName },
+                phoneNumber = callerNumber,
+                location = info.location,
+                isUnknownNumber = info.isUnknownNumber,
+                identitySource = info.sourceLabel
+            )
+        }
+        callIdentities[call] = resolved
         syncTrackedCalls(allCalls, resolver)
+    }
+
+    /**
+     * Mid-call Dual SIM switcher: if the active SIM has zero balance or weak signal while
+     * calling/active, disconnects the current leg and redials the same number via the alternate SIM
+     * while holding InCallActivity open during the 350ms handoff.
+     */
+    fun switchSimToAlternate(context: Context): Boolean {
+        val appCtx = context.applicationContext
+        val sims = DualSimManager.getAvailableSims(appCtx)
+        if (sims.size < 2) return false
+
+        val primaryCall = getPrimaryCall()
+        val currentAccountId = primaryCall?.details?.accountHandle?.id?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: _uiState.value.activeSimAccountId.ifBlank { lastSwitchableAccountId }
+        val alternateSim = DualSimManager.resolveAlternateSim(sims, currentAccountId) ?: return false
+
+        val targetNumber = (
+            primaryCall?.details?.handle?.schemeSpecificPart?.trim().orEmpty()
+                .ifBlank { _uiState.value.callerNumber.trim() }
+                .ifBlank { lastSwitchableNumber.trim() }
+            )
+        if (targetNumber.isBlank() || _uiState.value.isConference) return false
+
+        if (!isSimSwitchPending.compareAndSet(false, true)) return false
+
+        val targetShortLabel = alternateSim.shortLabel()
+        pendingSwitchTargetSimLabel = targetShortLabel
+
+        simSwitchTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        val timeoutRunnable = Runnable {
+            if (isSimSwitchPending.compareAndSet(true, false)) {
+                pendingSwitchTargetSimLabel = ""
+                _uiState.update { it.copy(isSwitchingSim = false) }
+            }
+        }
+        simSwitchTimeoutRunnable = timeoutRunnable
+        mainHandler.postDelayed(timeoutRunnable, SIM_SWITCH_SAFETY_TIMEOUT_MS)
+
+        _uiState.update {
+            it.copy(
+                isSwitchingSim = true,
+                alternateSimLabel = targetShortLabel,
+                alternateSimAccountId = alternateSim.accountId
+            )
+        }
+
+        val callsToDisconnect = trackedCalls.filter {
+            val st = getCompatState(it)
+            st != Call.STATE_DISCONNECTED && st != Call.STATE_DISCONNECTING
+        }
+        if (callsToDisconnect.isEmpty()) {
+            primaryCall?.disconnect()
+        } else {
+            callsToDisconnect.forEach { call ->
+                runCatching { call.disconnect() }
+            }
+        }
+
+        mainHandler.postDelayed({
+            val placed = DialerHelper.placeCall(appCtx, targetNumber, alternateSim.accountHandle)
+            if (!placed && isSimSwitchPending.compareAndSet(true, false)) {
+                simSwitchTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+                simSwitchTimeoutRunnable = null
+                pendingSwitchTargetSimLabel = ""
+                _uiState.update { it.copy(isSwitchingSim = false) }
+            }
+        }, SIM_SWITCH_REDIAL_DELAY_MS)
+
+        return true
     }
 
     fun onCallRemoved(
@@ -496,17 +695,25 @@ object CallManager {
         call: Call,
         resolver: ((Call) -> ResolvedCallIdentity)?
     ): ResolvedCallIdentity {
+        if (resolver != null) {
+            return resolver(call).also { callIdentities[call] = it }
+        }
         val cached = callIdentities[call]
         if (cached != null && (cached.displayName.isNotBlank() || cached.phoneNumber.isNotBlank())) {
             return cached
         }
-        if (resolver != null) {
-            return resolver(call).also { callIdentities[call] = it }
-        }
         val number = call.details?.handle?.schemeSpecificPart.orEmpty()
-        val name = call.details?.callerDisplayName?.takeIf { it.isNotBlank() }
-            ?: number.ifBlank { "Unknown Caller" }
-        return ResolvedCallIdentity(name, number).also { callIdentities[call] = it }
+        val info = CallerIdResolver.resolveInstant(
+            rawNumber = number,
+            telecomDisplayName = call.details?.callerDisplayName
+        )
+        return ResolvedCallIdentity(
+            displayName = info.displayName,
+            phoneNumber = number,
+            location = info.location,
+            isUnknownNumber = info.isUnknownNumber,
+            identitySource = info.sourceLabel
+        ).also { callIdentities[call] = it }
     }
 
     private fun resolveTopLevelCalls(calls: List<Call>): List<Call> {

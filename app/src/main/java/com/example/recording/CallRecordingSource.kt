@@ -35,6 +35,11 @@ enum class CallRecordingSource(
         folderName = "Telegram Call Recordings",
         filePrefix = "Telegram",
         displayLabel = "Telegram Call"
+    ),
+    INSTAGRAM(
+        folderName = "Instagram Call Recordings",
+        filePrefix = "Instagram",
+        displayLabel = "Instagram Call"
     );
 
     fun relativePublicPath(): String = "${Environment.DIRECTORY_MUSIC}/$ROOT_FOLDER_NAME/$folderName"
@@ -50,7 +55,9 @@ enum class CallRecordingSource(
             "org.telegram.messenger" to TELEGRAM,
             "org.telegram.messenger.web" to TELEGRAM,
             "org.telegram.plus" to TELEGRAM,
-            "tw.nekomimi.nekogram" to TELEGRAM
+            "tw.nekomimi.nekogram" to TELEGRAM,
+            "com.instagram.android" to INSTAGRAM,
+            "com.instagram.lite" to INSTAGRAM
         )
 
         fun fromPackageName(packageName: String?): CallRecordingSource? {

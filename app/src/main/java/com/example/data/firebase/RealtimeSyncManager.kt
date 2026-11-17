@@ -213,7 +213,7 @@ object RealtimeSyncManager {
         if (snapshot != null && snapshot.metadata.isFromCache && latestUser != null) {
             return
         }
-        if (snapshot != null && latestUser != null && incomingMs > 0L && existingMs > incomingMs + 5_000L) {
+        if (latestUser != null && incomingMs > 0L && existingMs > incomingMs + 2_000L) {
             return
         }
         val previous = latestUser
@@ -525,17 +525,29 @@ object RealtimeSyncManager {
         val enforceSingleDevice = prefs.enforceSingleDeviceTrialConfig
         val blocked = user?.isBlocked == true || user?.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
         val bonusDays = user?.bonusTrialDays?.coerceAtLeast(0L) ?: 0L
-        val rawPremium = (user?.isPremiumUser == true) ||
-            (user?.subscriptionStatus == UserEntitlement.STATUS_ACTIVE) ||
-            (enforceSingleDevice && device?.isPremiumDevice == true)
+        val userStatusForcesInactive = user != null && (
+            user.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+                user.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                user.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
+            )
+        val rawPremium = if (user != null) {
+            !userStatusForcesInactive &&
+                (user.isPremiumUser || user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE)
+        } else {
+            enforceSingleDevice && device?.isPremiumDevice == true
+        }
 
-        val userExpiryMs = user?.subscriptionExpiresAt?.toDate()?.time
-            ?: if (user?.isPremiumUser == true) {
-                user.updatedAt?.toDate()?.time?.let { it + DialerPreferences.ONE_MONTH_MILLIS }
-            } else {
-                null
-            }
-        val deviceExpiryMs = if (enforceSingleDevice) {
+        val userExpiryMs = if (user != null && !userStatusForcesInactive) {
+            user.subscriptionExpiresAt?.toDate()?.time
+                ?: if (user.isPremiumUser) {
+                    user.updatedAt?.toDate()?.time?.let { it + DialerPreferences.ONE_MONTH_MILLIS }
+                } else {
+                    null
+                }
+        } else {
+            null
+        }
+        val deviceExpiryMs = if (user == null && enforceSingleDevice) {
             device?.subscriptionExpiresAt?.toDate()?.time
                 ?: if (device?.isPremiumDevice == true) {
                     device.updatedAt?.toDate()?.time?.let { it + DialerPreferences.ONE_MONTH_MILLIS }
@@ -545,7 +557,7 @@ object RealtimeSyncManager {
         } else {
             null
         }
-        val effectiveExpiresAtMs = listOfNotNull(userExpiryMs, deviceExpiryMs).maxOrNull() ?: 0L
+        val effectiveExpiresAtMs = (userExpiryMs ?: deviceExpiryMs ?: 0L).coerceAtLeast(0L)
 
         val nowMs = System.currentTimeMillis()
         val liveServerOffsetMs = rtdbServerTimeOffsetMs
@@ -557,12 +569,16 @@ object RealtimeSyncManager {
             (effectiveExpiresAtMs <= 0L || serverNow < effectiveExpiresAtMs)
         val hideSubUi = latestConfig.hideSubscriptionUI || (user?.hideSubscriptionUI == true)
 
-        prefs.adminBlockedUser = blocked
-        prefs.adminBonusTrialDays = bonusDays.toInt()
-        prefs.subscriptionExpiresAtMs = effectiveExpiresAtMs
-        prefs.isPremiumUser = effectivePremium
         prefs.configHideSubscriptionUi = latestConfig.hideSubscriptionUI
-        prefs.hideSubscriptionUi = hideSubUi
+        prefs.applyEnforcementBatch(
+            isPremium = effectivePremium,
+            isBlocked = blocked,
+            subscriptionExpiresAtMs = effectiveExpiresAtMs,
+            bonusTrialDays = bonusDays.toInt(),
+            hideSubscriptionUi = hideSubUi,
+            delegatedAdmin = user?.isAdmin,
+            adminGrantedBy = user?.adminGrantedBy
+        )
 
         if (!user?.displayName.isNullOrBlank()) {
             prefs.userName = user!!.displayName
@@ -638,12 +654,27 @@ object RealtimeSyncManager {
     fun refreshFromCloudNow() {
         val ctx = appContext ?: return
         val uid = activeUid ?: return
+        val prefs = DialerPreferences(ctx)
         val deviceHash = DeviceIdentityProvider.getDeviceHash(ctx)
         scope.launch(Dispatchers.IO) {
             runCatching {
                 val res = DeviceTrialRepository(ctx).syncDeviceAndUserTrial(deviceHash)
-                if (res.isSuccess && activeUid == uid) {
-                    bumpState()
+                val rtdbConfig = RealtimeDatabaseSync.fetchAppConfigOnce(ctx, latestConfig)
+                val rtdbUserResult = RealtimeDatabaseSync.fetchUserSnapshotOnce(ctx, uid, latestUser)
+                scope.launch(Dispatchers.Main.immediate) {
+                    if (activeUid != uid) return@launch
+                    rtdbConfig?.let { applyIncomingAppConfig(it, prefs) }
+                    rtdbUserResult?.let { (rtdbUser, hasBlockedField) ->
+                        handleIncomingUserUpdate(
+                            user = rtdbUser,
+                            snapshot = null,
+                            prefs = prefs,
+                            hasRtdbBlockedNumbersField = hasBlockedField
+                        )
+                    }
+                    if (res.isSuccess && rtdbUserResult == null) {
+                        bumpState()
+                    }
                 }
             }
         }

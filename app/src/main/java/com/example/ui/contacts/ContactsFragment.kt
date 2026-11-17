@@ -44,7 +44,7 @@ class ContactsFragment : Fragment() {
                     .show(parentFragmentManager, com.example.ui.common.NumberDetailBottomSheetFragment.TAG)
             },
             onCallClick = { contact ->
-                DialerHelper.placeCall(requireContext(), contact.number)
+                DialerHelper.initiateCall(activity ?: requireContext(), contact.number)
             },
             onStarClick = { contact ->
                 viewLifecycleOwner.lifecycleScope.launch {

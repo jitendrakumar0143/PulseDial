@@ -67,6 +67,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         val number: String,
         val savedContactName: String?,
         val displayName: String,
+        val location: String,
+        val isUnknownNumber: Boolean,
+        val identitySource: String,
         var wasIncomingRinging: Boolean,
         var reachedActive: Boolean,
         var followUpHandled: Boolean = false
@@ -139,7 +142,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
                 val allStates = trackedCalls.map { getCompatState(it) }
                 if (!CallManager.shouldKeepRecordingActive(allStates, trackedCalls.size)) {
                     CallManager.stopRecordingIfNeeded()
-                    maybeDispatchAfterCallPopupAd()
+                    if (!CallManager.isSimSwitchInProgress()) {
+                        maybeDispatchAfterCallPopupAd()
+                    }
                 }
                 refreshCallNotificationFromCurrentCalls()
             }
@@ -147,6 +152,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
         override fun onDetailsChanged(call: Call, details: Call.Details) {
             super.onDetailsChanged(call, details)
+            refreshCallMetaFromDetails(call, details)
             broadcastTrackedCalls()
             refreshCallNotificationFromCurrentCalls()
         }
@@ -273,6 +279,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         rtdbCustomPopupAdCleanup = null
         proximitySpeakerController?.release()
         proximitySpeakerController = null
+        CallerIdPopupOverlay.dismiss()
         stopCallAnnouncer()
         restoreRingerIfMutedByShield()
         runCatching {
@@ -304,9 +311,17 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             return
         }
 
-        // Look up whether the caller is saved in ContactsContract.PhoneLookup
-        val savedContactName = contactsRepo.lookupCallerName(rawNumber)?.takeIf { it.isNotBlank() }
+        val telecomName = call.details?.callerDisplayName
         val isVipEntitled = hasVipFeatureAccess()
+        // Only run synchronous PhoneLookup if Unknown Caller Shield is actively needed on an incoming ring
+        val savedContactName = if (initialState == Call.STATE_RINGING &&
+            isVipEntitled &&
+            prefs.unknownShieldMode != UserEntitlement.SHIELD_OFF
+        ) {
+            contactsRepo.lookupCallerName(rawNumber)?.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
 
         // 2. Unknown Caller Shield (Silent Ring & Auto-Reject for Unsaved Numbers)
         if (initialState == Call.STATE_RINGING && savedContactName == null && isVipEntitled) {
@@ -322,14 +337,19 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             }
         }
 
-        val resolvedName = savedContactName
-            ?: call.details?.callerDisplayName?.takeIf { it.isNotBlank() }
-            ?: getString(R.string.incall_unknown_caller)
+        val instantInfo = CallerIdResolver.resolveInstant(
+            rawNumber = rawNumber,
+            savedContactName = savedContactName,
+            telecomDisplayName = telecomName
+        )
 
         callMetadata[call] = TrackedCallMeta(
             number = rawNumber,
             savedContactName = savedContactName,
-            displayName = resolvedName,
+            displayName = instantInfo.displayName,
+            location = instantInfo.location,
+            isUnknownNumber = instantInfo.isUnknownNumber,
+            identitySource = instantInfo.sourceLabel,
             wasIncomingRinging = (initialState == Call.STATE_RINGING),
             reachedActive = (initialState == Call.STATE_ACTIVE)
         )
@@ -347,25 +367,57 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         _callsState.value = snapshot
         CallManager.onCallAdded(
             call = call,
-            callerName = resolvedName,
+            callerName = instantInfo.displayName,
             callerNumber = rawNumber,
             allCalls = snapshot,
             resolver = ::resolveIdentityForCall
         )
+        CallerIdPopupOverlay.showOrUpdate(
+            context = applicationContext,
+            info = instantInfo,
+            isIncoming = (initialState == Call.STATE_RINGING)
+        )
         refreshCallNotificationFromCurrentCalls()
+
+        // Async Contacts & CallLog enrichment off Main Thread so ANR never occurs
+        serviceScope.launch {
+            val enriched = CallerIdResolver.resolveWithDeviceAsync(
+                context = applicationContext,
+                rawNumber = rawNumber,
+                telecomDisplayName = call.details?.callerDisplayName
+            )
+            if (!trackedCalls.contains(call)) return@launch
+            val currentMeta = callMetadata[call] ?: return@launch
+            callMetadata[call] = currentMeta.copy(
+                savedContactName = if (!enriched.isUnknownNumber) enriched.displayName else currentMeta.savedContactName,
+                displayName = enriched.displayName,
+                location = enriched.location,
+                isUnknownNumber = enriched.isUnknownNumber,
+                identitySource = enriched.sourceLabel
+            )
+            broadcastTrackedCalls()
+            CallerIdPopupOverlay.showOrUpdate(
+                context = applicationContext,
+                info = enriched,
+                isIncoming = (getCompatState(call) == Call.STATE_RINGING || currentMeta.wasIncomingRinging)
+            )
+            refreshCallNotificationFromCurrentCalls()
+
+            if (getCompatState(call) == Call.STATE_RINGING &&
+                isVipEntitled &&
+                prefs.announcerEnabled &&
+                !ringerMutedByShield
+            ) {
+                maybeAnnounceIncomingCaller(
+                    if (!enriched.isUnknownNumber) enriched.displayName else null,
+                    rawNumber
+                )
+            }
+        }
 
         // 3. Start/continue silent recording from the very first bell (never restarted on 2nd call/merge)
         if (isEarlyOrActiveRecordingState(initialState) || initialState == Call.STATE_HOLDING) {
             triggerAutoRecordingIfPermitted()
-        }
-
-        // 4. Smart Call Announcer (when incoming call rings and not muted by SILENT_RECORD shield)
-        if (initialState == Call.STATE_RINGING &&
-            isVipEntitled &&
-            prefs.announcerEnabled &&
-            !ringerMutedByShield
-        ) {
-            maybeAnnounceIncomingCaller(savedContactName, rawNumber)
         }
 
         val launchIntent = Intent(this, InCallActivity::class.java).apply {
@@ -410,8 +462,11 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         }
 
         if (snapshot.isEmpty()) {
+            CallerIdPopupOverlay.dismiss()
             cancelCallNotification()
-            maybeDispatchAfterCallPopupAd()
+            if (!CallManager.isSimSwitchInProgress()) {
+                maybeDispatchAfterCallPopupAd()
+            }
         } else {
             refreshCallNotificationFromCurrentCalls()
         }
@@ -454,17 +509,47 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         CallManager.syncTrackedCalls(snapshot, ::resolveIdentityForCall)
     }
 
+    private fun refreshCallMetaFromDetails(call: Call, details: Call.Details) {
+        val prev = callMetadata[call]
+        val newNumber = details.handle?.schemeSpecificPart?.takeIf { it.isNotBlank() } ?: prev?.number.orEmpty()
+        val info = CallerIdResolver.resolveInstant(
+            rawNumber = newNumber,
+            savedContactName = prev?.savedContactName,
+            telecomDisplayName = details.callerDisplayName
+        )
+        callMetadata[call] = (prev ?: TrackedCallMeta(
+            number = newNumber,
+            savedContactName = null,
+            displayName = info.displayName,
+            location = info.location,
+            isUnknownNumber = info.isUnknownNumber,
+            identitySource = info.sourceLabel,
+            wasIncomingRinging = (getCompatState(call) == Call.STATE_RINGING),
+            reachedActive = (getCompatState(call) == Call.STATE_ACTIVE)
+        )).copy(
+            number = newNumber,
+            displayName = info.displayName,
+            location = info.location,
+            isUnknownNumber = info.isUnknownNumber,
+            identitySource = info.sourceLabel
+        )
+    }
+
     private fun resolveAndCacheCallMeta(call: Call, state: Int): TrackedCallMeta {
         callMetadata[call]?.let { return it }
         val rawNumber = call.details?.handle?.schemeSpecificPart.orEmpty()
-        val savedName = contactsRepo.lookupCallerName(rawNumber)?.takeIf { it.isNotBlank() }
-        val displayName = savedName
-            ?: call.details?.callerDisplayName?.takeIf { it.isNotBlank() }
-            ?: rawNumber.ifBlank { getString(R.string.incall_unknown_caller) }
+        val info = CallerIdResolver.resolveInstant(
+            rawNumber = rawNumber,
+            savedContactName = null,
+            telecomDisplayName = call.details?.callerDisplayName
+        )
         return TrackedCallMeta(
             number = rawNumber,
-            savedContactName = savedName,
-            displayName = displayName,
+            savedContactName = null,
+            displayName = info.displayName,
+            location = info.location,
+            isUnknownNumber = info.isUnknownNumber,
+            identitySource = info.sourceLabel,
             wasIncomingRinging = (state == Call.STATE_RINGING),
             reachedActive = (state == Call.STATE_ACTIVE)
         ).also { callMetadata[call] = it }
@@ -474,7 +559,10 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         val meta = resolveAndCacheCallMeta(call, getCompatState(call))
         return ResolvedCallIdentity(
             displayName = meta.displayName,
-            phoneNumber = meta.number
+            phoneNumber = meta.number,
+            location = meta.location,
+            isUnknownNumber = meta.isUnknownNumber,
+            identitySource = meta.identitySource
         )
     }
 

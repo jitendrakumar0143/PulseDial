@@ -430,6 +430,42 @@
                     android:textColor="#E2E8F0"
                     app:cornerRadius="16dp"
                     app:strokeColor="#64748B" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_pay_razorpay"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/btn_pay_razorpay"
+                    android:textColor="#FFFFFF"
+                    android:visibility="gone"
+                    app:backgroundTint="#2563EB"
+                    app:cornerRadius="16dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_pay_payu"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_pay_payu"
+                    android:textColor="#FFFFFF"
+                    android:visibility="gone"
+                    app:backgroundTint="#0F766E"
+                    app:cornerRadius="16dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_pay_custom_gateway"
+                    style="@style/Widget.Material3.Button"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_pay_custom_gateway"
+                    android:textColor="#0F172A"
+                    android:visibility="gone"
+                    app:backgroundTint="#FBBF24"
+                    app:cornerRadius="16dp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

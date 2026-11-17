@@ -45,6 +45,7 @@ object RealtimeDatabaseSync {
     const val NODE_SETTINGS_ITEMS = "settings_items"
     const val NODE_LIVE_BROADCAST = "live_broadcast"
     const val NODE_CUSTOM_POPUP_AD = "custom_popup_ad"
+    const val NODE_APPROVED_UTRS = "approved_utrs"
 
     private val persistenceConfigured = AtomicBoolean(false)
 
@@ -246,7 +247,8 @@ object RealtimeDatabaseSync {
         onIsPremiumChanged: (Boolean) -> Unit,
         onInstallDateChanged: (Long) -> Unit = {},
         onIsBlockedChanged: (Boolean) -> Unit = {},
-        onExpiresAtChanged: (Long?) -> Unit = {}
+        onExpiresAtChanged: (Long?) -> Unit = {},
+        onBonusTrialDaysChanged: (Int) -> Unit = {}
     ): (() -> Unit)? {
         if (uid.isBlank()) return null
         val cleanups = mutableListOf<() -> Unit>()
@@ -285,9 +287,87 @@ object RealtimeDatabaseSync {
             onExpiresAtChanged(asLong(snapshot.value))
         }?.let { cleanups.add(it) }
 
+        onValue("$NODE_USERS/$uid/bonusTrialDays", context) { snapshot ->
+            if (!snapshot.exists()) {
+                onBonusTrialDaysChanged(0)
+                return@onValue
+            }
+            val days = (asLong(snapshot.value) ?: 0L).toInt().coerceIn(0, 3650)
+            onBonusTrialDaysChanged(days)
+        }?.let { cleanups.add(it) }
+
         if (cleanups.isEmpty()) return null
         return {
             cleanups.forEach { cleanup -> runCatching { cleanup() } }
+        }
+    }
+
+    suspend fun fetchUserSnapshotOnce(
+        context: Context,
+        uid: String,
+        fallback: UserEntitlement? = null
+    ): Pair<UserEntitlement, Boolean>? {
+        if (uid.isBlank()) return null
+        val ref = refForPath("$NODE_USERS/$uid", context) ?: return null
+        return kotlinx.coroutines.withTimeoutOrNull(2500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (!cont.isActive) return
+                        val rawMap = if (snapshot.exists()) snapshot.value as? Map<*, *> else null
+                        if (rawMap == null) {
+                            cont.resume(null, onCancellation = null)
+                        } else {
+                            cont.resume(
+                                parseUserSnapshot(uid, rawMap, fallback) to rawMap.containsKey("blockedNumbers"),
+                                onCancellation = null
+                            )
+                        }
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        if (cont.isActive) {
+                            cont.resume(null, onCancellation = null)
+                        }
+                    }
+                }
+                ref.addListenerForSingleValueEvent(listener)
+                cont.invokeOnCancellation {
+                    runCatching { ref.removeEventListener(listener) }
+                }
+            }
+        }
+    }
+
+    suspend fun fetchAppConfigOnce(
+        context: Context,
+        fallback: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
+    ): AppConfig? {
+        val ref = refForPath(NODE_APP_CONFIG, context) ?: return null
+        return kotlinx.coroutines.withTimeoutOrNull(2500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (!cont.isActive) return
+                        val rawMap = if (snapshot.exists()) snapshot.value as? Map<*, *> else null
+                        if (rawMap == null) {
+                            cont.resume(null, onCancellation = null)
+                        } else {
+                            cont.resume(parseAppConfigSnapshot(rawMap, fallback), onCancellation = null)
+                        }
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        if (cont.isActive) {
+                            cont.resume(null, onCancellation = null)
+                        }
+                    }
+                }
+                ref.addListenerForSingleValueEvent(listener)
+                cont.invokeOnCancellation {
+                    runCatching { ref.removeEventListener(listener) }
+                }
+            }
         }
     }
 
@@ -494,6 +574,78 @@ object RealtimeDatabaseSync {
             mapOf("clicksCount" to ServerValue.increment(1L)),
             context
         )
+    }
+
+    fun normalizeUtrKey(rawUtr: String?): String {
+        if (rawUtr.isNullOrBlank()) return ""
+        return rawUtr.trim().uppercase().replace(Regex("[^A-Z0-9_-]"), "").take(64)
+    }
+
+    fun attachApprovedUtrsListener(
+        context: Context,
+        onUpdate: (Set<String>) -> Unit
+    ): (() -> Unit)? {
+        return onValue(NODE_APPROVED_UTRS, context) { snapshot ->
+            if (!snapshot.exists()) {
+                onUpdate(emptySet())
+                return@onValue
+            }
+            val keys = mutableSetOf<String>()
+            for (child in snapshot.children) {
+                val key = normalizeUtrKey(child.key)
+                if (key.isNotEmpty()) {
+                    keys.add(key)
+                }
+            }
+            onUpdate(keys)
+        }
+    }
+
+    suspend fun isUtrApprovedInRtdb(utrRaw: String, context: Context? = null): Boolean {
+        val key = normalizeUtrKey(utrRaw)
+        if (key.isEmpty()) return false
+        val ref = refForPath("$NODE_APPROVED_UTRS/$key", context) ?: return false
+        return kotlinx.coroutines.withTimeoutOrNull(2500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (cont.isActive) {
+                            cont.resume(snapshot.exists(), onCancellation = null)
+                        }
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        if (cont.isActive) {
+                            cont.resume(false, onCancellation = null)
+                        }
+                    }
+                }
+                ref.addListenerForSingleValueEvent(listener)
+                cont.invokeOnCancellation {
+                    runCatching { ref.removeEventListener(listener) }
+                }
+            }
+        } ?: false
+    }
+
+    fun markUtrApproved(
+        utrRaw: String,
+        requestId: String,
+        userId: String,
+        approvedByUid: String,
+        context: Context? = null
+    ): Boolean {
+        val key = normalizeUtrKey(utrRaw)
+        if (key.isEmpty()) return false
+        val payload = mapOf(
+            "utr" to key,
+            "rawUtr" to utrRaw.trim().take(64),
+            "requestId" to requestId.trim(),
+            "userId" to userId.trim(),
+            "approvedByUid" to approvedByUid.trim(),
+            "approvedAtMs" to ServerValue.TIMESTAMP
+        )
+        return set("$NODE_APPROVED_UTRS/$key", payload, context)
     }
 
     /**
@@ -803,6 +955,8 @@ object RealtimeDatabaseSync {
             "isPremiumUser" to entitlement.isPremiumUser,
             "paymentRefId" to entitlement.paymentRefId,
             "isBlocked" to entitlement.isBlocked,
+            "isAdmin" to entitlement.isAdmin,
+            "adminGrantedBy" to entitlement.adminGrantedBy,
             "autoRecordEnabled" to entitlement.autoCallRecording,
             "autoCallRecording" to entitlement.autoCallRecording,
             "themeMode" to entitlement.themeMode,
@@ -825,6 +979,7 @@ object RealtimeDatabaseSync {
             "recordWhatsappBusinessCalls" to entitlement.recordWhatsappBusinessCalls,
             "recordMeetCalls" to entitlement.recordMeetCalls,
             "recordTelegramCalls" to entitlement.recordTelegramCalls,
+            "recordInstagramCalls" to entitlement.recordInstagramCalls,
             "updatedAtMs" to (entitlement.updatedAt?.toDate()?.time ?: nowMs)
         )
     }
@@ -857,9 +1012,11 @@ object RealtimeDatabaseSync {
         }
         val expiresMs = asLong(map["subscriptionExpiresAtMs"])
             ?: asLong(map["subscriptionExpiresAt"])
+        val hasExplicitExpiryField = map.containsKey("subscriptionExpiresAtMs") ||
+            map.containsKey("subscriptionExpiresAt")
         val subscriptionExpiresTs = when {
-            map.containsKey("subscriptionExpiresAtMs") && map["subscriptionExpiresAtMs"] == null -> null
             expiresMs != null && expiresMs > 0L -> Timestamp(Date(expiresMs))
+            hasExplicitExpiryField -> null
             else -> base.subscriptionExpiresAt
         }
         val updatedAtMs = asLong(map["updatedAtMs"])
@@ -907,6 +1064,8 @@ object RealtimeDatabaseSync {
             trialStartedAt = trialStartedTs,
             isPremiumUser = isPremiumVal,
             isBlocked = asBool(map["isBlocked"]) ?: base.isBlocked,
+            isAdmin = asBool(map["isAdmin"]) ?: base.isAdmin,
+            adminGrantedBy = (map["adminGrantedBy"] as? String) ?: base.adminGrantedBy,
             subscriptionStatus = (map["subscriptionStatus"] as? String)?.trim()?.lowercase()?.ifBlank { null }
                 ?: base.subscriptionStatus,
             paymentRefId = (map["paymentRefId"] as? String) ?: base.paymentRefId,
@@ -934,6 +1093,7 @@ object RealtimeDatabaseSync {
                 ?: base.recordWhatsappBusinessCalls,
             recordMeetCalls = asBool(map["recordMeetCalls"]) ?: base.recordMeetCalls,
             recordTelegramCalls = asBool(map["recordTelegramCalls"]) ?: base.recordTelegramCalls,
+            recordInstagramCalls = asBool(map["recordInstagramCalls"]) ?: base.recordInstagramCalls,
             updatedAt = updatedAtTs
         )
     }
@@ -982,6 +1142,16 @@ object RealtimeDatabaseSync {
             "defaultAutoRecording" to config.defaultAutoRecording,
             "forceThemeMode" to config.forceThemeMode,
             "hideSubscriptionUI" to config.hideSubscriptionUI,
+            "enableUpiGateway" to config.enableUpiGateway,
+            "enableRazorpayGateway" to config.enableRazorpayGateway,
+            "razorpayKeyId" to config.razorpayKeyId,
+            "razorpayPaymentLink" to config.razorpayPaymentLink,
+            "enablePayuGateway" to config.enablePayuGateway,
+            "payuMerchantKey" to config.payuMerchantKey,
+            "payuPaymentLink" to config.payuPaymentLink,
+            "enableCustomGateway" to config.enableCustomGateway,
+            "customGatewayName" to config.customGatewayName,
+            "customGatewayUrl" to config.customGatewayUrl,
             "updatedAtMs" to System.currentTimeMillis()
         )
     }
@@ -1024,7 +1194,27 @@ object RealtimeDatabaseSync {
             forceThemeMode = (map["forceThemeMode"] as? String)
                 ?: fallback.forceThemeMode,
             hideSubscriptionUI = asBool(map["hideSubscriptionUI"])
-                ?: fallback.hideSubscriptionUI
+                ?: fallback.hideSubscriptionUI,
+            enableUpiGateway = asBool(map["enableUpiGateway"])
+                ?: fallback.enableUpiGateway,
+            enableRazorpayGateway = asBool(map["enableRazorpayGateway"])
+                ?: fallback.enableRazorpayGateway,
+            razorpayKeyId = (map["razorpayKeyId"] as? String)
+                ?: fallback.razorpayKeyId,
+            razorpayPaymentLink = (map["razorpayPaymentLink"] as? String)
+                ?: fallback.razorpayPaymentLink,
+            enablePayuGateway = asBool(map["enablePayuGateway"])
+                ?: fallback.enablePayuGateway,
+            payuMerchantKey = (map["payuMerchantKey"] as? String)
+                ?: fallback.payuMerchantKey,
+            payuPaymentLink = (map["payuPaymentLink"] as? String)
+                ?: fallback.payuPaymentLink,
+            enableCustomGateway = asBool(map["enableCustomGateway"])
+                ?: fallback.enableCustomGateway,
+            customGatewayName = (map["customGatewayName"] as? String)
+                ?: fallback.customGatewayName,
+            customGatewayUrl = (map["customGatewayUrl"] as? String)
+                ?: fallback.customGatewayUrl
         )
     }
 

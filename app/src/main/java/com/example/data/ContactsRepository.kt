@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.Manifest
+import android.accounts.AccountManager
 import android.content.ContentProviderOperation
 import android.content.ContentValues
 import android.content.Context
@@ -9,6 +10,7 @@ import android.net.Uri
 import android.provider.CallLog
 import android.provider.ContactsContract
 import androidx.core.content.ContextCompat
+import com.example.data.firebase.GoogleAuthHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -212,17 +214,66 @@ class ContactsRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveNewContact(name: String, phoneNumber: String): Boolean = withContext(Dispatchers.IO) {
+    fun getGoogleAccountNames(includeRawContactsFallback: Boolean = true): List<String> {
+        val discovered = ArrayList<String>()
+        val seenLower = HashSet<String>()
+
+        fun addCandidate(raw: String?) {
+            val clean = raw?.trim().orEmpty()
+            if (clean.contains("@") && seenLower.add(clean.lowercase())) {
+                discovered.add(clean)
+            }
+        }
+
+        // 1. Prefer the user's currently active signed-in Gmail account first
+        runCatching { addCandidate(GoogleAuthHelper.resolveActiveEmail(context)) }
+
+        // 2. Discover all Google ("com.google") accounts signed into the phone
+        runCatching {
+            val am = AccountManager.get(context)
+            am.getAccountsByType(GOOGLE_ACCOUNT_TYPE).forEach { account ->
+                addCandidate(account.name)
+            }
+        }
+
+        // 3. Fallback to distinct Google RawContacts account names already on device
+        if (includeRawContactsFallback && hasContactsPermission()) {
+            runCatching {
+                context.contentResolver.query(
+                    ContactsContract.RawContacts.CONTENT_URI,
+                    arrayOf(ContactsContract.RawContacts.ACCOUNT_NAME),
+                    "${ContactsContract.RawContacts.ACCOUNT_TYPE} = ?",
+                    arrayOf(GOOGLE_ACCOUNT_TYPE),
+                    null
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        addCandidate(cursor.getString(0))
+                    }
+                }
+            }
+        }
+
+        return discovered
+    }
+
+    suspend fun saveNewContact(
+        name: String,
+        phoneNumber: String,
+        googleAccountName: String? = null
+    ): Boolean = withContext(Dispatchers.IO) {
         if (!hasWriteContactsPermission()) return@withContext false
         val cleanName = name.trim()
         val cleanNumber = phoneNumber.trim()
         if (cleanName.isEmpty() || cleanNumber.isEmpty()) return@withContext false
 
+        val cleanGoogleAccount = googleAccountName?.trim()?.takeIf { it.isNotEmpty() }
+        val accountType: String? = if (cleanGoogleAccount != null) GOOGLE_ACCOUNT_TYPE else null
+
         val ops = ArrayList<ContentProviderOperation>().apply {
             add(
                 ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
-                    .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, null)
-                    .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, null)
+                    .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, accountType)
+                    .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, cleanGoogleAccount)
                     .build()
             )
             add(
@@ -306,6 +357,8 @@ class ContactsRepository(private val context: Context) {
     }
 
     companion object {
+        const val GOOGLE_ACCOUNT_TYPE = "com.google"
+
         fun numbersMatch(digitsA: String, digitsB: String): Boolean {
             if (digitsA.isEmpty() || digitsB.isEmpty()) return false
             if (digitsA == digitsB) return true

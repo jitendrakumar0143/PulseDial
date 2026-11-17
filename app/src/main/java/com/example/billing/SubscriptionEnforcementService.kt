@@ -202,13 +202,19 @@ object SubscriptionEnforcementService {
                     context = ctx,
                     subscriptionExpiresAtMs = newExpiresAtMs ?: 0L
                 )
+            },
+            onBonusTrialDaysChanged = { newBonusDays ->
+                applyNodeUpdate(
+                    context = ctx,
+                    bonusTrialDays = newBonusDays
+                )
             }
         )
 
         tickerJob = scope.launch {
             while (isActive && activeUid == uid) {
                 recalculateAndEnforce(prefs)
-                delay(1000L)
+                delay(5000L)
             }
         }
     }
@@ -223,14 +229,14 @@ object SubscriptionEnforcementService {
         activeUid = user.uid.ifBlank { activeUid }
         val installMs = user.installDate?.toDate()?.time
         val expMs = user.subscriptionExpiresAt?.toDate()?.time ?: 0L
-        liveBonusTrialDays = user.bonusTrialDays.toInt().coerceAtLeast(0)
         applyNodeUpdate(
             context = ctx,
             subscriptionStatus = user.subscriptionStatus,
             isPremium = user.isPremiumUser,
             isBlocked = user.isBlocked,
             installDateMs = installMs,
-            subscriptionExpiresAtMs = expMs
+            subscriptionExpiresAtMs = expMs,
+            bonusTrialDays = user.bonusTrialDays.toInt().coerceAtLeast(0)
         )
     }
 
@@ -297,17 +303,13 @@ object SubscriptionEnforcementService {
                 liveIsPremium || liveSubscriptionStatus == UserEntitlement.STATUS_ACTIVE
                 ) && (liveExpiresAtMs <= 0L || nowMs < liveExpiresAtMs)
 
-            prefs.adminBlockedUser = effectiveBlocked
-            prefs.adminBonusTrialDays = liveBonusTrialDays
-            if (liveInstallDateMs > 0L) {
-                prefs.firstLaunchTime = liveInstallDateMs
-            }
-            if (liveExpiresAtMs > 0L) {
-                prefs.subscriptionExpiresAtMs = liveExpiresAtMs
-            } else if (!effectivePremium) {
-                prefs.subscriptionExpiresAtMs = 0L
-            }
-            prefs.isPremiumUser = effectivePremium
+            prefs.applyEnforcementBatch(
+                isPremium = effectivePremium,
+                isBlocked = effectiveBlocked,
+                subscriptionExpiresAtMs = if (liveExpiresAtMs > 0L) liveExpiresAtMs else 0L,
+                installDateMs = liveInstallDateMs.takeIf { it > 0L },
+                bonusTrialDays = liveBonusTrialDays
+            )
             return recalculateAndEnforce(prefs, nowMs)
         }
 
@@ -435,8 +437,8 @@ object SubscriptionEnforcementService {
             isPremium = effectivePremiumSignal,
             isBlocked = effectiveBlockedSignal,
             installDateMs = installMs,
-            subscriptionExpiresAtMs = if (liveExpiresAtMs > 0L) liveExpiresAtMs else prefs.subscriptionExpiresAtMs,
-            bonusTrialDays = liveBonusTrialDays.coerceAtLeast(prefs.adminBonusTrialDays),
+            subscriptionExpiresAtMs = if (hasLiveNodeState) liveExpiresAtMs else prefs.subscriptionExpiresAtMs,
+            bonusTrialDays = if (hasLiveNodeState) liveBonusTrialDays else prefs.adminBonusTrialDays,
             trialDaysConfig = prefs.configuredTrialDays,
             allowCallRecordingConfig = prefs.allowCallRecordingConfig,
             nowMs = nowMs

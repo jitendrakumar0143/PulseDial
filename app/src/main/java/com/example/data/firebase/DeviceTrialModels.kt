@@ -39,6 +39,9 @@ data class UserEntitlement(
     val subscriptionExpiresAt: Timestamp? = null,
     @get:PropertyName("isBlocked")
     val isBlocked: Boolean = false,
+    @get:PropertyName("isAdmin")
+    val isAdmin: Boolean = false,
+    val adminGrantedBy: String = "",
     val bonusTrialDays: Long = 0L,
     val adminNote: String = "",
     @get:PropertyName("hideSubscriptionUI")
@@ -70,6 +73,8 @@ data class UserEntitlement(
     val recordMeetCalls: Boolean = true,
     @get:PropertyName("recordTelegramCalls")
     val recordTelegramCalls: Boolean = true,
+    @get:PropertyName("recordInstagramCalls")
+    val recordInstagramCalls: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -138,6 +143,20 @@ data class AppConfig(
     val forceThemeMode: String = THEME_USER,
     @get:PropertyName("hideSubscriptionUI")
     val hideSubscriptionUI: Boolean = false,
+    @get:PropertyName("enableUpiGateway")
+    val enableUpiGateway: Boolean = true,
+    @get:PropertyName("enableRazorpayGateway")
+    val enableRazorpayGateway: Boolean = false,
+    val razorpayKeyId: String = "",
+    val razorpayPaymentLink: String = "",
+    @get:PropertyName("enablePayuGateway")
+    val enablePayuGateway: Boolean = false,
+    val payuMerchantKey: String = "",
+    val payuPaymentLink: String = "",
+    @get:PropertyName("enableCustomGateway")
+    val enableCustomGateway: Boolean = false,
+    val customGatewayName: String = "",
+    val customGatewayUrl: String = "",
     val updatedByUid: String = "",
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {

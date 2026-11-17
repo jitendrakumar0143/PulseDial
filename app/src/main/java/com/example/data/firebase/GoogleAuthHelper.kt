@@ -155,7 +155,9 @@ object GoogleAuthHelper {
         val resolvedPhone = if (!isEmail && trimmedInput.any { it.isDigit() }) {
             trimmedInput
         } else {
-            existingCustomPhone
+            existingCustomPhone.ifBlank {
+                com.example.data.SimNumberHelper.resolveDeviceSimNumber(appContext).orEmpty()
+            }
         }
 
         val derivedName = when {
@@ -266,22 +268,29 @@ object GoogleAuthHelper {
             return
         }
 
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(true)
-            .setServerClientId(clientId)
-            .setAutoSelectEnabled(true)
-            .build()
-
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(googleIdOption)
-            .build()
+        suspend fun tryAutoGetGoogleId(filterAuthorized: Boolean): GoogleIdTokenCredential? {
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(filterAuthorized)
+                .setServerClientId(clientId)
+                .setAutoSelectEnabled(true)
+                .build()
+            val request = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+            val result = credentialManager.getCredential(context, request)
+            val credential = result.credential
+            return if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                GoogleIdTokenCredential.createFrom(credential.data)
+            } else {
+                null
+            }
+        }
 
         scope.launch {
             try {
-                val result = credentialManager.getCredential(context, request)
-                val credential = result.credential
-                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                val googleCred = runCatching { tryAutoGetGoogleId(filterAuthorized = true) }.getOrNull()
+                    ?: runCatching { tryAutoGetGoogleId(filterAuthorized = false) }.getOrNull()
+                if (googleCred != null) {
                     val authCredential = GoogleAuthProvider.getCredential(googleCred.idToken, null)
                     val authResult = runCatching {
                         Firebase.auth.signInWithCredential(authCredential).awaitTask()

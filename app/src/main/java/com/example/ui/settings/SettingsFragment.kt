@@ -37,12 +37,15 @@ import com.example.databinding.FragmentSettingsBinding
 import com.example.databinding.ItemSimpleRowBinding
 import com.example.recording.CallRecordingAccessibilityService
 import com.example.recording.CallRecordingSource
+import com.example.telecom.DualSimManager
 import com.example.ui.MainActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Server-Driven Dynamic Settings Fragment + VIP Smart Call Announcer, Unknown Caller Shield,
@@ -62,6 +65,9 @@ class SettingsFragment : Fragment() {
     private var isBindingVoipControls: Boolean = false
     private var pendingVoipAction: (() -> Unit)? = null
     private var pendingFolderSource: CallRecordingSource? = null
+    @Volatile
+    private var cachedAccessibilityEnabled: Boolean = false
+    private var lastBoundRowsSignature: String? = null
 
     private val voipAudioPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -196,9 +202,11 @@ class SettingsFragment : Fragment() {
         }
 
         setupRecyclerView()
+        setupDefaultSimCard()
         setupVoipRecordingCardListeners()
         setupVipCardsListeners()
-        bindCurrentValues()
+        bindCurrentValues(force = true)
+        refreshAccessibilityStatusAsync()
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -207,17 +215,17 @@ class SettingsFragment : Fragment() {
                         .map { Triple(it.uid, it.settingsItems, it.hideSubscriptionUi) }
                         .distinctUntilChanged()
                         .collect { (uid, items, _) ->
-                            if (uid != null && _binding != null) {
+                            if (uid != null && _binding != null && isAdded) {
                                 bindCurrentValues(items)
                             }
                         }
                 }
                 launch {
                     SubscriptionEnforcementService.state
-                        .map { it.copy(lastEvaluatedAtMs = 0L) }
+                        .map { Triple(it.shouldRestrictUiToAccountTab, it.isBlocked, it.isPremium) }
                         .distinctUntilChanged()
                         .collect {
-                            if (_binding != null) {
+                            if (_binding != null && isAdded) {
                                 bindCurrentValues()
                             }
                         }
@@ -228,12 +236,32 @@ class SettingsFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        bindCurrentValues()
+        if (_binding != null && isAdded) {
+            bindCurrentValues()
+            refreshAccessibilityStatusAsync()
+        }
     }
 
     fun refreshTrialUi() {
-        if (_binding != null) {
-            bindCurrentValues()
+        if (_binding != null && isAdded) {
+            bindCurrentValues(force = true)
+        }
+    }
+
+    private fun refreshAccessibilityStatusAsync() {
+        val ctx = context?.applicationContext ?: return
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            val enabled = runCatching {
+                CallRecordingAccessibilityService.isServiceEnabled(ctx)
+            }.getOrDefault(false)
+            if (enabled != cachedAccessibilityEnabled) {
+                cachedAccessibilityEnabled = enabled
+                withContext(Dispatchers.Main) {
+                    if (_binding != null && isAdded) {
+                        bindCurrentValues(force = true)
+                    }
+                }
+            }
         }
     }
 
@@ -249,27 +277,11 @@ class SettingsFragment : Fragment() {
             subscriptionManager.isSubscriptionActive()
     }
 
-    private fun showVipPaywallDialog(isBusinessFollowUp: Boolean) {
-        val titleRes = if (isBusinessFollowUp) {
-            R.string.vip_business_feature_locked_title
-        } else {
-            R.string.vip_feature_locked_title
-        }
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(titleRes)
-            .setMessage(R.string.vip_feature_locked_message)
-            .setPositiveButton(R.string.vip_unlock_in_account_btn) { _, _ ->
-                (activity as? MainActivity)?.navigateToAccountTab()
-            }
-            .setNegativeButton(R.string.trial_expired_dialog_later, null)
-            .show()
-    }
-
-    private fun isVoipRecordingEntitledSnapshot(): Boolean {
-        return prefs.allowCallRecordingConfig && isVipEntitledSnapshot()
-    }
-
     private fun handleVoipToggleChange(isChecked: Boolean, persistChange: (Boolean) -> Unit) {
+        if (!isVipEntitled()) {
+            bindVoipCardState()
+            return
+        }
         if (!isChecked) {
             persistChange(false)
             return
@@ -277,11 +289,6 @@ class SettingsFragment : Fragment() {
         if (!prefs.allowCallRecordingConfig) {
             bindVoipCardState()
             Toast.makeText(requireContext(), R.string.setting_recording_disabled_admin, Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!isVipEntitled()) {
-            bindVoipCardState()
-            showVipPaywallDialog(isBusinessFollowUp = false)
             return
         }
 
@@ -330,31 +337,51 @@ class SettingsFragment : Fragment() {
             if (isBindingVoipControls) return@setOnCheckedChangeListener
             handleVoipToggleChange(isChecked) { settingsManager.setRecordTelegramCalls(it) }
         }
+        binding.switchRecordInstagram.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVoipControls) return@setOnCheckedChangeListener
+            handleVoipToggleChange(isChecked) { settingsManager.setRecordInstagramCalls(it) }
+        }
 
         binding.btnFolderWhatsapp.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             launchFolderPickerForSource(CallRecordingSource.WHATSAPP)
         }
         binding.btnFolderWhatsappBusiness.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             launchFolderPickerForSource(CallRecordingSource.WHATSAPP_BUSINESS)
         }
         binding.btnFolderMeet.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             launchFolderPickerForSource(CallRecordingSource.GOOGLE_MEET)
         }
         binding.btnFolderTelegram.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             launchFolderPickerForSource(CallRecordingSource.TELEGRAM)
+        }
+        binding.btnFolderInstagram.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
+            launchFolderPickerForSource(CallRecordingSource.INSTAGRAM)
         }
 
         binding.btnResetFolderWhatsapp.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             resetFolderForSource(CallRecordingSource.WHATSAPP)
         }
         binding.btnResetFolderWhatsappBusiness.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             resetFolderForSource(CallRecordingSource.WHATSAPP_BUSINESS)
         }
         binding.btnResetFolderMeet.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             resetFolderForSource(CallRecordingSource.GOOGLE_MEET)
         }
         binding.btnResetFolderTelegram.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
             resetFolderForSource(CallRecordingSource.TELEGRAM)
+        }
+        binding.btnResetFolderInstagram.setOnClickListener {
+            if (!isVipEntitled()) return@setOnClickListener
+            resetFolderForSource(CallRecordingSource.INSTAGRAM)
         }
 
         binding.btnOpenFileManagerRecordings.setOnClickListener {
@@ -365,22 +392,48 @@ class SettingsFragment : Fragment() {
     private fun bindVoipCardState() {
         isBindingVoipControls = true
         try {
-            val allowed = isVoipRecordingEntitledSnapshot()
+            val vipEntitled = isVipEntitledSnapshot()
+            val allowed = vipEntitled && prefs.allowCallRecordingConfig
             val wa = allowed && prefs.recordWhatsappCalls
             val wab = allowed && prefs.recordWhatsappBusinessCalls
             val meet = allowed && prefs.recordMeetCalls
             val tg = allowed && prefs.recordTelegramCalls
-            if (binding.switchRecordWhatsapp.isChecked != wa) {
-                binding.switchRecordWhatsapp.isChecked = wa
+            val ig = allowed && prefs.recordInstagramCalls
+
+            binding.cardVoipCallRecording.alpha = if (vipEntitled) 1f else 0.7f
+
+            fun applyFrozenState(view: View, enabled: Boolean) {
+                view.isEnabled = enabled
+                view.isClickable = enabled
+                view.alpha = if (enabled) 1f else 0.5f
             }
-            if (binding.switchRecordWhatsappBusiness.isChecked != wab) {
-                binding.switchRecordWhatsappBusiness.isChecked = wab
+
+            listOf(
+                binding.switchRecordWhatsapp to wa,
+                binding.switchRecordWhatsappBusiness to wab,
+                binding.switchRecordMeet to meet,
+                binding.switchRecordTelegram to tg,
+                binding.switchRecordInstagram to ig
+            ).forEach { (switchView, checked) ->
+                if (switchView.isChecked != checked) {
+                    switchView.isChecked = checked
+                }
+                applyFrozenState(switchView, allowed)
             }
-            if (binding.switchRecordMeet.isChecked != meet) {
-                binding.switchRecordMeet.isChecked = meet
-            }
-            if (binding.switchRecordTelegram.isChecked != tg) {
-                binding.switchRecordTelegram.isChecked = tg
+
+            listOf(
+                binding.btnFolderWhatsapp,
+                binding.btnFolderWhatsappBusiness,
+                binding.btnFolderMeet,
+                binding.btnFolderTelegram,
+                binding.btnFolderInstagram,
+                binding.btnResetFolderWhatsapp,
+                binding.btnResetFolderWhatsappBusiness,
+                binding.btnResetFolderMeet,
+                binding.btnResetFolderTelegram,
+                binding.btnResetFolderInstagram
+            ).forEach { btn ->
+                applyFrozenState(btn, allowed)
             }
 
             bindPerAppFolderRow(
@@ -406,6 +459,12 @@ class SettingsFragment : Fragment() {
                 pathView = binding.tvTelegramFolderPath,
                 selectButton = binding.btnFolderTelegram,
                 resetButton = binding.btnResetFolderTelegram
+            )
+            bindPerAppFolderRow(
+                source = CallRecordingSource.INSTAGRAM,
+                pathView = binding.tvInstagramFolderPath,
+                selectButton = binding.btnFolderInstagram,
+                resetButton = binding.btnResetFolderInstagram
             )
         } finally {
             isBindingVoipControls = false
@@ -495,7 +554,6 @@ class SettingsFragment : Fragment() {
             if (isBindingVipControls) return@setOnCheckedChangeListener
             if (!isVipEntitled()) {
                 bindVipCardsState()
-                showVipPaywallDialog(isBusinessFollowUp = false)
                 return@setOnCheckedChangeListener
             }
             settingsManager.setAnnouncerEnabled(isChecked)
@@ -505,7 +563,6 @@ class SettingsFragment : Fragment() {
             if (isBindingVipControls) return@setOnCheckedChangeListener
             if (!isVipEntitled()) {
                 bindVipCardsState()
-                showVipPaywallDialog(isBusinessFollowUp = false)
                 return@setOnCheckedChangeListener
             }
             settingsManager.setAnnouncerHeadsetOnly(isChecked)
@@ -515,7 +572,6 @@ class SettingsFragment : Fragment() {
             if (isBindingVipControls) return@setOnCheckedChangeListener
             if (!isVipEntitled()) {
                 bindVipCardsState()
-                showVipPaywallDialog(isBusinessFollowUp = false)
                 return@setOnCheckedChangeListener
             }
             val mode = when (checkedId) {
@@ -530,7 +586,6 @@ class SettingsFragment : Fragment() {
             if (isBindingVipControls) return@setOnCheckedChangeListener
             if (!isVipEntitled()) {
                 bindVipCardsState()
-                showVipPaywallDialog(isBusinessFollowUp = true)
                 return@setOnCheckedChangeListener
             }
             if (isChecked) {
@@ -552,7 +607,6 @@ class SettingsFragment : Fragment() {
             if (isBindingVipControls) return@setOnCheckedChangeListener
             if (!isVipEntitled()) {
                 bindVipCardsState()
-                showVipPaywallDialog(isBusinessFollowUp = true)
                 return@setOnCheckedChangeListener
             }
             settingsManager.setAutoWhatsappFollowUp(isChecked)
@@ -562,7 +616,6 @@ class SettingsFragment : Fragment() {
             if (isBindingVipControls) return@setOnCheckedChangeListener
             if (!isVipEntitled()) {
                 bindVipCardsState()
-                showVipPaywallDialog(isBusinessFollowUp = true)
                 return@setOnCheckedChangeListener
             }
             val trigger = when (checkedId) {
@@ -575,7 +628,6 @@ class SettingsFragment : Fragment() {
 
         binding.btnVipSaveTemplates.setOnClickListener {
             if (!isVipEntitled()) {
-                showVipPaywallDialog(isBusinessFollowUp = true)
                 return@setOnClickListener
             }
             val completedText = binding.etVipCompletedTemplate.text?.toString().orEmpty()
@@ -643,6 +695,30 @@ class SettingsFragment : Fragment() {
             ) {
                 binding.etVipMissedTemplate.setText(missedTemplate)
             }
+
+            binding.cardVipAnnouncerShield.alpha = if (entitled) 1f else 0.65f
+            binding.cardVipBusinessFollowup.alpha = if (entitled) 1f else 0.65f
+            listOf(
+                binding.switchVipAnnouncer,
+                binding.switchVipAnnouncerHeadset,
+                binding.rgVipUnknownShield,
+                binding.rbShieldOff,
+                binding.rbShieldSilentRecord,
+                binding.rbShieldAutoReject,
+                binding.switchVipAutoSms,
+                binding.switchVipAutoWhatsapp,
+                binding.rgVipFollowupTrigger,
+                binding.rbTriggerAllCalls,
+                binding.rbTriggerMissedOnly,
+                binding.rbTriggerCompletedOnly,
+                binding.etVipCompletedTemplate,
+                binding.etVipMissedTemplate,
+                binding.btnVipSaveTemplates
+            ).forEach { control ->
+                control.isEnabled = entitled
+                control.isClickable = entitled
+                control.alpha = if (entitled) 1f else 0.5f
+            }
         } finally {
             isBindingVipControls = false
         }
@@ -657,9 +733,86 @@ class SettingsFragment : Fragment() {
         binding.recyclerDynamicSettings.adapter = settingsAdapter
     }
 
+    private fun setupDefaultSimCard() {
+        binding.cardDefaultCallingSim.setOnClickListener {
+            showDefaultSimPickerDialog()
+        }
+        binding.btnSelectDefaultSim.setOnClickListener {
+            showDefaultSimPickerDialog()
+        }
+    }
+
+    private fun bindDefaultSimCard() {
+        if (_binding == null || !isAdded) return
+        val ctx = requireContext()
+        val sims = DualSimManager.getAvailableSims(ctx)
+        val summary = when {
+            sims.isEmpty() -> getString(R.string.setting_default_sim_no_sim)
+            sims.size == 1 -> getString(R.string.setting_default_sim_single, sims.first().fullDescription())
+            else -> {
+                val preferred = DualSimManager.resolvePreferredSim(sims, prefs.preferredSimAccountId)
+                if (preferred != null) {
+                    getString(R.string.setting_default_sim_selected, preferred.fullDescription())
+                } else {
+                    getString(R.string.setting_default_sim_always_ask)
+                }
+            }
+        }
+        binding.tvDefaultSimSummary.text = summary
+        // Normal calling preference MUST stay unlocked even when subscription expires
+        binding.cardDefaultCallingSim.isEnabled = true
+        binding.cardDefaultCallingSim.isClickable = true
+        binding.cardDefaultCallingSim.alpha = 1f
+        binding.btnSelectDefaultSim.isEnabled = true
+        binding.btnSelectDefaultSim.isClickable = true
+    }
+
+    private fun showDefaultSimPickerDialog() {
+        val ctx = requireContext()
+        val sims = DualSimManager.getAvailableSims(ctx)
+        if (sims.isEmpty()) {
+            MaterialAlertDialogBuilder(ctx)
+                .setTitle(R.string.setting_default_sim_dialog_title)
+                .setMessage(R.string.setting_default_sim_no_sim)
+                .setPositiveButton(R.string.dialog_close, null)
+                .show()
+            return
+        }
+
+        val alwaysAskLabel = getString(R.string.setting_default_sim_always_ask)
+        val optionLabels = (listOf(alwaysAskLabel) + sims.map { it.fullDescription() }).toTypedArray()
+        val currentIdx = sims.indexOfFirst { it.accountId == prefs.preferredSimAccountId }
+        val checkedIdx = if (currentIdx >= 0) currentIdx + 1 else 0
+
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.setting_default_sim_dialog_title)
+            .setSingleChoiceItems(optionLabels, checkedIdx) { dialog, which ->
+                if (which == 0) {
+                    prefs.preferredSimAccountId = ""
+                } else {
+                    sims.getOrNull(which - 1)?.let { chosen ->
+                        prefs.preferredSimAccountId = chosen.accountId
+                    }
+                }
+                bindDefaultSimCard()
+                val chosenLabel = optionLabels.getOrNull(which) ?: alwaysAskLabel
+                Toast.makeText(
+                    ctx,
+                    getString(R.string.setting_default_sim_updated, chosenLabel),
+                    Toast.LENGTH_SHORT
+                ).show()
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
+    }
+
     private fun bindCurrentValues(
-        items: List<DynamicSettingItem> = RealtimeSyncManager.syncState.value.settingsItems
+        items: List<DynamicSettingItem> = RealtimeSyncManager.syncState.value.settingsItems,
+        force: Boolean = false
     ) {
+        if (_binding == null || !isAdded) return
+        bindDefaultSimCard()
         bindVoipCardState()
         bindVipCardsState()
 
@@ -668,6 +821,7 @@ class SettingsFragment : Fragment() {
             .sortedBy { it.order }
 
         if (visibleItems.isEmpty()) {
+            lastBoundRowsSignature = "empty"
             binding.tvSettingsEmpty.visibility = View.VISIBLE
             binding.cardDynamicSettings.visibility = View.GONE
             settingsAdapter.submitList(emptyList())
@@ -677,26 +831,41 @@ class SettingsFragment : Fragment() {
         binding.tvSettingsEmpty.visibility = View.GONE
         binding.cardDynamicSettings.visibility = View.VISIBLE
 
+        val vipEntitled = isVipEntitledSnapshot()
         val uiRows = visibleItems.mapIndexed { index, item ->
-            val (desc, checked, interactive) = resolveItemState(item)
+            val (desc, checked, interactive) = resolveItemState(item, vipEntitled)
+            val frozenBySubscription = !vipEntitled && (
+                item.key == DynamicSettingItem.KEY_AUTO_RECORDING ||
+                    item.key == DynamicSettingItem.KEY_RECORDING_FOLDER
+                )
             DynamicSettingUiRow(
                 item = item,
                 resolvedDescription = desc,
                 isChecked = checked,
                 isInteractive = interactive,
-                isLastItem = index == visibleItems.lastIndex
+                isLastItem = index == visibleItems.lastIndex,
+                isFrozenBySubscription = frozenBySubscription
             )
         }
-        settingsAdapter.submitList(uiRows)
+        val rowsSig = uiRows.joinToString("|") {
+            "${it.item.key}:${it.item.title}:${it.resolvedDescription}:${it.isChecked}:${it.isInteractive}:${it.isLastItem}:${it.isFrozenBySubscription}"
+        }
+        if (force || rowsSig != lastBoundRowsSignature) {
+            lastBoundRowsSignature = rowsSig
+            settingsAdapter.submitList(uiRows)
+        }
     }
 
-    private fun resolveItemState(item: DynamicSettingItem): Triple<String, Boolean, Boolean> {
+    private fun resolveItemState(
+        item: DynamicSettingItem,
+        vipEntitled: Boolean
+    ): Triple<String, Boolean, Boolean> {
         val lockedText = getString(R.string.setting_locked_by_admin)
         return when (item.key) {
             DynamicSettingItem.KEY_AUTO_RECORDING -> {
                 val recordingAllowed = prefs.allowCallRecordingConfig
-                val interactive = recordingAllowed && !item.lockedByAdmin
-                val checked = recordingAllowed && subscriptionManager.isSubscriptionActive() &&
+                val interactive = vipEntitled && recordingAllowed && !item.lockedByAdmin
+                val checked = vipEntitled && recordingAllowed &&
                     if (item.lockedByAdmin) item.defaultValue else prefs.autoCallRecording
                 val baseDesc = item.description.ifBlank { getString(R.string.setting_auto_record_desc) }
                 val finalDesc = when {
@@ -713,10 +882,10 @@ class SettingsFragment : Fragment() {
                 } else {
                     item.description.ifBlank { getString(R.string.setting_folder_default) }
                 }
-                Triple(desc, false, !item.lockedByAdmin)
+                Triple(desc, false, vipEntitled && !item.lockedByAdmin)
             }
             DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
-                val isEnabled = CallRecordingAccessibilityService.isServiceEnabled(requireContext())
+                val isEnabled = cachedAccessibilityEnabled
                 val desc = getString(
                     if (isEnabled) R.string.setting_accessibility_enabled
                     else R.string.setting_accessibility_disabled
@@ -761,6 +930,9 @@ class SettingsFragment : Fragment() {
 
     private fun handleSettingToggle(row: DynamicSettingUiRow, isChecked: Boolean): Boolean {
         val item = row.item
+        if (row.isFrozenBySubscription) {
+            return false
+        }
         if (item.lockedByAdmin) {
             Toast.makeText(requireContext(), R.string.setting_locked_by_admin, Toast.LENGTH_SHORT).show()
             return false
@@ -770,11 +942,9 @@ class SettingsFragment : Fragment() {
                 if (isChecked && !prefs.allowCallRecordingConfig) {
                     Toast.makeText(requireContext(), R.string.setting_recording_disabled_admin, Toast.LENGTH_SHORT).show()
                     false
-                } else if (isChecked &&
-                    (!subscriptionManager.isSubscriptionActive() ||
-                        !com.example.billing.SubscriptionEnforcementService.canStartCallRecording(requireContext()))
+                } else if (!isVipEntitled() ||
+                    !SubscriptionEnforcementService.canStartCallRecording(requireContext())
                 ) {
-                    (activity as? MainActivity)?.showTrialExpiredDialog()
                     false
                 } else {
                     settingsManager.setAutoCallRecording(isChecked)
@@ -800,6 +970,9 @@ class SettingsFragment : Fragment() {
 
     private fun handleSettingAction(row: DynamicSettingUiRow) {
         val item = row.item
+        if (row.isFrozenBySubscription) {
+            return
+        }
         if (!row.isInteractive) {
             Toast.makeText(
                 requireContext(),
@@ -813,7 +986,10 @@ class SettingsFragment : Fragment() {
             return
         }
         when (item.key) {
-            DynamicSettingItem.KEY_RECORDING_FOLDER -> launchFolderPickerForSource(null)
+            DynamicSettingItem.KEY_RECORDING_FOLDER -> {
+                if (!isVipEntitled()) return
+                launchFolderPickerForSource(null)
+            }
             DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
                 runCatching {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -952,6 +1128,7 @@ class SettingsFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        lastBoundRowsSignature = null
         super.onDestroyView()
         _binding = null
     }

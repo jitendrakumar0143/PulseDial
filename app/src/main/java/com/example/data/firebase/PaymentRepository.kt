@@ -183,6 +183,22 @@ class PaymentRepository(
                 .ifBlank { approvalRefNo.trim() }
                 .ifBlank { cleanTxnRef }
                 .take(64)
+            val utrKey = normalizeUtrKey(effectiveRefId)
+            if (utrKey.isNotBlank() && RealtimeDatabaseSync.isUtrApprovedInRtdb(utrKey)) {
+                return Result.failure(
+                    IllegalStateException("This UTR has already been approved once and cannot be reused.")
+                )
+            }
+            if (utrKey.isNotBlank() && runCatching { auth.currentUser }.getOrNull() != null) {
+                val existingLock = runCatching {
+                    db.collection(COLLECTION_APPROVED_UTRS).document(utrKey).snapshots().first()
+                }.getOrNull()
+                if (existingLock?.exists() == true) {
+                    return Result.failure(
+                        IllegalStateException("This UTR has already been approved once and cannot be reused.")
+                    )
+                }
+            }
             val nowTs = Timestamp(Date(System.currentTimeMillis()))
             val rtdbRequest = PaymentRequest(
                 id = docRef.id,
@@ -245,7 +261,9 @@ class PaymentRepository(
 
     suspend fun approvePaymentRequest(
         request: PaymentRequest,
-        reviewNote: String = "Verified on ${request.upiId.ifBlank { UpiPaymentHelper.UPI_VPA }}"
+        reviewNote: String = "Verified on ${request.upiId.ifBlank { UpiPaymentHelper.UPI_VPA }}",
+        knownRequests: List<PaymentRequest> = emptyList(),
+        approvedUtrKeys: Set<String> = emptySet()
     ): Result<Unit> {
         val adminUid = try {
             requireUserId()
@@ -253,6 +271,29 @@ class PaymentRepository(
             return Result.failure(e)
         }
         require(request.id.isNotBlank()) { "Payment request ID must not be blank" }
+
+        if (request.status == PaymentRequest.STATUS_APPROVED) {
+            return Result.failure(
+                IllegalStateException("UTR can only be approved once. This request was already approved.")
+            )
+        }
+
+        val canonicalUtr = extractCanonicalUtr(request)
+        val utrKey = normalizeUtrKey(canonicalUtr)
+        if (utrKey.isNotBlank()) {
+            val duplicateInKnown = knownRequests.any { existing ->
+                existing.status == PaymentRequest.STATUS_APPROVED &&
+                    normalizeUtrKey(extractCanonicalUtr(existing)) == utrKey
+            }
+            if (approvedUtrKeys.contains(utrKey) ||
+                duplicateInKnown ||
+                RealtimeDatabaseSync.isUtrApprovedInRtdb(utrKey)
+            ) {
+                return Result.failure(
+                    IllegalStateException("UTR ($canonicalUtr) has already been approved once and cannot be reused.")
+                )
+            }
+        }
 
         val reqRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document(request.id)
         val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(request.userId)
@@ -263,6 +304,14 @@ class PaymentRepository(
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 val nowMs = System.currentTimeMillis()
                 val nextExpiresAtMs = nowMs + DialerPreferences.ONE_MONTH_MILLIS
+                if (utrKey.isNotBlank()) {
+                    RealtimeDatabaseSync.markUtrApproved(
+                        utrRaw = canonicalUtr,
+                        requestId = request.id,
+                        userId = request.userId,
+                        approvedByUid = adminUid
+                    )
+                }
                 RealtimeDatabaseSync.updatePaymentRequestStatus(
                     requestId = request.id,
                     status = PaymentRequest.STATUS_APPROVED,
@@ -281,6 +330,22 @@ class PaymentRepository(
                 )
                 return Result.success(Unit)
             }
+            if (utrKey.isNotBlank()) {
+                val firestoreUtrLock = runCatching {
+                    db.collection(COLLECTION_APPROVED_UTRS).document(utrKey).snapshots().first()
+                }.getOrNull()
+                if (firestoreUtrLock?.exists() == true) {
+                    return Result.failure(
+                        IllegalStateException("UTR ($canonicalUtr) has already been approved once and cannot be reused.")
+                    )
+                }
+            }
+            val currentReqSnap = runCatching { reqRef.snapshots().first() }.getOrNull()
+            if (currentReqSnap?.getString("status") == PaymentRequest.STATUS_APPROVED) {
+                return Result.failure(
+                    IllegalStateException("UTR can only be approved once. This request was already approved.")
+                )
+            }
             val userSnap = userRef.snapshots().first()
             val deviceSnap = deviceRef.snapshots().first()
 
@@ -290,6 +355,14 @@ class PaymentRepository(
             val renewalBaseMs = maxOf(nowMs, existingUserExpMs, existingDeviceExpMs)
             val nextExpiresAt = Timestamp(Date(renewalBaseMs + DialerPreferences.ONE_MONTH_MILLIS))
 
+            if (utrKey.isNotBlank()) {
+                RealtimeDatabaseSync.markUtrApproved(
+                    utrRaw = canonicalUtr,
+                    requestId = request.id,
+                    userId = request.userId,
+                    approvedByUid = adminUid
+                )
+            }
             RealtimeDatabaseSync.updatePaymentRequestStatus(
                 requestId = request.id,
                 status = PaymentRequest.STATUS_APPROVED,
@@ -308,6 +381,20 @@ class PaymentRepository(
             )
 
             val batch = db.batch()
+            if (utrKey.isNotBlank()) {
+                val utrLockRef = db.collection(COLLECTION_APPROVED_UTRS).document(utrKey)
+                batch.set(
+                    utrLockRef,
+                    mapOf(
+                        "utr" to utrKey,
+                        "rawUtr" to canonicalUtr,
+                        "requestId" to request.id,
+                        "userId" to request.userId,
+                        "approvedByUid" to adminUid,
+                        "approvedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
             batch.update(
                 reqRef,
                 mapOf(
@@ -443,5 +530,14 @@ class PaymentRepository(
 
     companion object {
         const val COLLECTION_PAYMENT_REQUESTS = "payment_requests"
+        const val COLLECTION_APPROVED_UTRS = "approved_utrs"
+
+        fun extractCanonicalUtr(request: PaymentRequest): String {
+            return request.upiTxnId.trim()
+                .ifBlank { request.approvalRefNo.trim() }
+                .ifBlank { request.txnRef.trim() }
+        }
+
+        fun normalizeUtrKey(raw: String?): String = RealtimeDatabaseSync.normalizeUtrKey(raw)
     }
 }

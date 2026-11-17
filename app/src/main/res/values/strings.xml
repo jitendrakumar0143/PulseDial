@@ -152,9 +152,9 @@
     <string name="incall_split_unsupported">Carrier does not support splitting this participant</string>
     <string name="incall_merge_unavailable">Place or hold a second call before merging</string>
     <string name="accessibility_service_label">PulseDial Call Audio Helper</string>
-    <string name="accessibility_service_description">Enables PulseDial to capture clear two-way cellular call audio plus WhatsApp, WhatsApp Business, Google Meet, and Telegram call audio on Android 10–16+ without reading personal messages.</string>
+    <string name="accessibility_service_description">Enables PulseDial to capture clear two-way cellular call audio plus WhatsApp, WhatsApp Business, Google Meet, Telegram, and Instagram call audio on Android 10–16+ without reading personal messages.</string>
     <string name="accessibility_prompt_title">Enable Clear Call Recording</string>
-    <string name="accessibility_prompt_message">Android 10–16+ requires enabling \"%1$s\" in Accessibility Settings so Cellular, WhatsApp, WhatsApp Business, Meet, and Telegram calls record clearly into separate File Manager folders.</string>
+    <string name="accessibility_prompt_message">Android 10–16+ requires enabling \"%1$s\" in Accessibility Settings so Cellular, WhatsApp, WhatsApp Business, Meet, Telegram, and Instagram calls record clearly into separate File Manager folders.</string>
     <string name="accessibility_prompt_open">Open Accessibility</string>
 
     <!-- Minimalist Settings Tab (Strictly 6 Essential Options) -->
@@ -267,7 +267,7 @@
 
     <!-- Full Hidden Admin Control Panel -->
     <string name="admin_control_title">Admin Control Panel</string>
-    <string name="admin_access_denied">Admin access is restricted to verified admin account (%1$s).</string>
+    <string name="admin_access_denied">Access denied. Admin privileges required.</string>
     <string name="admin_tab_users">All Users</string>
     <string name="admin_tab_payments">Payments</string>
     <string name="admin_tab_settings">All Settings</string>
@@ -472,6 +472,8 @@
     <string name="voip_record_meet_desc">Default folder: Music/PulseDial/Meet Call Recordings</string>
     <string name="voip_record_telegram_title">Telegram Call Recording</string>
     <string name="voip_record_telegram_desc">Default folder: Music/PulseDial/Telegram Call Recordings</string>
+    <string name="voip_record_instagram_title">Instagram Call Recording</string>
+    <string name="voip_record_instagram_desc">Default folder: Music/PulseDial/Instagram Call Recordings</string>
     <string name="voip_folder_select_btn">Select Folder</string>
     <string name="voip_folder_change_btn">Change Folder</string>
     <string name="voip_folder_reset_btn">Reset</string>
@@ -512,4 +514,95 @@
     <string name="admin_popup_ad_publish_btn">Publish / Update Ad</string>
     <string name="admin_popup_ad_published_toast">Custom Popup Ad published in real time!</string>
     <string name="admin_popup_ad_validation_error">Enter an Ad Title, Message, or Banner Image URL before enabling.</string>
+
+    <!-- Caller ID Identification & Location Popup -->
+    <string name="caller_id_popup_badge">Caller ID Identified</string>
+    <string name="caller_id_unknown_badge">Unknown Number • Caller ID</string>
+    <string name="caller_id_direction_incoming">Incoming Call</string>
+    <string name="caller_id_direction_outgoing">Outgoing Call</string>
+    <string name="caller_id_direction_active">Active Call</string>
+    <string name="caller_id_location_format">Location: %1$s</string>
+    <string name="caller_id_location_unknown">India / Standard Network</string>
+
+    <!-- Full Admin Control, 1x UTR Lock & Sub Days Adjustment -->
+    <string name="admin_utr_already_approved_once">UTR already approved (1x lock)</string>
+    <string name="admin_user_badge_admin">Admin</string>
+    <string name="admin_user_badge_super_admin">Super Admin</string>
+    <string name="admin_manage_display_name_hint">Display Name</string>
+    <string name="admin_manage_phone_hint">Phone / SIM Number</string>
+    <string name="admin_manage_sub_days_section">Subscription Days (+ Add / - Subtract)</string>
+    <string name="admin_manage_sub_days_delta_hint">Days (e.g. 15)</string>
+    <string name="admin_manage_add_days_btn">Add (+)</string>
+    <string name="admin_manage_sub_days_btn">Subtract (-)</string>
+    <string name="admin_manage_auto_record">Auto Call Recording Enabled</string>
+    <string name="admin_manage_reset_device">Reset Device Link (Allow re-binding)</string>
+    <string name="admin_manage_delegate_admin">Grant Admin Access (Delegated by Super Admin)</string>
+    <string name="admin_manage_super_admin_locked">Super Admin account (protected)</string>
+
+    <!-- Configurable Payment Gateways (Admin Controller & User Account) -->
+    <string name="admin_settings_section_gateways">Payment Gateways (UPI / Razorpay / PayU / Custom)</string>
+    <string name="admin_settings_gateways_note">Current UPI flow stays active by default. Enable Razorpay, PayU, or Custom Gateway anytime from here to activate online checkout buttons in Account.</string>
+    <string name="admin_gateway_enable_upi">Enable Direct UPI &amp; UTR Payment</string>
+    <string name="admin_gateway_enable_razorpay">Enable Razorpay Gateway</string>
+    <string name="admin_gateway_razorpay_key_hint">Razorpay Key ID (rzp_live_… / rzp_test_…)</string>
+    <string name="admin_gateway_razorpay_link_hint">Razorpay Payment Page / Checkout Link (https://…)</string>
+    <string name="admin_gateway_enable_payu">Enable PayU Gateway</string>
+    <string name="admin_gateway_payu_key_hint">PayU Merchant Key</string>
+    <string name="admin_gateway_payu_link_hint">PayU Payment Page / Checkout Link (https://…)</string>
+    <string name="admin_gateway_enable_custom">Enable Custom Payment Gateway</string>
+    <string name="admin_gateway_custom_name_hint">Custom Gateway Button Label (e.g. Stripe / PhonePe PG)</string>
+    <string name="admin_gateway_custom_url_hint">Custom Gateway Checkout URL (https://…)</string>
+    <string name="admin_gateway_validation_error">Keep at least one payment method enabled, and enter a valid Key ID or Payment Link URL for enabled gateways.</string>
+    <string name="btn_pay_razorpay">Pay via Razorpay • ₹%1$d/month</string>
+    <string name="btn_pay_payu">Pay via PayU • ₹%1$d/month</string>
+    <string name="btn_pay_custom_gateway">Pay via %1$s • ₹%2$d/month</string>
+    <string name="gateway_confirm_title">Confirm %1$s Payment (₹%2$d)</string>
+    <string name="gateway_confirm_message">Complete ₹%1$d payment via %2$s and enter your Payment / Transaction ID below for confirmation.</string>
+    <string name="gateway_txn_hint">Payment / Transaction ID</string>
+    <string name="gateway_txn_required">Please enter the payment transaction ID</string>
+
+    <!-- Save Contact to Gmail / Phone -->
+    <string name="save_contact_account_label">Save contact to account</string>
+    <string name="save_contact_phone_storage">Phone Storage (Local)</string>
+    <string name="save_contact_gmail_format">Gmail (%1$s)</string>
+
+    <!-- Dual SIM Calling, Default SIM & In-Call Switch SIM -->
+    <string name="setting_default_sim_title">Default Calling SIM</string>
+    <string name="setting_default_sim_always_ask">Always Ask (Choose SIM on each call)</string>
+    <string name="setting_default_sim_single">Single SIM active: %1$s</string>
+    <string name="setting_default_sim_no_sim">Default system calling account (Always Ask)</string>
+    <string name="setting_default_sim_selected">Using %1$s automatically for outgoing calls</string>
+    <string name="setting_default_sim_dialog_title">Choose Default Calling SIM</string>
+    <string name="setting_default_sim_updated">Default Calling SIM set to: %1$s</string>
+    <string name="sim_chooser_dialog_title">Select SIM to Call %1$s</string>
+    <string name="sim_chooser_remember_default">Set as Default Calling SIM</string>
+    <string name="sim_chooser_cancel">Cancel</string>
+    <string name="dialpad_sim_chip_default">SIM: Ask</string>
+    <string name="dialpad_sim_chip_format">Via %1$s</string>
+    <string name="incall_switch_sim">Switch SIM</string>
+    <string name="incall_switch_sim_to_format">Use %1$s</string>
+    <string name="incall_switching_sim_status">Switching to %1$s…</string>
+    <string name="incall_switch_sim_toast">Zero balance / weak line? Redialing via %1$s…</string>
+    <string name="incall_switch_sim_unavailable">Dual SIM switching requires 2 active calling SIMs</string>
+    <string name="incall_sim_badge_fallback">SIM</string>
+    <string name="incall_sim_slot_label">SIM %1$d</string>
+
+    <!-- Admin Panel: New/Old Subscribers & +/- Day Adjustment -->
+    <string name="admin_filter_radio_old_expired">Old / Expired</string>
+    <string name="admin_filter_radio_new_trial">New / Trial</string>
+    <string name="admin_old_expired_banner_title">Old &amp; Expired Users</string>
+    <string name="admin_old_expired_banner_desc">Expired trials and ended plans. Add +7d/+30d to reactivate or reduce/manage accounts below.</string>
+    <string name="admin_new_trial_banner_title">New &amp; Free Trial Users</string>
+    <string name="admin_new_trial_banner_desc">Users currently on their free trial. Add (+) or subtract (-) remaining days instantly in real time.</string>
+    <string name="admin_old_expired_empty">No old or expired users found.</string>
+    <string name="admin_new_trial_empty">No new or active trial users found.</string>
+    <string name="admin_old_expired_query_count">%1$d old / expired users</string>
+    <string name="admin_new_trial_query_count">%1$d new / trial users</string>
+    <string name="admin_day_minus_7">-7d</string>
+    <string name="admin_day_minus_1">-1d</string>
+    <string name="admin_day_plus_7">+7d</string>
+    <string name="admin_day_plus_30">+30d</string>
+    <string name="admin_days_adjusted_toast">Updated %1$s by %2$s (%3$s)</string>
+    <string name="admin_manage_access_days_section">New &amp; Old User Days (+ Add / - Reduce)</string>
+    <string name="admin_manage_access_days_hint">Works for Pro subscribers, Old/Expired accounts, and New/Trial users without violating rules.</string>
 </resources>

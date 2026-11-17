@@ -66,7 +66,22 @@ class DialerPreferences(context: Context) {
             prefs.getString(KEY_CONFIG_FORCE_THEME, AppConfig.THEME_USER).orEmpty(),
             prefs.getBoolean(KEY_HIDE_SUBSCRIPTION_UI, false).toString(),
             prefs.getString(KEY_DEVICE_ID_HASH, "").orEmpty(),
-            prefs.getString(KEY_USER_EMAIL, "").orEmpty()
+            prefs.getString(KEY_USER_EMAIL, "").orEmpty(),
+            prefs.getBoolean(KEY_IS_LOGGED_IN, false).toString(),
+            prefs.getString(KEY_LOGGED_IN_USER_ID, "").orEmpty(),
+            prefs.getString(KEY_RAW_ANDROID_ID, "").orEmpty(),
+            prefs.getBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false).toString(),
+            prefs.getString(KEY_DELEGATED_ADMIN_GRANTED_BY, "").orEmpty(),
+            prefs.getBoolean(KEY_CONFIG_ENABLE_UPI, true).toString(),
+            prefs.getBoolean(KEY_CONFIG_ENABLE_RAZORPAY, false).toString(),
+            prefs.getString(KEY_CONFIG_RAZORPAY_KEY_ID, "").orEmpty(),
+            prefs.getString(KEY_CONFIG_RAZORPAY_LINK, "").orEmpty(),
+            prefs.getBoolean(KEY_CONFIG_ENABLE_PAYU, false).toString(),
+            prefs.getString(KEY_CONFIG_PAYU_KEY, "").orEmpty(),
+            prefs.getString(KEY_CONFIG_PAYU_LINK, "").orEmpty(),
+            prefs.getBoolean(KEY_CONFIG_ENABLE_CUSTOM_GW, false).toString(),
+            prefs.getString(KEY_CONFIG_CUSTOM_GW_NAME, "").orEmpty(),
+            prefs.getString(KEY_CONFIG_CUSTOM_GW_URL, "").orEmpty()
         ).joinToString("|")
     }
 
@@ -80,10 +95,26 @@ class DialerPreferences(context: Context) {
         }
     }
 
+    fun stripForgedPrivilegesOnTamper() {
+        val now = System.currentTimeMillis()
+        prefs.edit {
+            putBoolean(KEY_IS_PREMIUM_USER, false)
+            putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
+            putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
+            putString(KEY_DELEGATED_ADMIN_GRANTED_BY, "")
+            putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, true)
+            putBoolean(KEY_ADMIN_BLOCKED_USER, false)
+            putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0)
+            putLong(KEY_LAST_SEEN_TIME, maxOf(prefs.getLong(KEY_LAST_SEEN_TIME, 0L), now))
+            putBoolean(KEY_TAMPER_DETECTED, true)
+        }
+        refreshIntegritySeal()
+    }
+
     /**
      * Verifies cryptographic HMAC integrity of local preferences. If someone manually edited
-     * SharedPreferences XML to fake isPremiumUser=true or roll back trial timestamps, immediately
-     * invalidates local entitlement and forces cloud verification.
+     * SharedPreferences XML to fake isPremiumUser=true, delegatedAdmin=true, or roll back trial
+     * timestamps, immediately invalidates local entitlement and forces cloud verification.
      */
     fun verifyIntegrityOrReset(): Boolean {
         val storedSig = prefs.getString(KEY_INTEGRITY_SIG, null)
@@ -99,17 +130,7 @@ class DialerPreferences(context: Context) {
         }
         val valid = EntitlementIntegrity.verifySignature(appContext, payload, storedSig)
         if (!valid) {
-            val now = System.currentTimeMillis()
-            prefs.edit {
-                putBoolean(KEY_IS_PREMIUM_USER, false)
-                putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
-                putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, true)
-                putBoolean(KEY_ADMIN_BLOCKED_USER, false)
-                putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0)
-                putLong(KEY_LAST_SEEN_TIME, maxOf(prefs.getLong(KEY_LAST_SEEN_TIME, 0L), now))
-                putBoolean(KEY_TAMPER_DETECTED, true)
-            }
-            refreshIntegritySeal()
+            stripForgedPrivilegesOnTamper()
         } else {
             synchronized(sealCacheLock) {
                 cachedVerifiedPayload = payload
@@ -150,28 +171,37 @@ class DialerPreferences(context: Context) {
     var deviceIdHash: String
         get() = prefs.getString(KEY_DEVICE_ID_HASH, "").orEmpty()
         set(value) {
+            if (deviceIdHash == value) return
             prefs.edit { putString(KEY_DEVICE_ID_HASH, value) }
             refreshIntegritySeal()
         }
 
     var shortDeviceTag: String
         get() = prefs.getString(KEY_SHORT_DEVICE_TAG, "").orEmpty()
-        set(value) = prefs.edit { putString(KEY_SHORT_DEVICE_TAG, value) }
+        set(value) {
+            if (shortDeviceTag == value) return
+            prefs.edit { putString(KEY_SHORT_DEVICE_TAG, value) }
+        }
 
     var trialBlockedByDevice: Boolean
         get() = prefs.getBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, false)
         set(value) {
+            if (trialBlockedByDevice == value) return
             prefs.edit { putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, value) }
             refreshIntegritySeal()
         }
 
     var accountSwitchCount: Long
         get() = prefs.getLong(KEY_ACCOUNT_SWITCH_COUNT, 0L)
-        set(value) = prefs.edit { putLong(KEY_ACCOUNT_SWITCH_COUNT, value) }
+        set(value) {
+            if (accountSwitchCount == value) return
+            prefs.edit { putLong(KEY_ACCOUNT_SWITCH_COUNT, value) }
+        }
 
     var adminBlockedUser: Boolean
         get() = prefs.getBoolean(KEY_ADMIN_BLOCKED_USER, false)
         set(value) {
+            if (adminBlockedUser == value) return
             prefs.edit { putBoolean(KEY_ADMIN_BLOCKED_USER, value) }
             refreshIntegritySeal()
         }
@@ -179,7 +209,9 @@ class DialerPreferences(context: Context) {
     var adminBonusTrialDays: Int
         get() = prefs.getInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0).coerceAtLeast(0)
         set(value) {
-            prefs.edit { putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, value.coerceAtLeast(0)) }
+            val clean = value.coerceAtLeast(0)
+            if (adminBonusTrialDays == clean) return
+            prefs.edit { putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, clean) }
             refreshIntegritySeal()
         }
 
@@ -268,6 +300,76 @@ class DialerPreferences(context: Context) {
             refreshIntegritySeal()
         }
 
+    var enableUpiGateway: Boolean
+        get() = prefs.getBoolean(KEY_CONFIG_ENABLE_UPI, true)
+        set(value) {
+            prefs.edit { putBoolean(KEY_CONFIG_ENABLE_UPI, value) }
+            refreshIntegritySeal()
+        }
+
+    var enableRazorpayGateway: Boolean
+        get() = prefs.getBoolean(KEY_CONFIG_ENABLE_RAZORPAY, false)
+        set(value) {
+            prefs.edit { putBoolean(KEY_CONFIG_ENABLE_RAZORPAY, value) }
+            refreshIntegritySeal()
+        }
+
+    var configuredRazorpayKeyId: String
+        get() = prefs.getString(KEY_CONFIG_RAZORPAY_KEY_ID, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_RAZORPAY_KEY_ID, value.trim().take(100)) }
+            refreshIntegritySeal()
+        }
+
+    var configuredRazorpayPaymentLink: String
+        get() = prefs.getString(KEY_CONFIG_RAZORPAY_LINK, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_RAZORPAY_LINK, value.trim().take(500)) }
+            refreshIntegritySeal()
+        }
+
+    var enablePayuGateway: Boolean
+        get() = prefs.getBoolean(KEY_CONFIG_ENABLE_PAYU, false)
+        set(value) {
+            prefs.edit { putBoolean(KEY_CONFIG_ENABLE_PAYU, value) }
+            refreshIntegritySeal()
+        }
+
+    var configuredPayuMerchantKey: String
+        get() = prefs.getString(KEY_CONFIG_PAYU_KEY, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_PAYU_KEY, value.trim().take(100)) }
+            refreshIntegritySeal()
+        }
+
+    var configuredPayuPaymentLink: String
+        get() = prefs.getString(KEY_CONFIG_PAYU_LINK, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_PAYU_LINK, value.trim().take(500)) }
+            refreshIntegritySeal()
+        }
+
+    var enableCustomGateway: Boolean
+        get() = prefs.getBoolean(KEY_CONFIG_ENABLE_CUSTOM_GW, false)
+        set(value) {
+            prefs.edit { putBoolean(KEY_CONFIG_ENABLE_CUSTOM_GW, value) }
+            refreshIntegritySeal()
+        }
+
+    var configuredCustomGatewayName: String
+        get() = prefs.getString(KEY_CONFIG_CUSTOM_GW_NAME, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_CUSTOM_GW_NAME, value.trim().take(80)) }
+            refreshIntegritySeal()
+        }
+
+    var configuredCustomGatewayUrl: String
+        get() = prefs.getString(KEY_CONFIG_CUSTOM_GW_URL, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_CUSTOM_GW_URL, value.trim().take(500)) }
+            refreshIntegritySeal()
+        }
+
     fun getEffectiveTrialDays(): Int = (configuredTrialDays + adminBonusTrialDays).coerceIn(1, 4000)
 
     fun getEffectiveTrialDurationMillis(): Long = getEffectiveTrialDays().toLong() * ONE_DAY_MILLIS
@@ -291,6 +393,16 @@ class DialerPreferences(context: Context) {
             putString(KEY_CONFIG_ANNOUNCEMENT, config.announcementText.trim())
             putString(KEY_CONFIG_FORCE_THEME, cleanTheme)
             putBoolean(KEY_CONFIG_HIDE_SUBSCRIPTION_UI, config.hideSubscriptionUI)
+            putBoolean(KEY_CONFIG_ENABLE_UPI, config.enableUpiGateway)
+            putBoolean(KEY_CONFIG_ENABLE_RAZORPAY, config.enableRazorpayGateway)
+            putString(KEY_CONFIG_RAZORPAY_KEY_ID, config.razorpayKeyId.trim().take(100))
+            putString(KEY_CONFIG_RAZORPAY_LINK, config.razorpayPaymentLink.trim().take(500))
+            putBoolean(KEY_CONFIG_ENABLE_PAYU, config.enablePayuGateway)
+            putString(KEY_CONFIG_PAYU_KEY, config.payuMerchantKey.trim().take(100))
+            putString(KEY_CONFIG_PAYU_LINK, config.payuPaymentLink.trim().take(500))
+            putBoolean(KEY_CONFIG_ENABLE_CUSTOM_GW, config.enableCustomGateway)
+            putString(KEY_CONFIG_CUSTOM_GW_NAME, config.customGatewayName.trim().take(80))
+            putString(KEY_CONFIG_CUSTOM_GW_URL, config.customGatewayUrl.trim().take(500))
             if (!prefs.getBoolean(KEY_USER_CUSTOM_DIALPAD_TONES, false)) {
                 putBoolean(KEY_DIALPAD_TONES, config.dialpadTonesDefault)
             }
@@ -453,27 +565,117 @@ class DialerPreferences(context: Context) {
             putBoolean(KEY_ADMIN_BLOCKED_USER, false)
             putBoolean(KEY_HIDE_SUBSCRIPTION_UI, false)
             putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0)
+            putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
+            putString(KEY_DELEGATED_ADMIN_GRANTED_BY, "")
             putBoolean(KEY_TAMPER_DETECTED, false)
             remove(KEY_USER_EMAIL)
         }
         refreshIntegritySeal()
     }
 
+    val delegatedAdminAuthorized: Boolean
+        get() = prefs.getBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
+
+    val delegatedAdminGrantedBy: String
+        get() = prefs.getString(KEY_DELEGATED_ADMIN_GRANTED_BY, "").orEmpty()
+
+    fun setDelegatedAdmin(authorized: Boolean, grantedBy: String) {
+        val cleanGrantedBy = grantedBy.trim()
+        val effectiveAuth = authorized && UpiPaymentHelper.isSuperAdminEmail(cleanGrantedBy)
+        val effectiveGrantersEmail = if (effectiveAuth) cleanGrantedBy else ""
+        if (delegatedAdminAuthorized == effectiveAuth &&
+            delegatedAdminGrantedBy.equals(effectiveGrantersEmail, ignoreCase = true)
+        ) {
+            return
+        }
+        prefs.edit {
+            putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, effectiveAuth)
+            putString(KEY_DELEGATED_ADMIN_GRANTED_BY, effectiveGrantersEmail)
+        }
+        refreshIntegritySeal()
+    }
+
+    fun applyEnforcementBatch(
+        isPremium: Boolean,
+        isBlocked: Boolean,
+        subscriptionExpiresAtMs: Long,
+        installDateMs: Long? = null,
+        bonusTrialDays: Int? = null,
+        hideSubscriptionUi: Boolean? = null,
+        delegatedAdmin: Boolean? = null,
+        adminGrantedBy: String? = null
+    ) {
+        val cleanExp = subscriptionExpiresAtMs.coerceAtLeast(0L)
+        val cleanBonus = bonusTrialDays?.coerceAtLeast(0)
+        val cleanInstall = installDateMs?.takeIf { it > 0L }
+        val cleanGrantedBy = adminGrantedBy?.trim().orEmpty()
+        val cleanDelegated = if (delegatedAdmin != null) {
+            delegatedAdmin && UpiPaymentHelper.isSuperAdminEmail(cleanGrantedBy)
+        } else null
+        val changed = (isPremiumUser != isPremium) ||
+            (adminBlockedUser != isBlocked) ||
+            (this.subscriptionExpiresAtMs != cleanExp) ||
+            (cleanInstall != null && firstLaunchTime != cleanInstall) ||
+            (cleanBonus != null && adminBonusTrialDays != cleanBonus) ||
+            (hideSubscriptionUi != null && prefs.getBoolean(KEY_HIDE_SUBSCRIPTION_UI, false) != hideSubscriptionUi) ||
+            (cleanDelegated != null && (delegatedAdminAuthorized != cleanDelegated ||
+                !delegatedAdminGrantedBy.equals(if (cleanDelegated) cleanGrantedBy else "", ignoreCase = true)))
+        if (!changed) return
+
+        prefs.edit {
+            putBoolean(KEY_IS_PREMIUM_USER, isPremium)
+            putBoolean(KEY_ADMIN_BLOCKED_USER, isBlocked)
+            putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, cleanExp)
+            if (cleanInstall != null) {
+                putLong(KEY_FIRST_LAUNCH_TIME, cleanInstall)
+                putLong(KEY_LAST_SEEN_TIME, maxOf(prefs.getLong(KEY_LAST_SEEN_TIME, 0L), cleanInstall))
+            }
+            if (cleanBonus != null) {
+                putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, cleanBonus)
+            }
+            if (hideSubscriptionUi != null) {
+                putBoolean(KEY_HIDE_SUBSCRIPTION_UI, hideSubscriptionUi)
+            }
+            if (cleanDelegated != null) {
+                putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, cleanDelegated)
+                putString(KEY_DELEGATED_ADMIN_GRANTED_BY, if (cleanDelegated) cleanGrantedBy else "")
+            }
+        }
+        refreshIntegritySeal()
+    }
+
     var isLoggedIn: Boolean
         get() = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
-        set(value) = prefs.edit { putBoolean(KEY_IS_LOGGED_IN, value) }
+        set(value) {
+            if (isLoggedIn == value) return
+            prefs.edit { putBoolean(KEY_IS_LOGGED_IN, value) }
+            refreshIntegritySeal()
+        }
 
     var loggedInUserId: String
         get() = prefs.getString(KEY_LOGGED_IN_USER_ID, "").orEmpty()
-        set(value) = prefs.edit { putString(KEY_LOGGED_IN_USER_ID, value.trim()) }
+        set(value) {
+            val clean = value.trim()
+            if (loggedInUserId == clean) return
+            prefs.edit { putString(KEY_LOGGED_IN_USER_ID, clean) }
+            refreshIntegritySeal()
+        }
 
     var rawAndroidId: String
         get() = prefs.getString(KEY_RAW_ANDROID_ID, "").orEmpty()
-        set(value) = prefs.edit { putString(KEY_RAW_ANDROID_ID, value.trim()) }
+        set(value) {
+            val clean = value.trim()
+            if (rawAndroidId == clean) return
+            prefs.edit { putString(KEY_RAW_ANDROID_ID, clean) }
+            refreshIntegritySeal()
+        }
 
     var initialDeviceRegisteredInRtdb: Boolean
         get() = prefs.getBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, false)
-        set(value) = prefs.edit { putBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, value) }
+        set(value) {
+            if (initialDeviceRegisteredInRtdb == value) return
+            prefs.edit { putBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, value) }
+        }
 
     var autoCallRecording: Boolean
         get() = prefs.getBoolean(KEY_AUTO_RECORDING, false)
@@ -559,6 +761,7 @@ class DialerPreferences(context: Context) {
     var isPremiumUser: Boolean
         get() = prefs.getBoolean(KEY_IS_PREMIUM_USER, false)
         set(value) {
+            if (isPremiumUser == value) return
             prefs.edit { putBoolean(KEY_IS_PREMIUM_USER, value) }
             refreshIntegritySeal()
         }
@@ -566,28 +769,41 @@ class DialerPreferences(context: Context) {
     var subscriptionExpiresAtMs: Long
         get() = prefs.getLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
         set(value) {
-            prefs.edit { putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, value.coerceAtLeast(0L)) }
+            val clean = value.coerceAtLeast(0L)
+            if (subscriptionExpiresAtMs == clean) return
+            prefs.edit { putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, clean) }
             refreshIntegritySeal()
         }
 
     var userName: String
         get() = prefs.getString(KEY_USER_NAME, DEFAULT_USER_NAME) ?: DEFAULT_USER_NAME
-        set(value) = prefs.edit { putString(KEY_USER_NAME, value.ifBlank { DEFAULT_USER_NAME }) }
+        set(value) {
+            val clean = value.ifBlank { DEFAULT_USER_NAME }
+            if (userName == clean) return
+            prefs.edit { putString(KEY_USER_NAME, clean) }
+        }
 
     var userEmail: String
         get() = prefs.getString(KEY_USER_EMAIL, "").orEmpty()
         set(value) {
-            prefs.edit { putString(KEY_USER_EMAIL, value.trim()) }
+            val clean = value.trim()
+            if (userEmail == clean) return
+            prefs.edit { putString(KEY_USER_EMAIL, clean) }
             refreshIntegritySeal()
         }
 
     var userPhoneNumber: String
         get() = prefs.getString(KEY_USER_NUMBER, DEFAULT_USER_NUMBER) ?: DEFAULT_USER_NUMBER
-        set(value) = prefs.edit { putString(KEY_USER_NUMBER, value.ifBlank { DEFAULT_USER_NUMBER }) }
+        set(value) {
+            val clean = value.ifBlank { DEFAULT_USER_NUMBER }
+            if (userPhoneNumber == clean) return
+            prefs.edit { putString(KEY_USER_NUMBER, clean) }
+        }
 
     var configHideSubscriptionUi: Boolean
         get() = prefs.getBoolean(KEY_CONFIG_HIDE_SUBSCRIPTION_UI, false)
         set(value) {
+            if (configHideSubscriptionUi == value) return
             prefs.edit { putBoolean(KEY_CONFIG_HIDE_SUBSCRIPTION_UI, value) }
             refreshIntegritySeal()
         }
@@ -595,6 +811,7 @@ class DialerPreferences(context: Context) {
     var hideSubscriptionUi: Boolean
         get() = prefs.getBoolean(KEY_HIDE_SUBSCRIPTION_UI, false) || configHideSubscriptionUi
         set(value) {
+            if (prefs.getBoolean(KEY_HIDE_SUBSCRIPTION_UI, false) == value) return
             prefs.edit { putBoolean(KEY_HIDE_SUBSCRIPTION_UI, value) }
             refreshIntegritySeal()
         }
@@ -816,12 +1033,17 @@ class DialerPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_RECORD_TELEGRAM_CALLS, true)
         set(value) = prefs.edit { putBoolean(KEY_RECORD_TELEGRAM_CALLS, value) }
 
+    var recordInstagramCalls: Boolean
+        get() = prefs.getBoolean(KEY_RECORD_INSTAGRAM_CALLS, true)
+        set(value) = prefs.edit { putBoolean(KEY_RECORD_INSTAGRAM_CALLS, value) }
+
     fun isVoipSourceEnabled(source: com.example.recording.CallRecordingSource): Boolean = when (source) {
         com.example.recording.CallRecordingSource.CELLULAR -> autoCallRecording
         com.example.recording.CallRecordingSource.WHATSAPP -> recordWhatsappCalls
         com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS -> recordWhatsappBusinessCalls
         com.example.recording.CallRecordingSource.GOOGLE_MEET -> recordMeetCalls
         com.example.recording.CallRecordingSource.TELEGRAM -> recordTelegramCalls
+        com.example.recording.CallRecordingSource.INSTAGRAM -> recordInstagramCalls
     }
 
     /**
@@ -841,6 +1063,11 @@ class DialerPreferences(context: Context) {
         if (key.isEmpty()) return
         prefs.edit { putLong(KEY_FOLLOW_UP_COOLDOWN_PREFIX + key, nowMs) }
     }
+
+    /** Preferred PhoneAccountHandle ID for Dual SIM outgoing calls (empty = Always Ask). */
+    var preferredSimAccountId: String
+        get() = prefs.getString(KEY_PREFERRED_SIM_ACCOUNT_ID, "").orEmpty()
+        set(value) = prefs.edit { putString(KEY_PREFERRED_SIM_ACCOUNT_ID, value.trim()) }
 
     private fun normalizePhone(raw: String): String = raw.filter { it.isDigit() }
 
@@ -876,6 +1103,16 @@ class DialerPreferences(context: Context) {
         const val KEY_CONFIG_ANNOUNCEMENT = "config_announcement"
         const val KEY_CONFIG_FORCE_THEME = "config_force_theme"
         const val KEY_CONFIG_HIDE_SUBSCRIPTION_UI = "config_hide_subscription_ui"
+        const val KEY_CONFIG_ENABLE_UPI = "config_enable_upi"
+        const val KEY_CONFIG_ENABLE_RAZORPAY = "config_enable_razorpay"
+        const val KEY_CONFIG_RAZORPAY_KEY_ID = "config_razorpay_key_id"
+        const val KEY_CONFIG_RAZORPAY_LINK = "config_razorpay_link"
+        const val KEY_CONFIG_ENABLE_PAYU = "config_enable_payu"
+        const val KEY_CONFIG_PAYU_KEY = "config_payu_key"
+        const val KEY_CONFIG_PAYU_LINK = "config_payu_link"
+        const val KEY_CONFIG_ENABLE_CUSTOM_GW = "config_enable_custom_gw"
+        const val KEY_CONFIG_CUSTOM_GW_NAME = "config_custom_gw_name"
+        const val KEY_CONFIG_CUSTOM_GW_URL = "config_custom_gw_url"
         const val KEY_HIDE_SUBSCRIPTION_UI = "hide_subscription_ui"
         private const val KEY_DISMISSED_POPUP_IDS = "dismissed_popup_ids"
         private const val KEY_DYNAMIC_TOGGLE_PREFIX = "dynamic_toggle_"
@@ -893,6 +1130,8 @@ class DialerPreferences(context: Context) {
         const val KEY_IS_LOGGED_IN = "isLoggedIn"
         const val KEY_LOGGED_IN_USER_ID = "userId"
         const val KEY_RAW_ANDROID_ID = "deviceId"
+        const val KEY_DELEGATED_ADMIN_AUTHORIZED = "delegated_admin_authorized"
+        const val KEY_DELEGATED_ADMIN_GRANTED_BY = "delegated_admin_granted_by"
         private const val KEY_INITIAL_DEVICE_REGISTERED_RTDB = "initial_device_registered_rtdb"
         private const val DELIMITER = "|||"
 
@@ -911,6 +1150,8 @@ class DialerPreferences(context: Context) {
         const val KEY_RECORD_WHATSAPP_BUSINESS_CALLS = "record_whatsapp_business_calls"
         const val KEY_RECORD_MEET_CALLS = "record_meet_calls"
         const val KEY_RECORD_TELEGRAM_CALLS = "record_telegram_calls"
+        const val KEY_RECORD_INSTAGRAM_CALLS = "record_instagram_calls"
+        const val KEY_PREFERRED_SIM_ACCOUNT_ID = "preferred_sim_account_id"
 
         const val TRIAL_DAYS = 7
         const val MONTHLY_SUBSCRIPTION_DAYS = 30
@@ -924,7 +1165,7 @@ class DialerPreferences(context: Context) {
         private const val DEFAULT_USER_NAME = "PulseDial User"
         const val DEFAULT_USER_NUMBER = "+91 98765 43210"
 
-        private const val LAST_SEEN_PERSIST_INTERVAL_MS = 30_000L
+        private const val LAST_SEEN_PERSIST_INTERVAL_MS = 60_000L
         private val sealCacheLock = Any()
 
         @Volatile

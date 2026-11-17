@@ -1,13 +1,16 @@
 package com.example.ui.admin
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.example.R
+import com.example.data.DialerPreferences
 import com.example.data.firebase.AdminRepository
+import com.example.data.firebase.AdminUserAccountStatus
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.UserEntitlement
 import com.example.databinding.ItemAdminExpiringUserBinding
@@ -16,14 +19,26 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Simple highlighted list adapter for the Admin "Expiring (≤7d)" view backed directly by
- * Firestore range queries on UserEntitlement.subscriptionExpiresAt.
+ * Adapter for the Admin Subscribers & New/Old Users tab covering:
+ * - Expiring Soon (<=7d Pro)
+ * - All Active Pro Subscribers
+ * - Old / Expired Users
+ * - New / Free Trial Users
  */
 class AdminExpiringUsersAdapter(
     private val onRenewMonthClick: (UserEntitlement) -> Unit,
     private val onManageClick: (UserEntitlement) -> Unit,
-    private val onRevokeProClick: (UserEntitlement) -> Unit
+    private val onRevokeProClick: (UserEntitlement) -> Unit,
+    private val onAdjustDaysClick: (UserEntitlement, Long) -> Unit = { _, _ -> }
 ) : ListAdapter<UserEntitlement, AdminExpiringUsersAdapter.ExpiringViewHolder>(DiffCallback) {
+
+    var trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS
+        set(value) {
+            if (field != value) {
+                field = value
+                notifyDataSetChanged()
+            }
+        }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ExpiringViewHolder {
         val binding = ItemAdminExpiringUserBinding.inflate(
@@ -44,7 +59,9 @@ class AdminExpiringUsersAdapter(
 
         fun bind(item: UserEntitlement) {
             val ctx = binding.root.context
+            val accountStatus = AdminRepository.resolveUserAccountStatus(item, trialDaysConfig)
             val daysLeft = AdminRepository.getSubscriptionRemainingDays(item)
+            val trialDaysLeft = AdminRepository.getRemainingDaysForUser(item, trialDaysConfig)
             val expiryMs = AdminRepository.resolveEffectiveExpiryMs(item)
             val formattedDate = if (expiryMs > 0L) {
                 SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(expiryMs))
@@ -52,11 +69,48 @@ class AdminExpiringUsersAdapter(
                 "—"
             }
 
-            // Tiered highlight:
-            //   <= 2 days -> urgent red error highlight
-            //   3..7 days -> warm amber warning highlight
-            //   > 7 days or unlimited -> healthy primary active subscriber highlight
             when {
+                accountStatus == AdminUserAccountStatus.EXPIRED -> {
+                    binding.cardExpiringUser.setCardBackgroundColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_surface)
+                    )
+                    binding.cardExpiringUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
+                    binding.tvExpiringUrgencyLabel.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_error)
+                    )
+                    binding.tvExpiringUrgencyLabel.text = if (item.isPremiumUser) {
+                        ctx.getString(R.string.admin_user_status_sub_expired)
+                    } else {
+                        ctx.getString(R.string.admin_user_status_expired)
+                    }
+                    binding.chipExpiringDaysLeft.setText(R.string.admin_user_status_expired)
+                    binding.chipExpiringDaysLeft.setChipBackgroundColorResource(R.color.md_theme_errorContainer)
+                    binding.chipExpiringDaysLeft.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer)
+                    )
+                }
+                !item.isPremiumUser -> {
+                    binding.cardExpiringUser.setCardBackgroundColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_surface)
+                    )
+                    binding.cardExpiringUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_tertiary)
+                    binding.tvExpiringUrgencyLabel.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_onSurface)
+                    )
+                    binding.tvExpiringUrgencyLabel.text = if (trialDaysLeft == 1) {
+                        ctx.getString(R.string.admin_expiring_trial_one_day)
+                    } else {
+                        ctx.getString(R.string.admin_expiring_trial_banner, trialDaysLeft)
+                    }
+                    binding.chipExpiringDaysLeft.text = ctx.getString(
+                        R.string.admin_user_status_trial,
+                        trialDaysLeft
+                    )
+                    binding.chipExpiringDaysLeft.setChipBackgroundColorResource(R.color.md_theme_primaryContainer)
+                    binding.chipExpiringDaysLeft.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.md_theme_onPrimaryContainer)
+                    )
+                }
                 daysLeft in 1..2 -> {
                     binding.cardExpiringUser.setCardBackgroundColor(
                         ContextCompat.getColor(ctx, R.color.md_theme_errorContainer)
@@ -137,11 +191,25 @@ class AdminExpiringUsersAdapter(
                 }
                 if (isNotEmpty()) append(" • ")
                 append("Device: ").append(deviceTag)
+                if (item.bonusTrialDays > 0L) {
+                    append(" • Bonus: +").append(item.bonusTrialDays).append("d")
+                }
                 if (item.subscriptionProductId.isNotBlank()) {
                     append(" • Plan: ").append(item.subscriptionProductId)
                 }
             }
 
+            binding.btnExpiringRevoke.visibility = if (
+                item.isPremiumUser && accountStatus != AdminUserAccountStatus.EXPIRED
+            ) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+
+            binding.btnExpiringMinus7.setOnClickListener { onAdjustDaysClick(item, -7L) }
+            binding.btnExpiringMinus1.setOnClickListener { onAdjustDaysClick(item, -1L) }
+            binding.btnExpiringPlus7.setOnClickListener { onAdjustDaysClick(item, 7L) }
             binding.btnExpiringRenew.setOnClickListener { onRenewMonthClick(item) }
             binding.btnExpiringManage.setOnClickListener { onManageClick(item) }
             binding.btnExpiringRevoke.setOnClickListener { onRevokeProClick(item) }

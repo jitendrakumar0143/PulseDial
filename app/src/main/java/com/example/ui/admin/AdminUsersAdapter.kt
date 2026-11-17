@@ -8,10 +8,12 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.example.R
+import com.example.billing.UpiPaymentHelper
 import com.example.data.DialerPreferences
 import com.example.data.firebase.AdminRepository
 import com.example.data.firebase.AdminUserAccountStatus
 import com.example.data.firebase.DeviceIdentityProvider
+import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.UserEntitlement
 import com.example.databinding.ItemAdminUserBinding
 
@@ -26,10 +28,19 @@ class AdminUsersAdapter(
     private val onToggleBlockClick: (UserEntitlement) -> Unit,
     private val onManageClick: (UserEntitlement) -> Unit,
     private val onApproveUtrClick: (UserEntitlement) -> Unit = {},
-    private val onRejectUtrClick: (UserEntitlement) -> Unit = {}
+    private val onRejectUtrClick: (UserEntitlement) -> Unit = {},
+    private val onReduceDaysClick: (UserEntitlement) -> Unit = {}
 ) : ListAdapter<UserEntitlement, AdminUsersAdapter.UserViewHolder>(DiffCallback) {
 
     var trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS
+        set(value) {
+            if (field != value) {
+                field = value
+                notifyDataSetChanged()
+            }
+        }
+
+    var approvedUtrKeys: Set<String> = emptySet()
         set(value) {
             if (field != value) {
                 field = value
@@ -56,7 +67,15 @@ class AdminUsersAdapter(
 
         fun bind(item: UserEntitlement) {
             val ctx = binding.root.context
-            binding.tvAdminUserName.text = item.displayName.ifBlank { ctx.getString(R.string.account_default_name) }
+            val baseName = item.displayName.ifBlank { ctx.getString(R.string.account_default_name) }
+            val isSuperAdmin = UpiPaymentHelper.isSuperAdminEmail(item.email)
+            val isDelegatedAdmin = !isSuperAdmin &&
+                UpiPaymentHelper.isDelegatedAdminAuthorized(item.isAdmin, item.adminGrantedBy)
+            binding.tvAdminUserName.text = when {
+                isSuperAdmin -> "$baseName [${ctx.getString(R.string.admin_user_badge_super_admin)}]"
+                isDelegatedAdmin -> "$baseName [${ctx.getString(R.string.admin_user_badge_admin)}]"
+                else -> baseName
+            }
             binding.tvAdminUserEmail.text = item.email.ifBlank { item.userId }
 
             val status = AdminRepository.resolveUserAccountStatus(item, trialDaysConfig)
@@ -234,7 +253,16 @@ class AdminUsersAdapter(
                 binding.tvAdminUserNote.visibility = View.GONE
             }
 
-            binding.layoutAdminUserUtrActions.visibility = if (isPendingUtr || item.paymentRefId.isNotBlank()) {
+            val canonicalUtr = item.paymentRefId.trim().ifBlank { item.purchaseToken.trim() }
+            val utrKey = PaymentRepository.normalizeUtrKey(canonicalUtr)
+            val isUtrLocked = utrKey.isNotEmpty() && approvedUtrKeys.contains(utrKey)
+            val showUtrContainer = isPendingUtr || item.paymentRefId.isNotBlank()
+            binding.layoutAdminUserUtrActions.visibility = if (showUtrContainer) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+            binding.btnUserApproveUtr.visibility = if (showUtrContainer && !isUtrLocked) {
                 View.VISIBLE
             } else {
                 View.GONE
@@ -265,6 +293,7 @@ class AdminUsersAdapter(
             binding.btnUserTogglePro.setOnClickListener { onToggleProClick(item) }
             binding.btnUserRenewMonth.setOnClickListener { onRenewMonthClick(item) }
             binding.btnUserExtendTrial.setOnClickListener { onExtendTrialClick(item) }
+            binding.btnUserReduceDays.setOnClickListener { onReduceDaysClick(item) }
             binding.btnUserToggleBlock.setOnClickListener { onToggleBlockClick(item) }
             binding.btnUserManage.setOnClickListener { onManageClick(item) }
             binding.root.setOnClickListener { onManageClick(item) }

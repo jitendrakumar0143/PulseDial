@@ -77,7 +77,7 @@ class NumberDetailBottomSheetFragment : BottomSheetDialogFragment() {
 
     private fun setupActions() {
         binding.actionDetailCall.setOnClickListener {
-            DialerHelper.placeCall(requireContext(), phoneNumber)
+            DialerHelper.initiateCall(activity ?: requireContext(), phoneNumber)
             dismiss()
         }
 

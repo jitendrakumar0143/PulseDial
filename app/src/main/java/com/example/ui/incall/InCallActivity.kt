@@ -28,7 +28,6 @@ import com.example.data.firebase.RealtimeSyncManager
 import com.example.databinding.ActivityInCallBinding
 import com.example.telecom.CallManager
 import com.example.telecom.CallUiState
-import com.example.ui.MainActivity
 import com.example.ui.dialpad.DialpadBottomSheetFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.delay
@@ -43,6 +42,8 @@ class InCallActivity : AppCompatActivity() {
     private var toneGenerator: ToneGenerator? = null
     private var isKeypadVisible = false
     private var dtmfDigitsEntered: String = ""
+    private var isCallerPopupDismissed = false
+    private var lastPopupCallerKey = ""
 
     private val recordingPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -83,6 +84,20 @@ class InCallActivity : AppCompatActivity() {
         startDurationTicker()
     }
 
+    private fun canUseInCallRecording(): Boolean {
+        return subscriptionManager.isSubscriptionActive() &&
+            com.example.billing.SubscriptionEnforcementService.canStartCallRecording(this) &&
+            prefs.allowCallRecordingConfig
+    }
+
+    private fun updateRecordButtonAvailability() {
+        val canRecord = canUseInCallRecording()
+        binding.btnIncallRecord.isEnabled = canRecord
+        binding.btnIncallRecord.isClickable = canRecord
+        binding.btnIncallRecord.alpha = if (canRecord) 1f else 0.45f
+        binding.tvIncallRecordLabel.alpha = if (canRecord) 1f else 0.45f
+    }
+
     private fun observeRealtimePolicy() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -95,6 +110,7 @@ class InCallActivity : AppCompatActivity() {
                         ) {
                             CallManager.stopRecordingIfNeeded()
                         }
+                        updateRecordButtonAvailability()
                     }
                 }
                 launch {
@@ -105,6 +121,7 @@ class InCallActivity : AppCompatActivity() {
                         ) {
                             CallManager.stopRecordingIfNeeded()
                         }
+                        updateRecordButtonAvailability()
                     }
                 }
             }
@@ -131,14 +148,8 @@ class InCallActivity : AppCompatActivity() {
             )
         }
         binding.btnIncallRecord.setOnClickListener {
-            if (!prefs.allowCallRecordingConfig) {
-                Toast.makeText(this, R.string.setting_recording_disabled_admin, Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            if (!subscriptionManager.isSubscriptionActive() ||
-                !com.example.billing.SubscriptionEnforcementService.canStartCallRecording(this)
-            ) {
-                showTrialExpiredPrompt()
+            if (!canUseInCallRecording()) {
+                updateRecordButtonAvailability()
                 return@setOnClickListener
             }
             val missing = buildList {
@@ -182,11 +193,21 @@ class InCallActivity : AppCompatActivity() {
                     .show(supportFragmentManager, ConferenceParticipantsSheet.TAG)
             }
         }
+        binding.btnIncallSwitchSim.setOnClickListener { triggerSwitchSim() }
+        binding.tvIncallSimBadge.setOnClickListener {
+            if (CallManager.uiState.value.canSwitchSim) {
+                triggerSwitchSim()
+            }
+        }
 
         binding.btnIncallEnd.setOnClickListener { CallManager.declineOrEndCall() }
         binding.btnIncomingAnswer.setOnClickListener { CallManager.answerCall() }
         binding.btnIncomingDecline.setOnClickListener { CallManager.declineOrEndCall() }
         binding.btnIncomingQuickDecline.setOnClickListener { showQuickDeclineChooser() }
+        binding.btnDismissCallerPopup.setOnClickListener {
+            isCallerPopupDismissed = true
+            binding.cardCallerIdPopup.visibility = View.GONE
+        }
 
         val dtmfMap = mapOf(
             binding.dtmf1 to ('1' to ToneGenerator.TONE_DTMF_1),
@@ -222,44 +243,6 @@ class InCallActivity : AppCompatActivity() {
         }
     }
 
-    private fun showTrialExpiredPrompt() {
-        val isDeviceReused = prefs.trialBlockedByDevice
-        val deviceTag = prefs.shortDeviceTag.ifBlank {
-            com.example.data.firebase.DeviceIdentityProvider.formatShortDeviceTag(
-                com.example.data.firebase.DeviceIdentityProvider.getDeviceHash(this)
-            )
-        }
-        val isMonthlyExpired = subscriptionManager.hasMonthlySubscriptionExpired() &&
-            !subscriptionManager.isPremiumActive()
-        val titleRes = when {
-            isMonthlyExpired -> R.string.paywall_locked_monthly_title
-            isDeviceReused -> R.string.trial_device_used_dialog_title
-            else -> R.string.trial_expired_dialog_title
-        }
-        val message = when {
-            isMonthlyExpired -> getString(
-                R.string.paywall_locked_monthly_message,
-                deviceTag,
-                prefs.configuredPriceInr,
-                prefs.configuredUpiVpa
-            )
-            isDeviceReused -> getString(R.string.trial_device_used_dialog_message, deviceTag)
-            else -> getString(R.string.trial_expired_dialog_message)
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(titleRes)
-            .setMessage(message)
-            .setPositiveButton(R.string.trial_expired_dialog_upgrade) { _, _ ->
-                val intent = Intent(this, MainActivity::class.java).apply {
-                    putExtra(MainActivity.EXTRA_OPEN_ACCOUNT_TAB, true)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-                startActivity(intent)
-            }
-            .setNegativeButton(R.string.trial_expired_dialog_later, null)
-            .show()
-    }
-
     private fun showQuickDeclineChooser() {
         val responses = prefs.getQuickDeclineResponses().toTypedArray()
         MaterialAlertDialogBuilder(this)
@@ -271,11 +254,33 @@ class InCallActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun triggerSwitchSim() {
+        val targetLabel = CallManager.uiState.value.alternateSimLabel
+            .ifBlank { getString(R.string.incall_sim_badge_fallback) }
+        val switched = CallManager.switchSimToAlternate(this)
+        if (switched) {
+            Toast.makeText(
+                this,
+                getString(R.string.incall_switch_sim_toast, targetLabel),
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            Toast.makeText(this, R.string.incall_switch_sim_unavailable, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun observeCallState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 CallManager.uiState.collect { state ->
                     if (!state.hasActiveCall) {
+                        if (state.isSwitchingSim || CallManager.isSimSwitchInProgress()) {
+                            val targetLabel = state.alternateSimLabel
+                                .ifBlank { getString(R.string.incall_sim_badge_fallback) }
+                            binding.tvIncallStatus.text =
+                                getString(R.string.incall_switching_sim_status, targetLabel)
+                            return@collect
+                        }
                         if (!isFinishing) finish()
                         return@collect
                     }
@@ -319,9 +324,65 @@ class InCallActivity : AppCompatActivity() {
             displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
         }
 
+        val resolvedLocation = state.callerLocation.trim()
+        binding.tvIncallLocation.text = resolvedLocation
+        binding.tvIncallLocation.visibility =
+            if (!state.isConference && resolvedLocation.isNotBlank()) View.VISIBLE else View.GONE
+
+        val popupKey = "${state.callerNumber}|${state.callState == Call.STATE_RINGING}"
+        if (popupKey != lastPopupCallerKey && state.callerNumber.isNotBlank()) {
+            lastPopupCallerKey = popupKey
+            isCallerPopupDismissed = false
+        }
+
+        val showCallerPopup = !state.isConference &&
+            !isCallerPopupDismissed &&
+            (state.callerNumber.isNotBlank() || state.callerLocation.isNotBlank())
+        binding.cardCallerIdPopup.visibility = if (showCallerPopup) View.VISIBLE else View.GONE
+        if (showCallerPopup) {
+            binding.tvPopupCallerBadge.text = if (state.isUnknownCaller) {
+                getString(R.string.caller_id_unknown_badge)
+            } else {
+                getString(R.string.caller_id_popup_badge)
+            }
+            binding.tvPopupCallDirection.text = when (state.callState) {
+                Call.STATE_RINGING -> getString(R.string.caller_id_direction_incoming)
+                Call.STATE_DIALING, Call.STATE_CONNECTING -> getString(R.string.caller_id_direction_outgoing)
+                else -> getString(R.string.caller_id_direction_active)
+            }
+            binding.tvPopupCallerName.text = displayName
+            binding.tvPopupCallerLocation.text = getString(
+                R.string.caller_id_location_format,
+                resolvedLocation.ifBlank { getString(R.string.caller_id_location_unknown) }
+            )
+            val src = state.callerIdentitySource.ifBlank { getString(R.string.caller_id_popup_badge) }
+            binding.tvPopupCallerNumber.text = "${state.callerNumber.ifBlank { getString(R.string.incall_unknown_caller) }} • $src"
+        }
+
         val isRinging = state.callState == Call.STATE_RINGING
         binding.layoutIncomingControls.visibility = if (isRinging) View.VISIBLE else View.GONE
         binding.layoutActiveControls.visibility = if (isRinging) View.GONE else View.VISIBLE
+
+        // Active SIM Badge & Mid-Call Switch SIM Button
+        if (state.activeSimLabel.isNotBlank()) {
+            binding.tvIncallSimBadge.text = state.activeSimLabel
+            binding.tvIncallSimBadge.visibility = View.VISIBLE
+        } else {
+            binding.tvIncallSimBadge.visibility = View.GONE
+        }
+
+        val showSwitchSim = state.canSwitchSim && !isRinging
+        binding.containerSwitchSim.visibility = if (showSwitchSim) View.VISIBLE else View.GONE
+        if (showSwitchSim) {
+            val switchLabel = if (state.alternateSimLabel.isNotBlank()) {
+                getString(R.string.incall_switch_sim_to_format, state.alternateSimLabel)
+            } else {
+                getString(R.string.incall_switch_sim)
+            }
+            binding.tvIncallSwitchSimLabel.text = switchLabel
+            binding.btnIncallSwitchSim.contentDescription = switchLabel
+            binding.btnIncallSwitchSim.isEnabled = !state.isSwitchingSim
+        }
 
         // Secondary Call Banner (when 2+ simultaneous top-level calls exist)
         val showSecondary = state.hasSecondaryCall && !isRinging
@@ -337,7 +398,11 @@ class InCallActivity : AppCompatActivity() {
         binding.btnManageConference.visibility =
             if (state.isConference && !isRinging) View.VISIBLE else View.GONE
 
-        if (state.callState != Call.STATE_ACTIVE) {
+        if (state.isSwitchingSim) {
+            val targetLabel = state.alternateSimLabel
+                .ifBlank { getString(R.string.incall_sim_badge_fallback) }
+            binding.tvIncallStatus.text = getString(R.string.incall_switching_sim_status, targetLabel)
+        } else if (state.callState != Call.STATE_ACTIVE) {
             binding.tvIncallStatus.text = formatCallStateLabel(state.callState)
         }
 
@@ -399,6 +464,7 @@ class InCallActivity : AppCompatActivity() {
                 if (state.isRecording) R.color.call_decline_red else R.color.incall_surface
             )
         )
+        updateRecordButtonAvailability()
     }
 
     private fun formatCallStateLabel(callState: Int): String {

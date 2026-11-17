@@ -110,9 +110,9 @@ class CallDetailActivity : AppCompatActivity() {
 
     private fun hasAuthorizedAccess(): Boolean {
         val manager = SubscriptionManager(this)
-        val currentEmail = GoogleAuthHelper.resolveActiveEmail(this)
-        val isAdmin = UpiPaymentHelper.isAdminEmail(currentEmail)
-        return manager.isSubscriptionActive() && !manager.isMaintenanceLocked(isAdmin)
+        val isAdmin = UpiPaymentHelper.isAuthorizedAdmin(this, prefs)
+        return !manager.isMaintenanceLocked(isAdmin) &&
+            (isAdmin || (!prefs.adminBlockedUser && !prefs.tamperDetected))
     }
 
     private fun observeRealtimeLock() {
@@ -177,7 +177,7 @@ class CallDetailActivity : AppCompatActivity() {
         }
 
         binding.actionDetailCall.setOnClickListener {
-            DialerHelper.placeCall(this, phoneNumber)
+            DialerHelper.initiateCall(this, phoneNumber)
         }
 
         binding.actionDetailMessage.setOnClickListener {

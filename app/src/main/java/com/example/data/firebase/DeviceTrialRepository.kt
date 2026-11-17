@@ -211,6 +211,9 @@ class DeviceTrialRepository(
                 UserEntitlement::class.java,
                 DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
             )
+            val sanitizedLocalPhone = prefs?.userPhoneNumber
+                ?.takeIf { it.isNotBlank() && it != DialerPreferences.DEFAULT_USER_NUMBER }
+                ?.take(32)
             if (!userSnap.exists() || existingUser == null) {
                 val initialTheme = if (prefs?.displayThemeMode == AppCompatDelegate.MODE_NIGHT_YES) {
                     UserEntitlement.THEME_DARK
@@ -221,7 +224,7 @@ class DeviceTrialRepository(
                     "userId" to uid,
                     "displayName" to (currentUser?.displayName.orEmpty().take(120)),
                     "email" to (currentUser?.email.orEmpty().take(254)),
-                    "phoneNumber" to (prefs?.userPhoneNumber.orEmpty().take(32)),
+                    "phoneNumber" to sanitizedLocalPhone.orEmpty(),
                     "deviceHash" to deviceHash,
                     "trialStartedAt" to FieldValue.serverTimestamp(),
                     "isPremiumUser" to false,
@@ -251,7 +254,7 @@ class DeviceTrialRepository(
                 val updateUserPayload = mapOf(
                     "displayName" to (currentUser?.displayName?.take(120) ?: existingUser.displayName),
                     "email" to (currentUser?.email?.take(254) ?: existingUser.email),
-                    "phoneNumber" to (prefs?.userPhoneNumber?.take(32) ?: existingUser.phoneNumber),
+                    "phoneNumber" to (sanitizedLocalPhone ?: existingUser.phoneNumber),
                     "deviceHash" to deviceHash,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -300,25 +303,24 @@ class DeviceTrialRepository(
             minOf(userStartMs, offlineAdjustedStartMs)
         }
 
-        val isBlocked = userEntitlement.isBlocked
-        val rawPremium = userEntitlement.isPremiumUser || (enforceSingleDevice && deviceTrial.isPremiumDevice)
-        val userExpiryMs = userEntitlement.subscriptionExpiresAt?.toDate()?.time
-            ?: if (userEntitlement.isPremiumUser) {
-                userEntitlement.updatedAt?.toDate()?.time?.let { it + DialerPreferences.ONE_MONTH_MILLIS }
-            } else {
-                null
-            }
-        val deviceExpiryMs = if (enforceSingleDevice) {
-            deviceTrial.subscriptionExpiresAt?.toDate()?.time
-                ?: if (deviceTrial.isPremiumDevice) {
-                    deviceTrial.updatedAt?.toDate()?.time?.let { it + DialerPreferences.ONE_MONTH_MILLIS }
+        val isBlocked = userEntitlement.isBlocked ||
+            userEntitlement.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
+        val userStatusForcesInactive = userEntitlement.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+            userEntitlement.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+            userEntitlement.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
+        val rawPremium = !userStatusForcesInactive &&
+            (userEntitlement.isPremiumUser || userEntitlement.subscriptionStatus == UserEntitlement.STATUS_ACTIVE)
+        val userExpiryMs = if (!userStatusForcesInactive) {
+            userEntitlement.subscriptionExpiresAt?.toDate()?.time
+                ?: if (userEntitlement.isPremiumUser) {
+                    userEntitlement.updatedAt?.toDate()?.time?.let { it + DialerPreferences.ONE_MONTH_MILLIS }
                 } else {
                     null
                 }
         } else {
             null
         }
-        val effectiveExpiresAtMs = listOfNotNull(userExpiryMs, deviceExpiryMs).maxOrNull() ?: 0L
+        val effectiveExpiresAtMs = (userExpiryMs ?: 0L).coerceAtLeast(0L)
         val isPremium = !isBlocked && rawPremium && (effectiveExpiresAtMs <= 0L || serverNowMs < effectiveExpiresAtMs)
 
         val trialExpired = (serverNowMs - effectiveStartMs) >= totalTrialDurationMs

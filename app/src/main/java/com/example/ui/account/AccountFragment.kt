@@ -4,6 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.LayoutInflater
@@ -25,6 +27,7 @@ import com.example.billing.SubscriptionManager
 import com.example.billing.UpiPaymentHelper
 import com.example.billing.UpiTxnStatus
 import com.example.data.DialerPreferences
+import com.example.data.SimNumberHelper
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.DeviceTrialRepository
 import com.example.data.firebase.GoogleAuthHelper
@@ -35,11 +38,13 @@ import com.example.ui.MainActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -137,6 +142,34 @@ class AccountFragment : Fragment() {
             showUpiFallbackOrConfirmDialog(
                 isNoUpiAppInstalled = false,
                 txnRef = UpiPaymentHelper.generateTxnRef()
+            )
+        }
+
+        binding.btnPayRazorpay.setOnClickListener {
+            launchConfiguredGatewayCheckout(
+                gatewayTag = "RAZORPAY",
+                gatewayDisplayName = "Razorpay",
+                checkoutUrl = prefs.configuredRazorpayPaymentLink,
+                keyHint = prefs.configuredRazorpayKeyId
+            )
+        }
+
+        binding.btnPayPayu.setOnClickListener {
+            launchConfiguredGatewayCheckout(
+                gatewayTag = "PAYU",
+                gatewayDisplayName = "PayU",
+                checkoutUrl = prefs.configuredPayuPaymentLink,
+                keyHint = prefs.configuredPayuMerchantKey
+            )
+        }
+
+        binding.btnPayCustomGateway.setOnClickListener {
+            val customLabel = prefs.configuredCustomGatewayName.ifBlank { "Online Gateway" }
+            launchConfiguredGatewayCheckout(
+                gatewayTag = "CUSTOM_PG",
+                gatewayDisplayName = customLabel,
+                checkoutUrl = prefs.configuredCustomGatewayUrl,
+                keyHint = ""
             )
         }
 
@@ -279,6 +312,84 @@ class AccountFragment : Fragment() {
             }
             .setNegativeButton(R.string.dialog_close, null)
             .show()
+    }
+
+    private fun launchConfiguredGatewayCheckout(
+        gatewayTag: String,
+        gatewayDisplayName: String,
+        checkoutUrl: String,
+        keyHint: String
+    ) {
+        val rawUrl = checkoutUrl.trim()
+        if (rawUrl.isNotEmpty()) {
+            val normalizedUrl = if (!rawUrl.contains("://")) "https://$rawUrl" else rawUrl
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalizedUrl)))
+            }
+        }
+        val ctx = requireContext()
+        val priceInr = prefs.configuredPriceInr
+        val container = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 16, 48, 8)
+        }
+        val txnInput = EditText(ctx).apply {
+            hint = getString(R.string.gateway_txn_hint)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+        }
+        container.addView(txnInput)
+
+        val baseMsg = getString(R.string.gateway_confirm_message, priceInr.toInt(), gatewayDisplayName)
+        val fullMsg = if (keyHint.isNotBlank()) "$baseMsg\n\nMerchant Key: $keyHint" else baseMsg
+
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(getString(R.string.gateway_confirm_title, gatewayDisplayName, priceInr.toInt()))
+            .setMessage(fullMsg)
+            .setView(container)
+            .setPositiveButton(R.string.upi_submit_for_approval) { _, _ ->
+                val enteredId = txnInput.text.toString().trim()
+                if (enteredId.isEmpty()) {
+                    Toast.makeText(ctx, R.string.gateway_txn_required, Toast.LENGTH_SHORT).show()
+                } else {
+                    submitVerifiedPaymentRequest(
+                        txnRef = UpiPaymentHelper.generateTxnRef(),
+                        upiTxnId = enteredId,
+                        approvalRefNo = "$gatewayTag:$enteredId",
+                        verificationType = "${gatewayTag}_PAYMENT"
+                    )
+                }
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
+    }
+
+    private fun bindConfiguredPaymentButtons(showCheckoutOptions: Boolean, priceInr: Long) {
+        val showUpi = showCheckoutOptions && prefs.enableUpiGateway
+        binding.tvUpiPayeeNote.visibility = if (showUpi) View.VISIBLE else View.GONE
+        binding.btnUpgradePremium.visibility = if (showUpi) View.VISIBLE else View.GONE
+        binding.btnSubmitUtrDirect.visibility =
+            if (showUpi && prefs.allowManualUtrConfig) View.VISIBLE else View.GONE
+
+        val showRazorpay = showCheckoutOptions && prefs.enableRazorpayGateway
+        binding.btnPayRazorpay.visibility = if (showRazorpay) View.VISIBLE else View.GONE
+        if (showRazorpay) {
+            binding.btnPayRazorpay.text = getString(R.string.btn_pay_razorpay, priceInr.toInt())
+        }
+
+        val showPayu = showCheckoutOptions && prefs.enablePayuGateway
+        binding.btnPayPayu.visibility = if (showPayu) View.VISIBLE else View.GONE
+        if (showPayu) {
+            binding.btnPayPayu.text = getString(R.string.btn_pay_payu, priceInr.toInt())
+        }
+
+        val showCustom = showCheckoutOptions &&
+            prefs.enableCustomGateway &&
+            prefs.configuredCustomGatewayUrl.isNotBlank()
+        binding.btnPayCustomGateway.visibility = if (showCustom) View.VISIBLE else View.GONE
+        if (showCustom) {
+            val gwLabel = prefs.configuredCustomGatewayName.ifBlank { "Online Gateway" }
+            binding.btnPayCustomGateway.text = getString(R.string.btn_pay_custom_gateway, gwLabel, priceInr.toInt())
+        }
     }
 
     private fun submitVerifiedPaymentRequest(
@@ -441,6 +552,20 @@ class AccountFragment : Fragment() {
         }
         binding.tvUserNumber.text = prefs.userPhoneNumber
 
+        val currentPhone = prefs.userPhoneNumber.trim()
+        if (currentPhone.isBlank() || currentPhone == DialerPreferences.DEFAULT_USER_NUMBER) {
+            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                val filled = SimNumberHelper.autoFillAndSyncSimNumber(ctx)
+                if (!filled.isNullOrBlank()) {
+                    withContext(Dispatchers.Main) {
+                        if (_binding != null && isAdded) {
+                            binding.tvUserNumber.text = filled
+                        }
+                    }
+                }
+            }
+        }
+
         val shortDeviceTag = prefs.shortDeviceTag.ifBlank {
             DeviceIdentityProvider.formatShortDeviceTag(
                 DeviceIdentityProvider.getDeviceHash(requireContext())
@@ -454,7 +579,7 @@ class AccountFragment : Fragment() {
 
     private fun renderBillingState(state: BillingUiState) {
         val ctx = requireContext()
-        val isAdmin = UpiPaymentHelper.isAdminEmail(GoogleAuthHelper.resolveActiveEmail(ctx))
+        val isAdmin = UpiPaymentHelper.isAuthorizedAdmin(ctx, prefs)
         val isBlockedByAdmin = prefs.adminBlockedUser
         val isMaintenance = prefs.maintenanceMode && !isAdmin
         val isPremium = !isBlockedByAdmin && subscriptionManager.isPremiumActive()
@@ -488,9 +613,7 @@ class AccountFragment : Fragment() {
             binding.tvTrialCountdownDetail.visibility = View.VISIBLE
             binding.tvTrialCountdownDetail.setText(R.string.admin_blocked_banner_title)
             binding.tvTrialCountdownDetail.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_error))
-            binding.btnUpgradePremium.visibility = View.GONE
-            binding.btnSubmitUtrDirect.visibility = View.GONE
-            binding.tvUpiPayeeNote.visibility = View.GONE
+            bindConfiguredPaymentButtons(showCheckoutOptions = false, priceInr = priceInr)
         } else if (isMaintenance) {
             binding.cardTrialLockedBanner.visibility = View.VISIBLE
             binding.tvPaywallLockedTitle.setText(R.string.admin_maintenance_banner_title)
@@ -502,12 +625,12 @@ class AccountFragment : Fragment() {
             binding.tvTrialCountdownDetail.text = prefs.announcementText.ifBlank {
                 binding.tvTrialCountdownDetail.text
             }
-            binding.btnUpgradePremium.visibility = View.GONE
-            binding.btnSubmitUtrDirect.visibility = View.GONE
+            bindConfiguredPaymentButtons(showCheckoutOptions = false, priceInr = priceInr)
         } else if (hideSubUi) {
             binding.cardTrialLockedBanner.visibility = View.GONE
             binding.chipPlanBadge.visibility = View.GONE
             binding.tvTrialCountdownDetail.visibility = View.GONE
+            bindConfiguredPaymentButtons(showCheckoutOptions = false, priceInr = priceInr)
         } else if (isPremium) {
             binding.cardTrialLockedBanner.visibility = View.GONE
             binding.chipPlanBadge.visibility = View.VISIBLE
@@ -542,11 +665,9 @@ class AccountFragment : Fragment() {
                         dateFmt,
                         priceInr
                     )
-                    binding.tvUpiPayeeNote.visibility = View.VISIBLE
                     binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa to extend +30 days."
-                    binding.btnUpgradePremium.visibility = View.VISIBLE
                     binding.btnUpgradePremium.text = getString(R.string.btn_renew_premium, priceInr)
-                    binding.btnSubmitUtrDirect.visibility = if (prefs.allowManualUtrConfig) View.VISIBLE else View.GONE
+                    bindConfiguredPaymentButtons(showCheckoutOptions = true, priceInr = priceInr)
                 } else {
                     binding.chipPlanBadge.text = getString(R.string.badge_premium_monthly_days, subDaysLeft)
                     binding.chipPlanBadge.setChipBackgroundColorResource(R.color.premium_badge_bg)
@@ -566,9 +687,7 @@ class AccountFragment : Fragment() {
                         subCountdown,
                         dateFmt
                     )
-                    binding.tvUpiPayeeNote.visibility = View.GONE
-                    binding.btnUpgradePremium.visibility = View.GONE
-                    binding.btnSubmitUtrDirect.visibility = View.GONE
+                    bindConfiguredPaymentButtons(showCheckoutOptions = false, priceInr = priceInr)
                     binding.cardPaymentStatus.visibility = View.GONE
                 }
             } else {
@@ -583,9 +702,7 @@ class AccountFragment : Fragment() {
 
                 binding.tvPremiumTitle.text = getString(R.string.premium_card_active_title)
                 binding.tvPremiumSubtitle.text = getString(R.string.premium_card_active_subtitle)
-                binding.tvUpiPayeeNote.visibility = View.GONE
-                binding.btnUpgradePremium.visibility = View.GONE
-                binding.btnSubmitUtrDirect.visibility = View.GONE
+                bindConfiguredPaymentButtons(showCheckoutOptions = false, priceInr = priceInr)
                 binding.cardPaymentStatus.visibility = View.GONE
             }
         } else if (hasMonthlyExpired) {
@@ -605,7 +722,7 @@ class AccountFragment : Fragment() {
             binding.chipPlanBadge.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer))
 
             binding.tvTrialCountdownDetail.text =
-                "Monthly Subscription Expired • Renew ₹$priceInr/month to continue"
+                "Monthly Subscription Expired • Renew ₹$priceInr/month to unlock Premium services"
             binding.tvTrialCountdownDetail.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_error))
 
             binding.tvPremiumTitle.text = "Renew Monthly Plan - ₹$priceInr/month"
@@ -615,11 +732,9 @@ class AccountFragment : Fragment() {
                 priceInr,
                 upiVpa
             )
-            binding.tvUpiPayeeNote.visibility = View.VISIBLE
             binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa to renew for 30 days."
-            binding.btnUpgradePremium.visibility = View.VISIBLE
             binding.btnUpgradePremium.text = getString(R.string.btn_renew_premium, priceInr)
-            binding.btnSubmitUtrDirect.visibility = if (prefs.allowManualUtrConfig) View.VISIBLE else View.GONE
+            bindConfiguredPaymentButtons(showCheckoutOptions = true, priceInr = priceInr)
         } else if (!subscriptionManager.isTrialExpired()) {
             binding.cardTrialLockedBanner.visibility = View.GONE
             binding.chipPlanBadge.visibility = View.VISIBLE
@@ -644,11 +759,9 @@ class AccountFragment : Fragment() {
 
             binding.tvPremiumTitle.text = "Upgrade to Premium - ₹$priceInr/month"
             binding.tvPremiumSubtitle.text = "New users get $totalTrialDays days free, then ₹$priceInr/month. One trial per device."
-            binding.tvUpiPayeeNote.visibility = View.VISIBLE
             binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa after your free trial."
-            binding.btnUpgradePremium.visibility = View.VISIBLE
             binding.btnUpgradePremium.text = "Subscribe via UPI • ₹$priceInr/month"
-            binding.btnSubmitUtrDirect.visibility = if (prefs.allowManualUtrConfig) View.VISIBLE else View.GONE
+            bindConfiguredPaymentButtons(showCheckoutOptions = true, priceInr = priceInr)
         } else {
             binding.cardTrialLockedBanner.visibility = View.VISIBLE
             binding.chipPlanBadge.visibility = View.VISIBLE
@@ -658,7 +771,7 @@ class AccountFragment : Fragment() {
                 else R.string.paywall_locked_title
             )
             binding.tvPaywallLockedMessage.text =
-                "Your $totalTrialDays days on this device ($shortDeviceTag) have finished. Subscribe for ₹$priceInr/month via UPI ($upiVpa) to unlock and continue using PulseDial."
+                "Your $totalTrialDays days on this device ($shortDeviceTag) have finished. Normal calling & saving contacts remain free; subscribe for ₹$priceInr/month to unlock Premium services."
 
             binding.chipPlanBadge.text = getString(
                 if (prefs.trialBlockedByDevice) R.string.badge_device_trial_used else R.string.badge_trial_expired
@@ -667,16 +780,14 @@ class AccountFragment : Fragment() {
             binding.chipPlanBadge.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer))
 
             binding.tvTrialCountdownDetail.text =
-                "$totalTrialDays-Day Trial Counter: $totalTrialDays of $totalTrialDays days used • Subscription required"
+                "$totalTrialDays-Day Trial Counter: $totalTrialDays of $totalTrialDays days used • Premium services frozen"
             binding.tvTrialCountdownDetail.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_error))
 
             binding.tvPremiumTitle.text = "Upgrade to Premium - ₹$priceInr/month"
             binding.tvPremiumSubtitle.text = getString(R.string.premium_card_expired_subtitle)
-            binding.tvUpiPayeeNote.visibility = View.VISIBLE
             binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa after your free trial."
-            binding.btnUpgradePremium.visibility = View.VISIBLE
             binding.btnUpgradePremium.text = "Subscribe via UPI • ₹$priceInr/month"
-            binding.btnSubmitUtrDirect.visibility = if (prefs.allowManualUtrConfig) View.VISIBLE else View.GONE
+            bindConfiguredPaymentButtons(showCheckoutOptions = true, priceInr = priceInr)
         }
 
         val statusMsg = state.statusMessage

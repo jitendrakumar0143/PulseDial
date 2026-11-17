@@ -86,7 +86,7 @@ class HistoryFragment : Fragment() {
             onRowClick = { entry ->
                 startActivity(CallDetailActivity.createIntent(ctx, entry.number, entry.name))
             },
-            onCallClick = { entry -> DialerHelper.placeCall(ctx, entry.number) },
+            onCallClick = { entry -> DialerHelper.initiateCall(activity ?: ctx, entry.number) },
             onBlockClick = { entry ->
                 settingsManager.addBlockedNumber(entry.number)
                 Toast.makeText(

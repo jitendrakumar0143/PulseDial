@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
  * - WhatsApp Business (`com.whatsapp.w4b`)
  * - Google Meet (`com.google.android.apps.meetings` / `com.google.android.apps.tachyon`)
  * - Telegram (`org.telegram.messenger` / variants)
+ * - Instagram (`com.instagram.android` / `com.instagram.lite`)
  *
  * Recordings start only when `AudioManager.mode == AudioManager.MODE_IN_COMMUNICATION`
  * alongside a recent VoIP call window or call notification, stop automatically when

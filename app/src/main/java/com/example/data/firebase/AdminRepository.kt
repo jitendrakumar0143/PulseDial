@@ -50,7 +50,9 @@ enum class AdminUserAccountStatus {
 
 enum class AdminSubscriberFilter {
     EXPIRING_SOON,
-    ALL_ACTIVE_SUBSCRIBERS
+    ALL_ACTIVE_SUBSCRIBERS,
+    OLD_EXPIRED_USERS,
+    NEW_TRIAL_USERS
 }
 
 class AdminRepository(
@@ -423,6 +425,13 @@ class AdminRepository(
             else -> AppConfig.THEME_USER
         }
 
+        val cleanRazorpayKey = config.razorpayKeyId.trim().take(100)
+        val cleanRazorpayLink = config.razorpayPaymentLink.trim().take(500)
+        val cleanPayuKey = config.payuMerchantKey.trim().take(100)
+        val cleanPayuLink = config.payuPaymentLink.trim().take(500)
+        val cleanCustomName = config.customGatewayName.trim().take(80)
+        val cleanCustomUrl = config.customGatewayUrl.trim().take(500)
+
         val payload = mapOf(
             "trialDays" to config.trialDays.coerceIn(1L, 365L),
             "subscriptionPriceInr" to config.subscriptionPriceInr.coerceIn(1L, 100000L),
@@ -438,6 +447,16 @@ class AdminRepository(
             "defaultAutoRecording" to config.defaultAutoRecording,
             "forceThemeMode" to cleanTheme,
             "hideSubscriptionUI" to config.hideSubscriptionUI,
+            "enableUpiGateway" to config.enableUpiGateway,
+            "enableRazorpayGateway" to config.enableRazorpayGateway,
+            "razorpayKeyId" to cleanRazorpayKey,
+            "razorpayPaymentLink" to cleanRazorpayLink,
+            "enablePayuGateway" to config.enablePayuGateway,
+            "payuMerchantKey" to cleanPayuKey,
+            "payuPaymentLink" to cleanPayuLink,
+            "enableCustomGateway" to config.enableCustomGateway,
+            "customGatewayName" to cleanCustomName,
+            "customGatewayUrl" to cleanCustomUrl,
             "updatedByUid" to adminUid,
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -447,7 +466,13 @@ class AdminRepository(
                 config.copy(
                     upiVpa = cleanUpi,
                     whatsappNumber = cleanWhatsapp,
-                    forceThemeMode = cleanTheme
+                    forceThemeMode = cleanTheme,
+                    razorpayKeyId = cleanRazorpayKey,
+                    razorpayPaymentLink = cleanRazorpayLink,
+                    payuMerchantKey = cleanPayuKey,
+                    payuPaymentLink = cleanPayuLink,
+                    customGatewayName = cleanCustomName,
+                    customGatewayUrl = cleanCustomUrl
                 )
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
@@ -571,14 +596,48 @@ class AdminRepository(
 
     /**
      * Approves a user's pending UTR directly from the Admin User Card:
-     * sets `isPremium = true`, `subscriptionStatus = "active"`, and extends expiry by 30 days.
+     * enforces 1x-only UTR usage across `/approved_utrs` and extends expiry by 30 days.
      */
-    suspend fun approveUserUtrDirect(user: UserEntitlement): Result<Unit> {
+    suspend fun approveUserUtrDirect(
+        user: UserEntitlement,
+        approvedUtrKeys: Set<String> = emptySet(),
+        knownRequests: List<PaymentRequest> = emptyList()
+    ): Result<Unit> {
+        val adminUid = try {
+            requireAdminUid()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        val rawUtr = user.paymentRefId.trim().ifBlank { user.purchaseToken.trim() }
+        val utrKey = RealtimeDatabaseSync.normalizeUtrKey(rawUtr)
+        if (utrKey.isNotBlank()) {
+            val alreadyInKnown = knownRequests.any { req ->
+                req.status == PaymentRequest.STATUS_APPROVED &&
+                    PaymentRepository.normalizeUtrKey(PaymentRepository.extractCanonicalUtr(req)) == utrKey
+            }
+            val alreadyActiveWithSameUtr = user.isPremiumUser &&
+                user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE &&
+                PaymentRepository.normalizeUtrKey(user.paymentRefId) == utrKey
+            if (approvedUtrKeys.contains(utrKey) ||
+                alreadyInKnown ||
+                alreadyActiveWithSameUtr ||
+                RealtimeDatabaseSync.isUtrApprovedInRtdb(utrKey)
+            ) {
+                return Result.failure(
+                    IllegalStateException("UTR ($rawUtr) has already been approved once and cannot be reused.")
+                )
+            }
+        } else if (user.isPremiumUser && user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE) {
+            return Result.failure(
+                IllegalStateException("This user's UTR was already approved once.")
+            )
+        }
+
         val nowMs = System.currentTimeMillis()
         val existingExpMs = resolveEffectiveExpiryMs(user)
         val baseMs = maxOf(nowMs, existingExpMs)
         val nextExpiry = Timestamp(Date(baseMs + DialerPreferences.ONE_MONTH_MILLIS))
-        return updateUserAdminDetails(
+        val updateResult = updateUserAdminDetails(
             user = user,
             isPremium = true,
             isBlocked = false,
@@ -588,6 +647,15 @@ class AdminRepository(
             subscriptionExpiresAt = nextExpiry,
             explicitSubscriptionStatus = UserEntitlement.STATUS_ACTIVE
         )
+        if (updateResult.isSuccess && utrKey.isNotBlank()) {
+            RealtimeDatabaseSync.markUtrApproved(
+                utrRaw = rawUtr,
+                requestId = "direct_${user.uid}",
+                userId = user.uid,
+                approvedByUid = adminUid
+            )
+        }
+        return updateResult
     }
 
     /**
@@ -611,19 +679,261 @@ class AdminRepository(
         user: UserEntitlement,
         extraDays: Long = DialerPreferences.MONTHLY_SUBSCRIPTION_DAYS.toLong()
     ): Result<Unit> {
-        val nowMs = System.currentTimeMillis()
-        val existingExpMs = resolveEffectiveExpiryMs(user)
-        val baseMs = maxOf(nowMs, existingExpMs)
-        val nextExpiry = Timestamp(Date(baseMs + extraDays.coerceIn(1L, 3650L) * DialerPreferences.ONE_DAY_MILLIS))
+        return adjustUserSubscriptionDays(user = user, deltaDays = extraDays.coerceIn(1L, 3650L))
+    }
+
+    /**
+     * Adds (+deltaDays) OR subtracts (-deltaDays) subscription days for a user.
+     * When the resulting expiry drops at or below [nowMs], automatically expires the subscription
+     * (`isPremium = false`, `subscriptionStatus = STATUS_EXPIRED`).
+     */
+    suspend fun adjustUserSubscriptionDays(
+        user: UserEntitlement,
+        deltaDays: Long,
+        nowMs: Long = System.currentTimeMillis()
+    ): Result<Unit> {
+        val nextExpMs = computeAdjustedSubscriptionExpiryMs(user, deltaDays, nowMs)
+        val stillActive = !user.isBlocked && nextExpMs > nowMs
+        val nextExpiryTs = if (nextExpMs > nowMs) Timestamp(Date(nextExpMs)) else null
+        val nextStatus = when {
+            user.isBlocked -> UserEntitlement.STATUS_BLOCKED
+            stillActive -> UserEntitlement.STATUS_ACTIVE
+            else -> UserEntitlement.STATUS_EXPIRED
+        }
         return updateUserAdminDetails(
             user = user,
-            isPremium = true,
-            isBlocked = false,
+            isPremium = stillActive,
+            isBlocked = user.isBlocked,
             bonusTrialDays = user.bonusTrialDays,
             adminNote = user.adminNote,
             hideSubscriptionUI = user.hideSubscriptionUI,
-            subscriptionExpiresAt = nextExpiry
+            subscriptionExpiresAt = nextExpiryTs,
+            explicitSubscriptionStatus = nextStatus
         )
+    }
+
+    /**
+     * Unified Admin day adjuster for BOTH:
+     * - Old / Pro / Expired subscribers (extends or reduces subscription days)
+     * - New / Free Trial users (extends `bonusTrialDays`, deducts `bonusTrialDays`, or reduces
+     *   remaining base trial days cleanly without mutating immutable `trialStartedAt` under firestore.rules).
+     */
+    suspend fun adjustUserAccessDays(
+        user: UserEntitlement,
+        deltaDays: Long,
+        trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS,
+        nowMs: Long = System.currentTimeMillis()
+    ): Result<Unit> {
+        if (deltaDays == 0L) return Result.success(Unit)
+        val accountStatus = resolveUserAccountStatus(user, trialDaysConfig, nowMs)
+        val treatAsSubscriptionUser = user.isPremiumUser ||
+            accountStatus == AdminUserAccountStatus.EXPIRED ||
+            user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE ||
+            user.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+            user.subscriptionStatus == UserEntitlement.STATUS_REJECTED
+
+        if (treatAsSubscriptionUser) {
+            return adjustUserSubscriptionDays(user = user, deltaDays = deltaDays, nowMs = nowMs)
+        }
+
+        val currentBonus = user.bonusTrialDays.coerceAtLeast(0L)
+        if (deltaDays > 0L) {
+            val nextBonus = (currentBonus + deltaDays).coerceIn(0L, 3650L)
+            return updateUserAdminDetails(
+                user = user,
+                isPremium = false,
+                isBlocked = user.isBlocked,
+                bonusTrialDays = nextBonus,
+                adminNote = user.adminNote,
+                hideSubscriptionUI = user.hideSubscriptionUI,
+                subscriptionExpiresAt = null,
+                explicitSubscriptionStatus = if (user.isBlocked) UserEntitlement.STATUS_BLOCKED else UserEntitlement.STATUS_TRIAL
+            )
+        }
+
+        // Subtracting days from a New / Active Trial user
+        val subtractDays = (-deltaDays).coerceAtMost(3650L)
+        if (subtractDays <= currentBonus) {
+            val nextBonus = (currentBonus - subtractDays).coerceAtLeast(0L)
+            return updateUserAdminDetails(
+                user = user,
+                isPremium = false,
+                isBlocked = user.isBlocked,
+                bonusTrialDays = nextBonus,
+                adminNote = user.adminNote,
+                hideSubscriptionUI = user.hideSubscriptionUI,
+                subscriptionExpiresAt = null,
+                explicitSubscriptionStatus = if (user.isBlocked) UserEntitlement.STATUS_BLOCKED else UserEntitlement.STATUS_TRIAL
+            )
+        }
+
+        val totalRemainingNow = getRemainingDaysForUser(user, trialDaysConfig, nowMs).toLong()
+        val targetRemainingDays = (totalRemainingNow - subtractDays).coerceAtLeast(0L)
+        return if (targetRemainingDays == 0L) {
+            updateUserAdminDetails(
+                user = user,
+                isPremium = false,
+                isBlocked = user.isBlocked,
+                bonusTrialDays = 0L,
+                adminNote = user.adminNote,
+                hideSubscriptionUI = user.hideSubscriptionUI,
+                subscriptionExpiresAt = null,
+                explicitSubscriptionStatus = if (user.isBlocked) UserEntitlement.STATUS_BLOCKED else UserEntitlement.STATUS_EXPIRED
+            )
+        } else {
+            val nextExpiryTs = Timestamp(Date(nowMs + targetRemainingDays * DialerPreferences.ONE_DAY_MILLIS))
+            updateUserAdminDetails(
+                user = user,
+                isPremium = !user.isBlocked,
+                isBlocked = user.isBlocked,
+                bonusTrialDays = 0L,
+                adminNote = user.adminNote,
+                hideSubscriptionUI = user.hideSubscriptionUI,
+                subscriptionExpiresAt = nextExpiryTs,
+                explicitSubscriptionStatus = if (user.isBlocked) UserEntitlement.STATUS_BLOCKED else UserEntitlement.STATUS_ACTIVE
+            )
+        }
+    }
+
+    /**
+     * Full admin control panel update covering profile info, subscription, trial bonus,
+     * auto-recording override, device-lock reset, block status, and Super-Admin-only delegation.
+     */
+    suspend fun updateFullUserManagement(
+        user: UserEntitlement,
+        displayName: String,
+        phoneNumber: String,
+        isPremium: Boolean,
+        isBlocked: Boolean,
+        bonusTrialDays: Long,
+        autoCallRecording: Boolean,
+        hideSubscriptionUI: Boolean,
+        adminNote: String,
+        subscriptionExpiresAt: Timestamp?,
+        resetDeviceLock: Boolean = false,
+        grantAdminAccess: Boolean = user.isAdmin,
+        actingAdminEmail: String = "",
+        explicitSubscriptionStatus: String? = null
+    ): Result<Unit> {
+        try {
+            requireAdminUid()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        val targetUid = user.userId.ifBlank { user.id }
+        require(targetUid.isNotBlank()) { "User ID must not be blank" }
+
+        val cleanName = displayName.trim().ifBlank { user.displayName.ifBlank { "PulseDial User" } }.take(120)
+        val cleanPhone = phoneNumber.trim().take(32)
+        val cleanNote = adminNote.trim().take(240)
+        val cleanBonus = bonusTrialDays.coerceIn(0L, 3650L)
+
+        val nowMs = System.currentTimeMillis()
+        val resolvedExpiry: Timestamp? = if (isPremium && !isBlocked) {
+            subscriptionExpiresAt
+                ?: user.subscriptionExpiresAt?.takeIf { it.toDate().time > nowMs }
+                ?: Timestamp(Date(nowMs + DialerPreferences.ONE_MONTH_MILLIS))
+        } else {
+            null
+        }
+        val resolvedStatus = explicitSubscriptionStatus ?: when {
+            isBlocked -> UserEntitlement.STATUS_BLOCKED
+            isPremium -> UserEntitlement.STATUS_ACTIVE
+            user.isPremiumUser -> UserEntitlement.STATUS_EXPIRED
+            else -> UserEntitlement.STATUS_TRIAL
+        }
+
+        val canModifyDelegation = UpiPaymentHelper.isSuperAdminEmail(actingAdminEmail) &&
+            !UpiPaymentHelper.isSuperAdminEmail(user.email)
+        val resolvedIsAdmin = when {
+            UpiPaymentHelper.isSuperAdminEmail(user.email) -> true
+            canModifyDelegation -> grantAdminAccess && !isBlocked
+            else -> user.isAdmin
+        }
+        val resolvedGrantedBy = when {
+            UpiPaymentHelper.isSuperAdminEmail(user.email) -> user.email.trim()
+            canModifyDelegation && resolvedIsAdmin -> actingAdminEmail.trim()
+            canModifyDelegation && !resolvedIsAdmin -> ""
+            else -> user.adminGrantedBy
+        }
+
+        val rtdbMap = mutableMapOf<String, Any?>(
+            "displayName" to cleanName,
+            "phone" to cleanPhone,
+            "phoneNumber" to cleanPhone,
+            "isPremium" to isPremium,
+            "isPremiumUser" to isPremium,
+            "subscriptionStatus" to resolvedStatus,
+            "subscriptionExpiresAtMs" to resolvedExpiry?.toDate()?.time,
+            "isBlocked" to isBlocked,
+            "bonusTrialDays" to cleanBonus,
+            "autoCallRecording" to autoCallRecording,
+            "autoRecordEnabled" to autoCallRecording,
+            "hideSubscriptionUI" to hideSubscriptionUI,
+            "adminNote" to cleanNote,
+            "isAdmin" to resolvedIsAdmin,
+            "adminGrantedBy" to resolvedGrantedBy,
+            "updatedAtMs" to nowMs
+        )
+        if (resetDeviceLock) {
+            rtdbMap["deviceHash"] = ""
+            rtdbMap["deviceId"] = ""
+        }
+
+        val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(targetUid)
+        val deviceRef = if (user.deviceHash.length == 64) {
+            db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS).document(user.deviceHash)
+        } else {
+            null
+        }
+
+        return try {
+            RealtimeDatabaseSync.pushUserFields(targetUid, rtdbMap)
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
+            val deviceSnap = deviceRef?.snapshots()?.first()
+            val firestorePayload = mutableMapOf<String, Any?>(
+                "displayName" to cleanName,
+                "phoneNumber" to cleanPhone,
+                "isPremiumUser" to isPremium,
+                "subscriptionStatus" to resolvedStatus,
+                "subscriptionExpiresAt" to resolvedExpiry,
+                "isBlocked" to isBlocked,
+                "bonusTrialDays" to cleanBonus,
+                "autoCallRecording" to autoCallRecording,
+                "hideSubscriptionUI" to hideSubscriptionUI,
+                "adminNote" to cleanNote,
+                "isAdmin" to resolvedIsAdmin,
+                "adminGrantedBy" to resolvedGrantedBy,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (resetDeviceLock) {
+                firestorePayload["deviceHash"] = ""
+            }
+            val batch = db.batch()
+            batch.update(userRef, firestorePayload)
+            if (deviceRef != null && deviceSnap?.exists() == true) {
+                batch.update(
+                    deviceRef,
+                    mapOf(
+                        "isPremiumDevice" to (isPremium && !isBlocked),
+                        "subscriptionExpiresAt" to resolvedExpiry,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().awaitTask()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.UPDATE, userRef.path, auth)
+            Result.failure(actualError)
+        }
     }
 
     fun observeNavigationTabs(): Flow<NavigationTabsConfig> = flow {
@@ -857,15 +1167,40 @@ class AdminRepository(
         const val TRIAL_EXPIRING_SOON_DAYS = 2
 
         fun resolveEffectiveExpiryMs(user: UserEntitlement): Long {
+            val inactiveByStatus = user.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+                user.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                user.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
+            if (inactiveByStatus && !user.isPremiumUser) return 0L
             val explicit = user.subscriptionExpiresAt?.toDate()?.time
             if (explicit != null && explicit > 0L) return explicit
-            if (user.isPremiumUser) {
+            if (user.isPremiumUser && !inactiveByStatus) {
                 val updatedMs = user.updatedAt?.toDate()?.time ?: 0L
                 if (updatedMs > 0L) {
                     return updatedMs + DialerPreferences.ONE_MONTH_MILLIS
                 }
             }
             return 0L
+        }
+
+        fun computeAdjustedSubscriptionExpiryMs(
+            user: UserEntitlement,
+            deltaDays: Long,
+            nowMs: Long = System.currentTimeMillis()
+        ): Long {
+            val currentExp = resolveEffectiveExpiryMs(user)
+            return when {
+                deltaDays > 0L -> {
+                    val baseMs = maxOf(nowMs, currentExp)
+                    baseMs + deltaDays.coerceAtMost(3650L) * DialerPreferences.ONE_DAY_MILLIS
+                }
+                deltaDays < 0L -> {
+                    val subtractDays = (-deltaDays).coerceAtMost(3650L)
+                    val baseMs = if (currentExp > nowMs) currentExp else nowMs
+                    val candidate = baseMs - subtractDays * DialerPreferences.ONE_DAY_MILLIS
+                    if (candidate <= nowMs) 0L else candidate
+                }
+                else -> currentExp
+            }
         }
 
         fun getSubscriptionRemainingDays(
@@ -980,15 +1315,23 @@ class AdminRepository(
             subscribers: List<UserEntitlement>,
             filter: AdminSubscriberFilter,
             query: String,
-            nowMs: Long = System.currentTimeMillis()
+            nowMs: Long = System.currentTimeMillis(),
+            trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS
         ): List<UserEntitlement> {
             val trimmed = query.trim().lowercase()
             return subscribers.filter { user ->
-                if (!user.isPremiumUser || user.isBlocked) return@filter false
-                val daysLeft = getSubscriptionRemainingDays(user, nowMs)
+                if (user.isBlocked) return@filter false
+                val status = resolveUserAccountStatus(user, trialDaysConfig, nowMs)
+                val subDaysLeft = getSubscriptionRemainingDays(user, nowMs)
                 val matchesMode = when (filter) {
-                    AdminSubscriberFilter.EXPIRING_SOON -> daysLeft in 1..SUB_EXPIRING_SOON_DAYS
-                    AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS -> daysLeft > 0 || daysLeft == -1
+                    AdminSubscriberFilter.EXPIRING_SOON ->
+                        user.isPremiumUser && subDaysLeft in 1..SUB_EXPIRING_SOON_DAYS
+                    AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS ->
+                        user.isPremiumUser && (subDaysLeft > 0 || subDaysLeft == -1)
+                    AdminSubscriberFilter.OLD_EXPIRED_USERS ->
+                        status == AdminUserAccountStatus.EXPIRED
+                    AdminSubscriberFilter.NEW_TRIAL_USERS ->
+                        !user.isPremiumUser && status != AdminUserAccountStatus.EXPIRED
                 }
                 if (!matchesMode) return@filter false
                 if (trimmed.isEmpty()) return@filter true

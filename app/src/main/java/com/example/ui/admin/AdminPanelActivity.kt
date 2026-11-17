@@ -10,6 +10,7 @@ import android.view.View
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -23,6 +24,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.button.MaterialButton
 import com.example.R
 import com.example.billing.UpiPaymentHelper
 import com.example.data.DialerPreferences
@@ -68,6 +70,8 @@ class AdminPanelActivity : AppCompatActivity() {
     private var allUsers: List<UserEntitlement> = emptyList()
     private var expiringSubscriptionUsers: List<UserEntitlement> = emptyList()
     private var allActiveSubscribers: List<UserEntitlement> = emptyList()
+    private var oldExpiredUsers: List<UserEntitlement> = emptyList()
+    private var newTrialUsers: List<UserEntitlement> = emptyList()
     private var allPayments: List<PaymentRequest> = emptyList()
     private val firestoreUsersById = mutableMapOf<String, UserEntitlement>()
     private val rtdbUsersById = mutableMapOf<String, UserEntitlement>()
@@ -99,24 +103,27 @@ class AdminPanelActivity : AppCompatActivity() {
     private var rtdbAdminBroadcastCleanup: (() -> Unit)? = null
     private var rtdbAdminCustomPopupAdCleanup: (() -> Unit)? = null
 
+    private var rtdbApprovedUtrsCleanup: (() -> Unit)? = null
+    private var approvedUtrKeys: Set<String> = emptySet()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         binding = ActivityAdminPanelBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        prefs = DialerPreferences(this)
         val activeEmail = GoogleAuthHelper.resolveActiveEmail(this)
-        if (!GoogleAuthHelper.isUserAuthenticated(this) || !UpiPaymentHelper.isAdminEmail(activeEmail)) {
+        if (!GoogleAuthHelper.isUserAuthenticated(this) || !UpiPaymentHelper.isAuthorizedAdmin(this, prefs)) {
             Toast.makeText(
                 this,
-                getString(R.string.admin_access_denied, UpiPaymentHelper.ADMIN_EMAIL),
+                getString(R.string.admin_access_denied),
                 Toast.LENGTH_LONG
             ).show()
             finish()
             return
         }
 
-        prefs = DialerPreferences(this)
         adminRepository = AdminRepository(this)
         paymentRepository = PaymentRepository(this)
 
@@ -166,8 +173,10 @@ class AdminPanelActivity : AppCompatActivity() {
                 currentConfig = rtdbConfig
                 prefs.applyAppConfig(rtdbConfig)
                 usersAdapter.trialDaysConfig = rtdbConfig.trialDays.toInt()
+                expiringUsersAdapter.trialDaysConfig = rtdbConfig.trialDays.toInt()
                 bindSettingsInputs(rtdbConfig)
                 applyUserFilters()
+                applySubscriberFilters()
             }
         )
         rtdbAdminNavTabsCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachNavigationTabsListener(
@@ -200,6 +209,36 @@ class AdminPanelActivity : AppCompatActivity() {
                 bindCustomPopupAdState(ad)
             }
         )
+        rtdbApprovedUtrsCleanup = RealtimeDatabaseSync.attachApprovedUtrsListener(
+            context = this,
+            onUpdate = { rtdbKeys ->
+                approvedUtrKeys = rtdbKeys
+                refreshApprovedUtrLocks()
+            }
+        )
+    }
+
+    private fun currentEffectiveApprovedUtrKeys(): Set<String> {
+        val combined = HashSet<String>(approvedUtrKeys)
+        allPayments.forEach { req ->
+            if (req.status == PaymentRequest.STATUS_APPROVED) {
+                val key = PaymentRepository.normalizeUtrKey(PaymentRepository.extractCanonicalUtr(req))
+                if (key.isNotEmpty()) {
+                    combined.add(key)
+                }
+            }
+        }
+        return combined
+    }
+
+    private fun refreshApprovedUtrLocks() {
+        val effective = currentEffectiveApprovedUtrKeys()
+        if (::usersAdapter.isInitialized) {
+            usersAdapter.approvedUtrKeys = effective
+        }
+        if (::paymentsAdapter.isInitialized) {
+            paymentsAdapter.approvedUtrKeys = effective
+        }
     }
 
     override fun onDestroy() {
@@ -217,13 +256,15 @@ class AdminPanelActivity : AppCompatActivity() {
         rtdbAdminBroadcastCleanup = null
         rtdbAdminCustomPopupAdCleanup?.invoke()
         rtdbAdminCustomPopupAdCleanup = null
+        rtdbApprovedUtrsCleanup?.invoke()
+        rtdbApprovedUtrsCleanup = null
         super.onDestroy()
     }
 
     override fun onResume() {
         super.onResume()
-        val activeEmail = GoogleAuthHelper.resolveActiveEmail(this)
-        if (!GoogleAuthHelper.isUserAuthenticated(this) || !UpiPaymentHelper.isAdminEmail(activeEmail)) {
+        if (!GoogleAuthHelper.isUserAuthenticated(this) || !UpiPaymentHelper.isAuthorizedAdmin(this, prefs)) {
+            Toast.makeText(this, getString(R.string.admin_access_denied), Toast.LENGTH_SHORT).show()
             finish()
         }
     }
@@ -242,7 +283,12 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun setupToolbar(adminEmail: String) {
-        binding.adminToolbar.subtitle = adminEmail
+        val rolePrefix = if (UpiPaymentHelper.isSuperAdminEmail(adminEmail)) {
+            getString(R.string.admin_user_badge_super_admin)
+        } else {
+            getString(R.string.admin_user_badge_admin)
+        }
+        binding.adminToolbar.subtitle = "$rolePrefix • $adminEmail"
         binding.adminToolbar.setNavigationOnClickListener { finish() }
     }
 
@@ -279,7 +325,8 @@ class AdminPanelActivity : AppCompatActivity() {
         expiringUsersAdapter = AdminExpiringUsersAdapter(
             onRenewMonthClick = { user -> renewUserMonth(user) },
             onManageClick = { user -> showManageUserDialog(user) },
-            onRevokeProClick = { user -> revokeUserPro(user) }
+            onRevokeProClick = { user -> revokeUserPro(user) },
+            onAdjustDaysClick = { user, deltaDays -> adjustUserDays(user, deltaDays) }
         )
         binding.recyclerAdminExpiring.layoutManager = LinearLayoutManager(this)
         binding.recyclerAdminExpiring.adapter = expiringUsersAdapter
@@ -290,10 +337,11 @@ class AdminPanelActivity : AppCompatActivity() {
         }
 
         binding.rgAdminSubscriberFilter.setOnCheckedChangeListener { _, checkedId ->
-            currentSubscriberFilter = if (checkedId == R.id.rb_subscriber_all_active) {
-                AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS
-            } else {
-                AdminSubscriberFilter.EXPIRING_SOON
+            currentSubscriberFilter = when (checkedId) {
+                R.id.rb_subscriber_all_active -> AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS
+                R.id.rb_subscriber_old_expired -> AdminSubscriberFilter.OLD_EXPIRED_USERS
+                R.id.rb_subscriber_new_trial -> AdminSubscriberFilter.NEW_TRIAL_USERS
+                else -> AdminSubscriberFilter.EXPIRING_SOON
             }
             applySubscriberFilters()
         }
@@ -313,12 +361,20 @@ class AdminPanelActivity : AppCompatActivity() {
                 binding.btnRefreshExpiring.isEnabled = true
                 return@launch
             }
-            val result = if (requestedFilter == AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS) {
-                adminRepository.fetchAllActiveSubscribers()
-            } else {
-                adminRepository.fetchUsersExpiringWithinDays(
-                    days = AdminRepository.SUB_EXPIRING_SOON_DAYS
-                )
+            val result = when (requestedFilter) {
+                AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS ->
+                    adminRepository.fetchAllActiveSubscribers()
+                AdminSubscriberFilter.EXPIRING_SOON ->
+                    adminRepository.fetchUsersExpiringWithinDays(
+                        days = AdminRepository.SUB_EXPIRING_SOON_DAYS
+                    )
+                AdminSubscriberFilter.OLD_EXPIRED_USERS,
+                AdminSubscriberFilter.NEW_TRIAL_USERS -> {
+                    mergeAndPublishUsers()
+                    binding.progressAdminExpiring.visibility = View.GONE
+                    binding.btnRefreshExpiring.isEnabled = true
+                    return@launch
+                }
             }
             binding.progressAdminExpiring.visibility = View.GONE
             binding.btnRefreshExpiring.isEnabled = true
@@ -368,6 +424,7 @@ class AdminPanelActivity : AppCompatActivity() {
         }
         allUsers = mergedById.values.toList()
         val nowMs = System.currentTimeMillis()
+        val trialDays = currentConfig.trialDays.toInt()
         expiringSubscriptionUsers = allUsers.filter { user ->
             user.isPremiumUser && !user.isBlocked &&
                 AdminRepository.getSubscriptionRemainingDays(user, nowMs) in 1..AdminRepository.SUB_EXPIRING_SOON_DAYS
@@ -375,6 +432,16 @@ class AdminPanelActivity : AppCompatActivity() {
         allActiveSubscribers = allUsers.filter { user ->
             user.isPremiumUser && !user.isBlocked &&
                 AdminRepository.getSubscriptionRemainingDays(user, nowMs) != 0
+        }
+        oldExpiredUsers = allUsers.filter { user ->
+            !user.isBlocked &&
+                AdminRepository.resolveUserAccountStatus(user, trialDays, nowMs) ==
+                com.example.data.firebase.AdminUserAccountStatus.EXPIRED
+        }
+        newTrialUsers = allUsers.filter { user ->
+            !user.isBlocked && !user.isPremiumUser &&
+                AdminRepository.resolveUserAccountStatus(user, trialDays, nowMs) !=
+                com.example.data.firebase.AdminUserAccountStatus.EXPIRED
         }
         updateKpis()
         applyUserFilters()
@@ -412,56 +479,91 @@ class AdminPanelActivity : AppCompatActivity() {
                 }
             }.thenByDescending { it.createdAt?.toDate()?.time ?: 0L }
         )
+        refreshApprovedUtrLocks()
         updateKpis()
         applyPaymentFilters()
     }
 
     private fun applySubscriberFilters() {
-        val sourceList = if (currentSubscriberFilter == AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS) {
-            allActiveSubscribers
-        } else {
-            expiringSubscriptionUsers
+        val trialDays = currentConfig.trialDays.toInt()
+        val sourceList = when (currentSubscriberFilter) {
+            AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS -> allActiveSubscribers
+            AdminSubscriberFilter.OLD_EXPIRED_USERS -> oldExpiredUsers
+            AdminSubscriberFilter.NEW_TRIAL_USERS -> newTrialUsers
+            AdminSubscriberFilter.EXPIRING_SOON -> expiringSubscriptionUsers
         }
         val filtered = AdminRepository.filterSubscribers(
             subscribers = sourceList,
             filter = currentSubscriberFilter,
-            query = currentSubscriberQuery
+            query = currentSubscriberQuery,
+            trialDaysConfig = trialDays
         )
 
-        val isAllActive = currentSubscriberFilter == AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS
-        binding.cardSubscriberSummary.setCardBackgroundColor(
-            ContextCompat.getColor(
-                this,
-                if (isAllActive) R.color.md_theme_primaryContainer else R.color.md_theme_errorContainer
+        val (bgRes, strokeRes, textRes) = when (currentSubscriberFilter) {
+            AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS -> Triple(
+                R.color.md_theme_primaryContainer,
+                R.color.md_theme_primary,
+                R.color.md_theme_onPrimaryContainer
             )
-        )
-        binding.cardSubscriberSummary.strokeColor = ContextCompat.getColor(
-            this,
-            if (isAllActive) R.color.md_theme_primary else R.color.md_theme_error
-        )
-        val bannerTextColor = ContextCompat.getColor(
-            this,
-            if (isAllActive) R.color.md_theme_onPrimaryContainer else R.color.md_theme_onErrorContainer
-        )
+            AdminSubscriberFilter.NEW_TRIAL_USERS -> Triple(
+                R.color.md_theme_tertiaryContainer,
+                R.color.md_theme_tertiary,
+                R.color.md_theme_onTertiaryContainer
+            )
+            AdminSubscriberFilter.OLD_EXPIRED_USERS -> Triple(
+                R.color.md_theme_secondaryContainer,
+                R.color.md_theme_outline,
+                R.color.md_theme_onSecondaryContainer
+            )
+            AdminSubscriberFilter.EXPIRING_SOON -> Triple(
+                R.color.md_theme_errorContainer,
+                R.color.md_theme_error,
+                R.color.md_theme_onErrorContainer
+            )
+        }
+        binding.cardSubscriberSummary.setCardBackgroundColor(ContextCompat.getColor(this, bgRes))
+        binding.cardSubscriberSummary.strokeColor = ContextCompat.getColor(this, strokeRes)
+        val bannerTextColor = ContextCompat.getColor(this, textRes)
         binding.tvSubscriberBannerTitle.setTextColor(bannerTextColor)
         binding.tvExpiringQueryCount.setTextColor(bannerTextColor)
         binding.tvSubscriberBannerDesc.setTextColor(bannerTextColor)
 
-        binding.tvSubscriberBannerTitle.text = getString(
-            if (isAllActive) R.string.admin_active_banner_title else R.string.admin_expiring_banner_title
-        )
-        binding.tvSubscriberBannerDesc.text = getString(
-            if (isAllActive) R.string.admin_active_banner_desc else R.string.admin_expiring_banner_desc
-        )
-        binding.tvExpiringQueryCount.text = getString(
-            if (isAllActive) R.string.admin_active_query_count else R.string.admin_expiring_query_count,
-            filtered.size
-        )
+        val (titleRes, descRes, countRes, emptyRes) = when (currentSubscriberFilter) {
+            AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS -> listOf(
+                R.string.admin_active_banner_title,
+                R.string.admin_active_banner_desc,
+                R.string.admin_active_query_count,
+                R.string.admin_active_empty
+            )
+            AdminSubscriberFilter.OLD_EXPIRED_USERS -> listOf(
+                R.string.admin_old_expired_banner_title,
+                R.string.admin_old_expired_banner_desc,
+                R.string.admin_old_expired_query_count,
+                R.string.admin_old_expired_empty
+            )
+            AdminSubscriberFilter.NEW_TRIAL_USERS -> listOf(
+                R.string.admin_new_trial_banner_title,
+                R.string.admin_new_trial_banner_desc,
+                R.string.admin_new_trial_query_count,
+                R.string.admin_new_trial_empty
+            )
+            AdminSubscriberFilter.EXPIRING_SOON -> listOf(
+                R.string.admin_expiring_banner_title,
+                R.string.admin_expiring_banner_desc,
+                R.string.admin_expiring_query_count,
+                R.string.admin_expiring_empty
+            )
+        }
+        binding.tvSubscriberBannerTitle.text = getString(titleRes)
+        binding.tvSubscriberBannerDesc.text = getString(descRes)
+        binding.tvExpiringQueryCount.text = getString(countRes, filtered.size)
 
-        binding.tvAdminExpiringEmpty.text = when {
-            isAllActive -> getString(R.string.admin_active_empty)
-            currentSubscriberQuery.isNotBlank() -> getString(R.string.admin_expiring_search_empty)
-            else -> getString(R.string.admin_expiring_empty)
+        binding.tvAdminExpiringEmpty.text = if (
+            currentSubscriberQuery.isNotBlank() && currentSubscriberFilter == AdminSubscriberFilter.EXPIRING_SOON
+        ) {
+            getString(R.string.admin_expiring_search_empty)
+        } else {
+            getString(emptyRes)
         }
         binding.tvAdminExpiringEmpty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
         expiringUsersAdapter.submitList(filtered)
@@ -498,11 +600,12 @@ class AdminPanelActivity : AppCompatActivity() {
         usersAdapter = AdminUsersAdapter(
             onToggleProClick = { user -> toggleUserPro(user) },
             onRenewMonthClick = { user -> renewUserMonth(user) },
-            onExtendTrialClick = { user -> extendUserTrial(user, 7L) },
+            onExtendTrialClick = { user -> adjustUserDays(user, 7L) },
             onToggleBlockClick = { user -> toggleUserBlock(user) },
             onManageClick = { user -> showManageUserDialog(user) },
             onApproveUtrClick = { user -> approveUserUtrDirect(user) },
-            onRejectUtrClick = { user -> rejectUserUtrDirect(user) }
+            onRejectUtrClick = { user -> rejectUserUtrDirect(user) },
+            onReduceDaysClick = { user -> adjustUserDays(user, -7L) }
         )
         binding.recyclerAdminUsers.layoutManager = LinearLayoutManager(this)
         binding.recyclerAdminUsers.adapter = usersAdapter
@@ -1049,7 +1152,17 @@ class AdminPanelActivity : AppCompatActivity() {
                 dialpadTonesDefault = prefs.dialpadTonesEnabled,
                 defaultAutoRecording = prefs.autoCallRecording,
                 forceThemeMode = currentThemeMode,
-                hideSubscriptionUI = prefs.configHideSubscriptionUi
+                hideSubscriptionUI = prefs.configHideSubscriptionUi,
+                enableUpiGateway = prefs.enableUpiGateway,
+                enableRazorpayGateway = prefs.enableRazorpayGateway,
+                razorpayKeyId = prefs.configuredRazorpayKeyId,
+                razorpayPaymentLink = prefs.configuredRazorpayPaymentLink,
+                enablePayuGateway = prefs.enablePayuGateway,
+                payuMerchantKey = prefs.configuredPayuMerchantKey,
+                payuPaymentLink = prefs.configuredPayuPaymentLink,
+                enableCustomGateway = prefs.enableCustomGateway,
+                customGatewayName = prefs.configuredCustomGatewayName,
+                customGatewayUrl = prefs.configuredCustomGatewayUrl
             )
         )
 
@@ -1078,6 +1191,17 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.switchLocalDarkTheme.isChecked = config.forceThemeMode == AppConfig.THEME_DARK ||
             (config.forceThemeMode == AppConfig.THEME_USER &&
                 prefs.displayThemeMode == AppCompatDelegate.MODE_NIGHT_YES)
+
+        binding.switchConfigEnableUpi.isChecked = config.enableUpiGateway
+        binding.switchConfigEnableRazorpay.isChecked = config.enableRazorpayGateway
+        binding.etConfigRazorpayKeyId.setText(config.razorpayKeyId)
+        binding.etConfigRazorpayLink.setText(config.razorpayPaymentLink)
+        binding.switchConfigEnablePayu.isChecked = config.enablePayuGateway
+        binding.etConfigPayuKey.setText(config.payuMerchantKey)
+        binding.etConfigPayuLink.setText(config.payuPaymentLink)
+        binding.switchConfigEnableCustomGw.isChecked = config.enableCustomGateway
+        binding.etConfigCustomGwName.setText(config.customGatewayName)
+        binding.etConfigCustomGwUrl.setText(config.customGatewayUrl)
     }
 
     private fun saveAllAdminSettings() {
@@ -1092,6 +1216,26 @@ class AdminPanelActivity : AppCompatActivity() {
             whatsappDigits.length < 10
         ) {
             Toast.makeText(this, R.string.admin_settings_invalid_input, Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val enableUpi = binding.switchConfigEnableUpi.isChecked
+        val enableRazorpay = binding.switchConfigEnableRazorpay.isChecked
+        val razorpayKey = binding.etConfigRazorpayKeyId.text?.toString()?.trim().orEmpty()
+        val razorpayLink = binding.etConfigRazorpayLink.text?.toString()?.trim().orEmpty()
+        val enablePayu = binding.switchConfigEnablePayu.isChecked
+        val payuKey = binding.etConfigPayuKey.text?.toString()?.trim().orEmpty()
+        val payuLink = binding.etConfigPayuLink.text?.toString()?.trim().orEmpty()
+        val enableCustom = binding.switchConfigEnableCustomGw.isChecked
+        val customName = binding.etConfigCustomGwName.text?.toString()?.trim().orEmpty()
+        val customUrl = binding.etConfigCustomGwUrl.text?.toString()?.trim().orEmpty()
+
+        val hasAnyGateway = enableUpi || enableRazorpay || enablePayu || enableCustom
+        val razorpayValid = !enableRazorpay || razorpayKey.isNotBlank() || razorpayLink.isNotBlank()
+        val payuValid = !enablePayu || payuKey.isNotBlank() || payuLink.isNotBlank()
+        val customValid = !enableCustom || customUrl.isNotBlank()
+        if (!hasAnyGateway || !razorpayValid || !payuValid || !customValid) {
+            Toast.makeText(this, R.string.admin_gateway_validation_error, Toast.LENGTH_LONG).show()
             return
         }
 
@@ -1116,7 +1260,17 @@ class AdminPanelActivity : AppCompatActivity() {
             dialpadTonesDefault = binding.switchLocalDialpadTones.isChecked,
             defaultAutoRecording = binding.switchLocalAutoRecording.isChecked,
             forceThemeMode = desiredGlobalTheme,
-            hideSubscriptionUI = binding.switchConfigHideSubUi.isChecked
+            hideSubscriptionUI = binding.switchConfigHideSubUi.isChecked,
+            enableUpiGateway = enableUpi,
+            enableRazorpayGateway = enableRazorpay,
+            razorpayKeyId = razorpayKey,
+            razorpayPaymentLink = razorpayLink,
+            enablePayuGateway = enablePayu,
+            payuMerchantKey = payuKey,
+            payuPaymentLink = payuLink,
+            enableCustomGateway = enableCustom,
+            customGatewayName = customName,
+            customGatewayUrl = customUrl
         )
 
         val desiredNightMode = if (binding.switchLocalDarkTheme.isChecked) {
@@ -1206,8 +1360,10 @@ class AdminPanelActivity : AppCompatActivity() {
                                 currentConfig = config
                                 prefs.applyAppConfig(config)
                                 usersAdapter.trialDaysConfig = config.trialDays.toInt()
+                                expiringUsersAdapter.trialDaysConfig = config.trialDays.toInt()
                                 bindSettingsInputs(config)
                                 applyUserFilters()
+                                applySubscriberFilters()
                             }
                         }
                 }
@@ -1339,21 +1495,21 @@ class AdminPanelActivity : AppCompatActivity() {
         }
     }
 
-    private fun extendUserTrial(user: UserEntitlement, extraDays: Long) {
-        val nextBonus = (user.bonusTrialDays + extraDays).coerceIn(0L, 3650L)
+    private fun adjustUserDays(user: UserEntitlement, deltaDays: Long) {
+        val trialDays = currentConfig.trialDays.toInt()
         lifecycleScope.launch {
-            val result = adminRepository.updateUserAdminDetails(
+            val result = adminRepository.adjustUserAccessDays(
                 user = user,
-                isPremium = user.isPremiumUser,
-                isBlocked = user.isBlocked,
-                bonusTrialDays = nextBonus,
-                adminNote = user.adminNote,
-                hideSubscriptionUI = user.hideSubscriptionUI
+                deltaDays = deltaDays,
+                trialDaysConfig = trialDays
             )
             result.onSuccess {
+                val deltaText = if (deltaDays >= 0L) "+${deltaDays}d" else "${deltaDays}d"
+                val label = user.displayName.ifBlank { user.email.ifBlank { user.userId } }
+                val roleLabel = if (user.isPremiumUser) "Subscription" else "Access"
                 Toast.makeText(
                     this@AdminPanelActivity,
-                    getString(R.string.admin_user_updated, user.displayName.ifBlank { user.email }),
+                    getString(R.string.admin_days_adjusted_toast, label, deltaText, roleLabel),
                     Toast.LENGTH_SHORT
                 ).show()
             }.onFailure { err ->
@@ -1394,14 +1550,23 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun approveUserUtrDirect(user: UserEntitlement) {
+        val locks = currentEffectiveApprovedUtrKeys()
         lifecycleScope.launch {
             val pendingReq = allPayments.firstOrNull {
                 it.userId == user.userId && it.status == PaymentRequest.STATUS_PENDING
             }
             val result = if (pendingReq != null) {
-                paymentRepository.approvePaymentRequest(pendingReq)
+                paymentRepository.approvePaymentRequest(
+                    request = pendingReq,
+                    knownRequests = allPayments,
+                    approvedUtrKeys = locks
+                )
             } else {
-                adminRepository.approveUserUtrDirect(user)
+                adminRepository.approveUserUtrDirect(
+                    user = user,
+                    approvedUtrKeys = locks,
+                    knownRequests = allPayments
+                )
             }
             result.onSuccess {
                 Toast.makeText(
@@ -1451,44 +1616,269 @@ class AdminPanelActivity : AppCompatActivity() {
         } else {
             "—"
         }
+        val actingEmail = GoogleAuthHelper.resolveActiveEmail(this)
+        val isActingSuperAdmin = UpiPaymentHelper.isSuperAdminEmail(actingEmail)
+        val isTargetSuperAdmin = UpiPaymentHelper.isSuperAdminEmail(user.email)
+        val dateFmt = java.text.SimpleDateFormat("dd MMM yyyy, hh:mm a", java.util.Locale.getDefault())
+
+        var pendingExpiryMs = AdminRepository.resolveEffectiveExpiryMs(user)
+
+        val scrollView = ScrollView(this)
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
         }
+        scrollView.addView(container)
+
         val infoView = TextView(this).apply {
-            text = "Email: ${user.email}\nPhone: ${user.phoneNumber.ifBlank { "—" }}\nUID: ${user.userId}\nDevice: $deviceTag"
+            text = buildString {
+                append("Email: ").append(user.email.ifBlank { "—" })
+                append("\nUID: ").append(user.userId)
+                append("\nDevice: ").append(deviceTag)
+                append("\nStatus: ").append(user.subscriptionStatus)
+                if (user.paymentRefId.isNotBlank()) {
+                    append("\nUTR / Ref: ").append(user.paymentRefId)
+                }
+                if (isTargetSuperAdmin) {
+                    append("\nRole: ").append(getString(R.string.admin_manage_super_admin_locked))
+                } else if (UpiPaymentHelper.isDelegatedAdminAuthorized(user.isAdmin, user.adminGrantedBy)) {
+                    append("\nRole: Delegated Admin (by ").append(user.adminGrantedBy).append(")")
+                }
+            }
+            setPadding(0, 0, 0, 16)
         }
-        val bonusInput = EditText(this).apply {
-            hint = "Total bonus trial days"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(user.bonusTrialDays.toString())
+
+        val nameInput = EditText(this).apply {
+            hint = getString(R.string.admin_manage_display_name_hint)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            setText(user.displayName)
         }
-        val noteInput = EditText(this).apply {
-            hint = "Admin note"
-            setText(user.adminNote)
+        val phoneInput = EditText(this).apply {
+            hint = getString(R.string.admin_manage_phone_hint)
+            inputType = InputType.TYPE_CLASS_PHONE
+            setText(user.phoneNumber)
+        }
+
+        val subDaysHeader = TextView(this).apply {
+            text = getString(R.string.admin_manage_sub_days_section)
+            setPadding(0, 20, 0, 4)
+        }
+        val expiryPreviewView = TextView(this).apply {
+            setPadding(0, 4, 0, 8)
         }
         val proCheck = CheckBox(this).apply {
             text = "Premium Active"
             isChecked = user.isPremiumUser
         }
+
+        val bonusInput = EditText(this).apply {
+            hint = "Total bonus trial days"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(user.bonusTrialDays.toString())
+        }
+        val trialDaysConfig = currentConfig.trialDays.toInt()
+        val initialStatus = AdminRepository.resolveUserAccountStatus(user, trialDaysConfig)
+        var trialExplicitlyExpired = initialStatus == com.example.data.firebase.AdminUserAccountStatus.EXPIRED
+
+        fun updateExpiryPreview() {
+            val nowMs = System.currentTimeMillis()
+            val pendingBonus = bonusInput.text?.toString()?.trim()?.toLongOrNull()?.coerceIn(0L, 3650L)
+                ?: user.bonusTrialDays
+            expiryPreviewView.text = if (pendingExpiryMs > nowMs && proCheck.isChecked) {
+                val daysLeft = kotlin.math.ceil(
+                    (pendingExpiryMs - nowMs).toDouble() / DialerPreferences.ONE_DAY_MILLIS.toDouble()
+                ).toInt().coerceAtLeast(1)
+                "Subscription Expiry: ${dateFmt.format(java.util.Date(pendingExpiryMs))} (${daysLeft}d left)"
+            } else if (!proCheck.isChecked && !trialExplicitlyExpired) {
+                val virtualTrialUser = user.copy(
+                    isPremiumUser = false,
+                    bonusTrialDays = pendingBonus
+                )
+                val trialLeft = AdminRepository.getRemainingDaysForUser(virtualTrialUser, trialDaysConfig, nowMs)
+                if (trialLeft > 0) {
+                    "New / Trial Remaining: ${trialLeft}d left (Bonus +${pendingBonus}d)"
+                } else {
+                    "Trial / Plan Expired (0d left)"
+                }
+            } else {
+                "Subscription Expiry: Not Active / Expired"
+            }
+        }
+        updateExpiryPreview()
+
+        fun applyDeltaDays(deltaDays: Long) {
+            if (deltaDays == 0L) return
+            val nowMs = System.currentTimeMillis()
+            val isCurrentlyTrialUser = !proCheck.isChecked && pendingExpiryMs <= nowMs && !trialExplicitlyExpired
+            if (isCurrentlyTrialUser) {
+                val currentBonus = bonusInput.text?.toString()?.trim()?.toLongOrNull()?.coerceIn(0L, 3650L)
+                    ?: user.bonusTrialDays
+                if (deltaDays > 0L) {
+                    val nextBonus = (currentBonus + deltaDays).coerceIn(0L, 3650L)
+                    bonusInput.setText(nextBonus.toString())
+                    trialExplicitlyExpired = false
+                } else {
+                    val sub = (-deltaDays).coerceAtMost(3650L)
+                    if (sub <= currentBonus) {
+                        bonusInput.setText((currentBonus - sub).coerceAtLeast(0L).toString())
+                    } else {
+                        val trialUser = user.copy(isPremiumUser = false, bonusTrialDays = currentBonus)
+                        val rem = AdminRepository.getRemainingDaysForUser(trialUser, trialDaysConfig, nowMs).toLong()
+                        val target = (rem - sub).coerceAtLeast(0L)
+                        bonusInput.setText("0")
+                        if (target <= 0L) {
+                            pendingExpiryMs = 0L
+                            proCheck.isChecked = false
+                            trialExplicitlyExpired = true
+                        } else {
+                            pendingExpiryMs = nowMs + target * DialerPreferences.ONE_DAY_MILLIS
+                            proCheck.isChecked = true
+                            trialExplicitlyExpired = false
+                        }
+                    }
+                }
+                updateExpiryPreview()
+                return
+            }
+
+            val virtualUser = user.copy(
+                isPremiumUser = proCheck.isChecked || pendingExpiryMs > nowMs,
+                subscriptionExpiresAt = if (pendingExpiryMs > 0L) {
+                    com.google.firebase.Timestamp(java.util.Date(pendingExpiryMs))
+                } else {
+                    null
+                }
+            )
+            pendingExpiryMs = AdminRepository.computeAdjustedSubscriptionExpiryMs(
+                user = virtualUser,
+                deltaDays = deltaDays,
+                nowMs = nowMs
+            )
+            proCheck.isChecked = pendingExpiryMs > nowMs
+            trialExplicitlyExpired = pendingExpiryMs <= nowMs
+            updateExpiryPreview()
+        }
+
+        val quickDaysRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val quickDeltas = listOf(-30L to "-30d", -7L to "-7d", -1L to "-1d", 1L to "+1d", 7L to "+7d", 30L to "+30d")
+        quickDeltas.forEach { (delta, label) ->
+            val btn = MaterialButton(
+                this,
+                null,
+                com.google.android.material.R.attr.materialButtonOutlinedStyle
+            ).apply {
+                text = label
+                textSize = 11f
+                setPadding(6, 0, 6, 0)
+                minWidth = 0
+                minimumWidth = 0
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                ).apply {
+                    marginEnd = 4
+                }
+                setOnClickListener { applyDeltaDays(delta) }
+            }
+            quickDaysRow.addView(btn)
+        }
+
+        val customDeltaRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 8, 0, 8)
+        }
+        val customDaysInput = EditText(this).apply {
+            hint = getString(R.string.admin_manage_sub_days_delta_hint)
+            inputType = InputType.TYPE_CLASS_NUMBER
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val btnAddDays = MaterialButton(this).apply {
+            text = getString(R.string.admin_manage_add_days_btn)
+            setPadding(16, 0, 16, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = 8 }
+            setOnClickListener {
+                val days = customDaysInput.text?.toString()?.trim()?.toLongOrNull() ?: 0L
+                if (days > 0L) {
+                    applyDeltaDays(days)
+                    customDaysInput.setText("")
+                }
+            }
+        }
+        val btnSubDays = MaterialButton(
+            this,
+            null,
+            com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = getString(R.string.admin_manage_sub_days_btn)
+            setPadding(16, 0, 16, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = 8 }
+            setOnClickListener {
+                val days = customDaysInput.text?.toString()?.trim()?.toLongOrNull() ?: 0L
+                if (days > 0L) {
+                    applyDeltaDays(-days)
+                    customDaysInput.setText("")
+                }
+            }
+        }
+        customDeltaRow.addView(customDaysInput)
+        customDeltaRow.addView(btnAddDays)
+        customDeltaRow.addView(btnSubDays)
+
+        val noteInput = EditText(this).apply {
+            hint = "Admin note"
+            setText(user.adminNote)
+        }
+        val autoRecordCheck = CheckBox(this).apply {
+            text = getString(R.string.admin_manage_auto_record)
+            isChecked = user.autoCallRecording
+        }
         val blockCheck = CheckBox(this).apply {
             text = "Block / Suspend User"
-            isChecked = user.isBlocked
+            isChecked = user.isBlocked && !isTargetSuperAdmin
+            isEnabled = !isTargetSuperAdmin
         }
         val hideSubCheck = CheckBox(this).apply {
             text = "Hide Subscription & Payment UI for this user"
             isChecked = user.hideSubscriptionUI
         }
+        val resetDeviceCheck = CheckBox(this).apply {
+            text = getString(R.string.admin_manage_reset_device)
+            isChecked = false
+        }
+        val delegateAdminCheck = CheckBox(this).apply {
+            text = getString(R.string.admin_manage_delegate_admin)
+            isChecked = UpiPaymentHelper.isDelegatedAdminAuthorized(user.isAdmin, user.adminGrantedBy)
+            visibility = if (isActingSuperAdmin && !isTargetSuperAdmin) View.VISIBLE else View.GONE
+        }
+
         container.addView(infoView)
+        container.addView(nameInput)
+        container.addView(phoneInput)
+        container.addView(subDaysHeader)
+        container.addView(expiryPreviewView)
+        container.addView(quickDaysRow)
+        container.addView(customDeltaRow)
         container.addView(bonusInput)
         container.addView(noteInput)
         container.addView(proCheck)
+        container.addView(autoRecordCheck)
         container.addView(blockCheck)
         container.addView(hideSubCheck)
+        container.addView(resetDeviceCheck)
+        container.addView(delegateAdminCheck)
 
         MaterialAlertDialogBuilder(this)
             .setTitle(user.displayName.ifBlank { user.email.ifBlank { "Manage User" } })
-            .setView(container)
+            .setView(scrollView)
             .setNeutralButton("Copy UID") { _, _ ->
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 cm?.setPrimaryClip(ClipData.newPlainText("UID", user.userId))
@@ -1497,19 +1887,47 @@ class AdminPanelActivity : AppCompatActivity() {
             .setPositiveButton("Save") { _, _ ->
                 val bonus = bonusInput.text.toString().trim().toLongOrNull() ?: user.bonusTrialDays
                 val note = noteInput.text.toString().trim()
+                val nextName = nameInput.text.toString().trim()
+                val nextPhone = phoneInput.text.toString().trim()
+                val nowMs = System.currentTimeMillis()
+                val nextPremium = proCheck.isChecked && !blockCheck.isChecked &&
+                    (pendingExpiryMs <= 0L || pendingExpiryMs > nowMs)
+                val expiryTs = if (nextPremium && pendingExpiryMs > nowMs) {
+                    com.google.firebase.Timestamp(java.util.Date(pendingExpiryMs))
+                } else {
+                    null
+                }
+                val nextAdminGrant = if (isActingSuperAdmin && !isTargetSuperAdmin) {
+                    delegateAdminCheck.isChecked
+                } else {
+                    user.isAdmin
+                }
+                val nextStatusOverride = if (!nextPremium && !blockCheck.isChecked && trialExplicitlyExpired) {
+                    UserEntitlement.STATUS_EXPIRED
+                } else {
+                    null
+                }
                 lifecycleScope.launch {
-                    val result = adminRepository.updateUserAdminDetails(
+                    val result = adminRepository.updateFullUserManagement(
                         user = user,
-                        isPremium = proCheck.isChecked,
-                        isBlocked = blockCheck.isChecked,
+                        displayName = nextName,
+                        phoneNumber = nextPhone,
+                        isPremium = nextPremium,
+                        isBlocked = blockCheck.isChecked && !isTargetSuperAdmin,
                         bonusTrialDays = bonus.coerceIn(0L, 3650L),
+                        autoCallRecording = autoRecordCheck.isChecked,
+                        hideSubscriptionUI = hideSubCheck.isChecked,
                         adminNote = note,
-                        hideSubscriptionUI = hideSubCheck.isChecked
+                        subscriptionExpiresAt = expiryTs,
+                        resetDeviceLock = resetDeviceCheck.isChecked,
+                        grantAdminAccess = nextAdminGrant,
+                        actingAdminEmail = actingEmail,
+                        explicitSubscriptionStatus = nextStatusOverride
                     )
                     result.onSuccess {
                         Toast.makeText(
                             this@AdminPanelActivity,
-                            getString(R.string.admin_user_updated, user.displayName.ifBlank { user.email }),
+                            getString(R.string.admin_user_updated, nextName.ifBlank { user.email }),
                             Toast.LENGTH_SHORT
                         ).show()
                     }.onFailure { err ->
@@ -1526,8 +1944,13 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun handleApprovePayment(request: PaymentRequest) {
+        val locks = currentEffectiveApprovedUtrKeys()
         lifecycleScope.launch {
-            val result = paymentRepository.approvePaymentRequest(request)
+            val result = paymentRepository.approvePaymentRequest(
+                request = request,
+                knownRequests = allPayments,
+                approvedUtrKeys = locks
+            )
             result.onSuccess {
                 Toast.makeText(
                     this@AdminPanelActivity,

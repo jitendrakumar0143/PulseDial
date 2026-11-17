@@ -9,6 +9,7 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.example.R
+import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.PaymentRequest
 import com.example.databinding.ItemPaymentRequestBinding
 
@@ -16,6 +17,14 @@ class PaymentRequestsAdapter(
     private val onApproveClick: (PaymentRequest) -> Unit,
     private val onRejectClick: (PaymentRequest) -> Unit
 ) : ListAdapter<PaymentRequest, PaymentRequestsAdapter.PaymentRequestViewHolder>(DiffCallback) {
+
+    var approvedUtrKeys: Set<String> = emptySet()
+        set(value) {
+            if (field != value) {
+                field = value
+                notifyDataSetChanged()
+            }
+        }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PaymentRequestViewHolder {
         val binding = ItemPaymentRequestBinding.inflate(
@@ -50,9 +59,17 @@ class PaymentRequestsAdapter(
             binding.tvReqPaymentMeta.text =
                 "₹${item.amountInr} • ${item.upiId} • ${item.shortDeviceTag} • $timeText"
 
+            val utrKey = PaymentRepository.normalizeUtrKey(PaymentRepository.extractCanonicalUtr(item))
+            val isUtrLocked = utrKey.isNotEmpty() && approvedUtrKeys.contains(utrKey)
+
             val txnPart = if (item.upiTxnId.isNotBlank()) "UTR/Txn: ${item.upiTxnId}" else "UTR: —"
+            val lockSuffix = if (item.status != PaymentRequest.STATUS_APPROVED && isUtrLocked) {
+                " • ${ctx.getString(R.string.admin_utr_already_approved_once)}"
+            } else {
+                ""
+            }
             binding.tvReqTxnDetails.text =
-                "Ref: ${item.txnRef} • $txnPart • Verify: ${item.upiResponseStatus}"
+                "Ref: ${item.txnRef} • $txnPart • Verify: ${item.upiResponseStatus}$lockSuffix"
 
             if (item.reviewNote.isNotBlank()) {
                 binding.tvReqReviewNote.visibility = View.VISIBLE
@@ -75,7 +92,7 @@ class PaymentRequestsAdapter(
                     binding.chipReqStatus.setChipBackgroundColorResource(R.color.md_theme_errorContainer)
                     binding.chipReqStatus.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer))
                     binding.layoutAdminActions.visibility = View.VISIBLE
-                    binding.btnApproveRequest.visibility = View.VISIBLE
+                    binding.btnApproveRequest.visibility = if (isUtrLocked) View.GONE else View.VISIBLE
                     binding.btnRejectRequest.visibility = View.GONE
                 }
                 else -> {
@@ -83,7 +100,7 @@ class PaymentRequestsAdapter(
                     binding.chipReqStatus.setChipBackgroundColorResource(R.color.md_theme_secondaryContainer)
                     binding.chipReqStatus.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_onSecondaryContainer))
                     binding.layoutAdminActions.visibility = View.VISIBLE
-                    binding.btnApproveRequest.visibility = View.VISIBLE
+                    binding.btnApproveRequest.visibility = if (isUtrLocked) View.GONE else View.VISIBLE
                     binding.btnRejectRequest.visibility = View.VISIBLE
                 }
             }

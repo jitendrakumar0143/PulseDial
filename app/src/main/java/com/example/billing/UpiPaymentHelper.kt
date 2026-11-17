@@ -1,7 +1,10 @@
 package com.example.billing
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.example.data.DialerPreferences
+import com.google.firebase.auth.FirebaseAuth
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -34,9 +37,48 @@ object UpiPaymentHelper {
     const val WHATSAPP_SUPPORT_LOCAL = "9012634797"
     const val WHATSAPP_SUPPORT_E164 = "919012634797"
     const val ADMIN_EMAIL = "jitendrakumar888126@gmail.com"
+    const val SUPER_ADMIN_EMAIL_PRIMARY = "0143pushpendra@gmail.com"
+    const val SUPER_ADMIN_EMAIL_SECONDARY = "jitendrakumar888126@gmail.com"
 
-    fun isAdminEmail(email: String?): Boolean {
-        return email?.trim()?.equals(ADMIN_EMAIL, ignoreCase = true) == true
+    val SUPER_ADMIN_EMAILS: Set<String> = setOf(
+        SUPER_ADMIN_EMAIL_PRIMARY,
+        SUPER_ADMIN_EMAIL_SECONDARY
+    )
+
+    fun isSuperAdminEmail(email: String?): Boolean {
+        val clean = email?.trim()?.lowercase(Locale.US).orEmpty()
+        return clean.isNotEmpty() && SUPER_ADMIN_EMAILS.contains(clean)
+    }
+
+    fun isAdminEmail(email: String?): Boolean = isSuperAdminEmail(email)
+
+    fun isDelegatedAdminAuthorized(isAdmin: Boolean, grantedByEmail: String?): Boolean {
+        return isAdmin && isSuperAdminEmail(grantedByEmail)
+    }
+
+    fun isAuthorizedAdmin(
+        context: Context,
+        prefs: DialerPreferences = DialerPreferences(context)
+    ): Boolean {
+        val authEmail = runCatching {
+            FirebaseAuth.getInstance().currentUser?.email
+        }.getOrNull()?.trim().orEmpty()
+        val prefEmail = prefs.userEmail.trim()
+        val effectiveEmail = authEmail.ifBlank { prefEmail }
+
+        if (isSuperAdminEmail(effectiveEmail)) {
+            return true
+        }
+        if (!prefs.verifyIntegrityOrReset() || prefs.tamperDetected || prefs.adminBlockedUser) {
+            return false
+        }
+        if (!prefs.isLoggedIn || effectiveEmail.isBlank()) {
+            return false
+        }
+        if (authEmail.isNotBlank() && !authEmail.equals(prefEmail, ignoreCase = true)) {
+            return false
+        }
+        return prefs.delegatedAdminAuthorized && isSuperAdminEmail(prefs.delegatedAdminGrantedBy)
     }
 
     fun generateTxnRef(): String = "PD${System.currentTimeMillis()}"

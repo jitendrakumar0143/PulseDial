@@ -32,6 +32,8 @@ import com.example.R
 import com.example.billing.SubscriptionManager
 import com.example.billing.UpiPaymentHelper
 import com.example.data.DialerPreferences
+import com.example.data.SecurityIntegrityGuard
+import com.example.data.SimNumberHelper
 import com.example.data.firebase.AdminRepository
 import com.example.data.firebase.CustomPopupAd
 import com.example.data.firebase.DeviceIdentityProvider
@@ -57,11 +59,13 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -98,6 +102,8 @@ class MainActivity : AppCompatActivity() {
 
 
 
+    private var lastObservedUiRestrictionKey: Triple<Boolean, Boolean, Boolean>? = null
+
     private val requiredPermissions: Array<String>
         get() = buildList {
             add(Manifest.permission.CALL_PHONE)
@@ -106,6 +112,10 @@ class MainActivity : AppCompatActivity() {
             add(Manifest.permission.READ_CONTACTS)
             add(Manifest.permission.WRITE_CONTACTS)
             add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.READ_PHONE_STATE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                add(Manifest.permission.READ_PHONE_NUMBERS)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
                 add(Manifest.permission.READ_MEDIA_AUDIO)
@@ -148,6 +158,7 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
+        triggerSimAutoFillInBackground()
         refreshCurrentFragment()
     }
 
@@ -189,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         observeRealtimeSync()
         renderAuthState(GoogleAuthHelper.isUserAuthenticated(this))
         handleIncomingIntent(intent)
+        runSecurityIntegrityCheckInBackground()
     }
 
     override fun onStart() {
@@ -200,7 +212,39 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (GoogleAuthHelper.isUserAuthenticated(this)) {
             RealtimeSyncManager.refreshFromCloudNow()
+            triggerSimAutoFillInBackground()
+            runSecurityIntegrityCheckInBackground()
             enforcePaywallIfExpired()
+        }
+    }
+
+    private fun runSecurityIntegrityCheckInBackground() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val report = SecurityIntegrityGuard.verifyRuntimeIntegrity(this@MainActivity, prefs)
+            if (!report.isClean) {
+                withContext(Dispatchers.Main) {
+                    if (!isFinishing && !isDestroyed) {
+                        updateBlockedOverlayState()
+                        enforcePaywallIfExpired()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun triggerSimAutoFillInBackground() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val filled = SimNumberHelper.autoFillAndSyncSimNumber(this@MainActivity)
+            if (!filled.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    if (!isFinishing && !isDestroyed) {
+                        val current = supportFragmentManager.findFragmentById(R.id.nav_host_container)
+                        if (current is AccountFragment) {
+                            current.refreshTrialUi()
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -283,7 +327,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateBlockedOverlayState() {
         val isSignedIn = GoogleAuthHelper.isUserAuthenticated(this)
-        val isAdmin = UpiPaymentHelper.isAdminEmail(GoogleAuthHelper.resolveActiveEmail(this))
+        val isAdmin = UpiPaymentHelper.isAuthorizedAdmin(this, prefs)
         val isBlocked = isSignedIn && !isAdmin && (
             prefs.adminBlockedUser ||
                 com.example.billing.SubscriptionEnforcementService.state.value.isBlocked ||
@@ -379,6 +423,7 @@ class MainActivity : AppCompatActivity() {
             com.example.billing.SubscriptionEnforcementService.startMonitoringUser(uid, this)
             RealtimeSyncManager.startForUser(uid)
         }
+        triggerSimAutoFillInBackground()
     }
 
     private fun observeRealtimeSync() {
@@ -392,25 +437,35 @@ class MainActivity : AppCompatActivity() {
                             if (!GoogleAuthHelper.isUserAuthenticated(this@MainActivity)) return@collect
                             if (enfState.uid == null && enfState.installDateMs == 0L) return@collect
 
+                            val restrictionKey = Triple(
+                                enfState.shouldRestrictUiToAccountTab,
+                                enfState.isBlocked,
+                                enfState.isPremium
+                            )
+                            val restrictionChanged = lastObservedUiRestrictionKey != restrictionKey
+                            lastObservedUiRestrictionKey = restrictionKey
+
                             updateBlockedOverlayState()
-                            if (enfState.shouldRestrictUiToAccountTab || isAppLockedByTrialExpiry()) {
+                            if (isAppLockedByTrialExpiry()) {
                                 (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
                                     as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
                                 enforcePaywallIfExpired()
                             } else {
                                 updateFabVisibility(activeTabId)
+                                if (restrictionChanged) {
+                                    refreshCurrentFragment()
+                                }
                             }
-                            refreshCurrentFragment()
                         }
                 }
                 launch {
                     com.example.billing.SubscriptionEnforcementService.restrictionEvents.collect { event ->
                         when (event) {
                             is com.example.billing.SubscriptionRestrictionEvent.TrialExpiredRedirectToPayment -> {
-                                enforcePaywallIfExpired()
+                                refreshCurrentFragment()
                             }
                             is com.example.billing.SubscriptionRestrictionEvent.RecordingRestricted -> {
-                                enforcePaywallIfExpired()
+                                refreshCurrentFragment()
                             }
                             com.example.billing.SubscriptionRestrictionEvent.AccountBlockedByAdmin -> {
                                 updateBlockedOverlayState()
@@ -501,7 +556,7 @@ class MainActivity : AppCompatActivity() {
                                 as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
                             enforcePaywallIfExpired()
                         }
-                        delay(1000L)
+                        delay(5000L)
                     }
                 }
             }
@@ -792,13 +847,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleAccountTabTap() {
         if (hiddenAdminTapDetector.onAccountTabTapped()) {
-            val email = GoogleAuthHelper.resolveActiveEmail(this)
-            if (UpiPaymentHelper.isAdminEmail(email)) {
+            if (UpiPaymentHelper.isAuthorizedAdmin(this, prefs)) {
                 startActivity(AdminPanelActivity.createIntent(this))
             } else {
                 Toast.makeText(
                     this,
-                    getString(R.string.admin_access_denied, UpiPaymentHelper.ADMIN_EMAIL),
+                    getString(R.string.admin_access_denied),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -934,9 +988,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun isAppLockedByTrialExpiry(): Boolean {
-        val isAdmin = UpiPaymentHelper.isAdminEmail(GoogleAuthHelper.resolveActiveEmail(this))
+        val isAdmin = UpiPaymentHelper.isAuthorizedAdmin(this, prefs)
         if (subscriptionManager.isMaintenanceLocked(isAdmin)) return true
-        return !subscriptionManager.isSubscriptionActive()
+        if (!isAdmin && (prefs.adminBlockedUser || prefs.tamperDetected)) return true
+        return false
     }
 
     private fun enforcePaywallIfExpired() {
