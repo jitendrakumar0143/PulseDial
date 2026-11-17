@@ -6,11 +6,13 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatDelegate
@@ -34,8 +36,12 @@ import com.example.databinding.DialogListEditorBinding
 import com.example.databinding.FragmentSettingsBinding
 import com.example.databinding.ItemSimpleRowBinding
 import com.example.recording.CallRecordingAccessibilityService
+import com.example.recording.CallRecordingSource
 import com.example.ui.MainActivity
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -53,6 +59,38 @@ class SettingsFragment : Fragment() {
     private lateinit var subscriptionManager: SubscriptionManager
     private lateinit var settingsAdapter: DynamicSettingsAdapter
     private var isBindingVipControls: Boolean = false
+    private var isBindingVoipControls: Boolean = false
+    private var pendingVoipAction: (() -> Unit)? = null
+    private var pendingFolderSource: CallRecordingSource? = null
+
+    private val voipAudioPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (_binding == null) return@registerForActivityResult
+        val recordGranted = results[Manifest.permission.RECORD_AUDIO] == true ||
+            ContextCompat.checkSelfPermission(
+                requireContext(),
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        val action = pendingVoipAction
+        pendingVoipAction = null
+        if (recordGranted) {
+            action?.invoke()
+            bindVoipCardState()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                !CallRecordingAccessibilityService.isServiceEnabled(requireContext())
+            ) {
+                showAccessibilityEnablePrompt()
+            }
+        } else {
+            bindVoipCardState()
+            Toast.makeText(
+                requireContext(),
+                R.string.voip_mic_permission_required,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     private val sendSmsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -75,23 +113,68 @@ class SettingsFragment : Fragment() {
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
+        val targetSource = pendingFolderSource
+        pendingFolderSource = null
         if (treeUri != null) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             runCatching {
                 requireContext().contentResolver.takePersistableUriPermission(treeUri, flags)
             }
-            val folderName = DocumentFile.fromTreeUri(requireContext(), treeUri)?.name
-                ?: treeUri.lastPathSegment
-                ?: "Recordings"
-            prefs.recordingFolderUri = treeUri.toString()
-            prefs.recordingFolderName = folderName
-            bindCurrentValues()
-            Toast.makeText(
-                requireContext(),
-                getString(R.string.setting_folder_updated, folderName),
-                Toast.LENGTH_SHORT
-            ).show()
+            val folderName = resolveReadableFolderName(treeUri)
+            if (targetSource != null) {
+                prefs.setCustomFolder(targetSource, treeUri.toString(), folderName)
+                bindCurrentValues()
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.voip_folder_updated_for_app, targetSource.displayLabel, folderName),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                prefs.recordingFolderUri = treeUri.toString()
+                prefs.recordingFolderName = folderName
+                bindCurrentValues()
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.setting_folder_updated, folderName),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
+    }
+
+    private fun resolveReadableFolderName(treeUri: Uri): String {
+        val docName = DocumentFile.fromTreeUri(requireContext(), treeUri)?.name?.trim()
+        if (!docName.isNullOrEmpty()) return docName
+        val decodedSegment = treeUri.lastPathSegment
+            ?.substringAfter(':', "")
+            ?.trim('/')
+            ?.substringAfterLast('/')
+            ?.trim()
+        if (!decodedSegment.isNullOrEmpty()) return decodedSegment
+        return treeUri.lastPathSegment?.substringAfterLast('/')?.ifBlank { null } ?: "Recordings"
+    }
+
+    private fun launchFolderPickerForSource(source: CallRecordingSource?) {
+        pendingFolderSource = source
+        val initialUri = (
+            source?.let { prefs.getCustomFolderUri(it) } ?: prefs.recordingFolderUri
+        )?.let { raw -> runCatching { Uri.parse(raw) }.getOrNull() }
+        folderPickerLauncher.launch(initialUri)
+    }
+
+    private fun resetFolderForSource(source: CallRecordingSource) {
+        prefs.clearCustomFolder(source)
+        bindCurrentValues()
+        Toast.makeText(
+            requireContext(),
+            getString(R.string.voip_folder_reset_for_app, source.displayLabel),
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        pendingFolderSource?.name?.let { outState.putString(STATE_PENDING_FOLDER_SOURCE, it) }
     }
 
     override fun onCreateView(
@@ -108,26 +191,36 @@ class SettingsFragment : Fragment() {
         prefs = DialerPreferences(requireContext())
         settingsManager = SettingsManager(requireContext())
         subscriptionManager = SubscriptionManager(requireContext())
+        savedInstanceState?.getString(STATE_PENDING_FOLDER_SOURCE)?.let { raw ->
+            pendingFolderSource = runCatching { CallRecordingSource.valueOf(raw) }.getOrNull()
+        }
 
         setupRecyclerView()
+        setupVoipRecordingCardListeners()
         setupVipCardsListeners()
         bindCurrentValues()
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    RealtimeSyncManager.syncState.collect { state ->
-                        if (state.uid != null && _binding != null) {
-                            bindCurrentValues(state.settingsItems)
+                    RealtimeSyncManager.syncState
+                        .map { Triple(it.uid, it.settingsItems, it.hideSubscriptionUi) }
+                        .distinctUntilChanged()
+                        .collect { (uid, items, _) ->
+                            if (uid != null && _binding != null) {
+                                bindCurrentValues(items)
+                            }
                         }
-                    }
                 }
                 launch {
-                    SubscriptionEnforcementService.state.collect {
-                        if (_binding != null) {
-                            bindCurrentValues()
+                    SubscriptionEnforcementService.state
+                        .map { it.copy(lastEvaluatedAtMs = 0L) }
+                        .distinctUntilChanged()
+                        .collect {
+                            if (_binding != null) {
+                                bindCurrentValues()
+                            }
                         }
-                    }
                 }
             }
         }
@@ -144,10 +237,16 @@ class SettingsFragment : Fragment() {
         }
     }
 
+    private fun isVipEntitledSnapshot(): Boolean {
+        return !prefs.adminBlockedUser &&
+            !SubscriptionEnforcementService.state.value.shouldRestrictUiToAccountTab &&
+            subscriptionManager.isSubscriptionActive()
+    }
+
     private fun isVipEntitled(): Boolean {
         return !prefs.adminBlockedUser &&
-            subscriptionManager.isSubscriptionActive() &&
-            SubscriptionEnforcementService.canStartCallRecording(requireContext())
+            !SubscriptionEnforcementService.shouldRestrictUi(requireContext()) &&
+            subscriptionManager.isSubscriptionActive()
     }
 
     private fun showVipPaywallDialog(isBusinessFollowUp: Boolean) {
@@ -164,6 +263,231 @@ class SettingsFragment : Fragment() {
             }
             .setNegativeButton(R.string.trial_expired_dialog_later, null)
             .show()
+    }
+
+    private fun isVoipRecordingEntitledSnapshot(): Boolean {
+        return prefs.allowCallRecordingConfig && isVipEntitledSnapshot()
+    }
+
+    private fun handleVoipToggleChange(isChecked: Boolean, persistChange: (Boolean) -> Unit) {
+        if (!isChecked) {
+            persistChange(false)
+            return
+        }
+        if (!prefs.allowCallRecordingConfig) {
+            bindVoipCardState()
+            Toast.makeText(requireContext(), R.string.setting_recording_disabled_admin, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!isVipEntitled()) {
+            bindVoipCardState()
+            showVipPaywallDialog(isBusinessFollowUp = false)
+            return
+        }
+
+        val ctx = requireContext()
+        val missingPerms = buildList {
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.RECORD_AUDIO)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (missingPerms.isNotEmpty()) {
+            pendingVoipAction = { persistChange(true) }
+            voipAudioPermissionsLauncher.launch(missingPerms.toTypedArray())
+            return
+        }
+
+        persistChange(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            !CallRecordingAccessibilityService.isServiceEnabled(ctx)
+        ) {
+            showAccessibilityEnablePrompt()
+        }
+    }
+
+    private fun setupVoipRecordingCardListeners() {
+        binding.switchRecordWhatsapp.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVoipControls) return@setOnCheckedChangeListener
+            handleVoipToggleChange(isChecked) { settingsManager.setRecordWhatsappCalls(it) }
+        }
+        binding.switchRecordWhatsappBusiness.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVoipControls) return@setOnCheckedChangeListener
+            handleVoipToggleChange(isChecked) { settingsManager.setRecordWhatsappBusinessCalls(it) }
+        }
+        binding.switchRecordMeet.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVoipControls) return@setOnCheckedChangeListener
+            handleVoipToggleChange(isChecked) { settingsManager.setRecordMeetCalls(it) }
+        }
+        binding.switchRecordTelegram.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingVoipControls) return@setOnCheckedChangeListener
+            handleVoipToggleChange(isChecked) { settingsManager.setRecordTelegramCalls(it) }
+        }
+
+        binding.btnFolderWhatsapp.setOnClickListener {
+            launchFolderPickerForSource(CallRecordingSource.WHATSAPP)
+        }
+        binding.btnFolderWhatsappBusiness.setOnClickListener {
+            launchFolderPickerForSource(CallRecordingSource.WHATSAPP_BUSINESS)
+        }
+        binding.btnFolderMeet.setOnClickListener {
+            launchFolderPickerForSource(CallRecordingSource.GOOGLE_MEET)
+        }
+        binding.btnFolderTelegram.setOnClickListener {
+            launchFolderPickerForSource(CallRecordingSource.TELEGRAM)
+        }
+
+        binding.btnResetFolderWhatsapp.setOnClickListener {
+            resetFolderForSource(CallRecordingSource.WHATSAPP)
+        }
+        binding.btnResetFolderWhatsappBusiness.setOnClickListener {
+            resetFolderForSource(CallRecordingSource.WHATSAPP_BUSINESS)
+        }
+        binding.btnResetFolderMeet.setOnClickListener {
+            resetFolderForSource(CallRecordingSource.GOOGLE_MEET)
+        }
+        binding.btnResetFolderTelegram.setOnClickListener {
+            resetFolderForSource(CallRecordingSource.TELEGRAM)
+        }
+
+        binding.btnOpenFileManagerRecordings.setOnClickListener {
+            openFileManagerRecordings()
+        }
+    }
+
+    private fun bindVoipCardState() {
+        isBindingVoipControls = true
+        try {
+            val allowed = isVoipRecordingEntitledSnapshot()
+            val wa = allowed && prefs.recordWhatsappCalls
+            val wab = allowed && prefs.recordWhatsappBusinessCalls
+            val meet = allowed && prefs.recordMeetCalls
+            val tg = allowed && prefs.recordTelegramCalls
+            if (binding.switchRecordWhatsapp.isChecked != wa) {
+                binding.switchRecordWhatsapp.isChecked = wa
+            }
+            if (binding.switchRecordWhatsappBusiness.isChecked != wab) {
+                binding.switchRecordWhatsappBusiness.isChecked = wab
+            }
+            if (binding.switchRecordMeet.isChecked != meet) {
+                binding.switchRecordMeet.isChecked = meet
+            }
+            if (binding.switchRecordTelegram.isChecked != tg) {
+                binding.switchRecordTelegram.isChecked = tg
+            }
+
+            bindPerAppFolderRow(
+                source = CallRecordingSource.WHATSAPP,
+                pathView = binding.tvWhatsappFolderPath,
+                selectButton = binding.btnFolderWhatsapp,
+                resetButton = binding.btnResetFolderWhatsapp
+            )
+            bindPerAppFolderRow(
+                source = CallRecordingSource.WHATSAPP_BUSINESS,
+                pathView = binding.tvWhatsappBusinessFolderPath,
+                selectButton = binding.btnFolderWhatsappBusiness,
+                resetButton = binding.btnResetFolderWhatsappBusiness
+            )
+            bindPerAppFolderRow(
+                source = CallRecordingSource.GOOGLE_MEET,
+                pathView = binding.tvMeetFolderPath,
+                selectButton = binding.btnFolderMeet,
+                resetButton = binding.btnResetFolderMeet
+            )
+            bindPerAppFolderRow(
+                source = CallRecordingSource.TELEGRAM,
+                pathView = binding.tvTelegramFolderPath,
+                selectButton = binding.btnFolderTelegram,
+                resetButton = binding.btnResetFolderTelegram
+            )
+        } finally {
+            isBindingVoipControls = false
+        }
+    }
+
+    private fun bindPerAppFolderRow(
+        source: CallRecordingSource,
+        pathView: TextView,
+        selectButton: MaterialButton,
+        resetButton: MaterialButton
+    ) {
+        val target = prefs.resolveFolderTarget(source)
+        if (target.isCustomPerSource) {
+            pathView.text = getString(R.string.voip_folder_custom_path, target.displayName)
+            pathView.setTextColor(ContextCompat.getColor(requireContext(), R.color.md_theme_primary))
+            selectButton.text = getString(R.string.voip_folder_change_btn)
+            resetButton.visibility = View.VISIBLE
+        } else {
+            val isSharedGlobal = !target.treeUri.isNullOrBlank()
+            pathView.text = if (isSharedGlobal) {
+                getString(R.string.voip_folder_global_path, target.displayName)
+            } else {
+                getString(R.string.voip_folder_default_path, target.displayName)
+            }
+            pathView.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.md_theme_onSurfaceVariant)
+            )
+            selectButton.text = getString(R.string.voip_folder_select_btn)
+            resetButton.visibility = View.GONE
+        }
+    }
+
+    private fun openFileManagerRecordings() {
+        val ctx = requireContext()
+        val configuredUris = buildList {
+            prefs.recordingFolderUri?.takeIf { it.isNotBlank() }?.let { add(it) }
+            CallRecordingSource.entries.forEach { src ->
+                prefs.getCustomFolderUri(src)?.takeIf { it.isNotBlank() }?.let { add(it) }
+            }
+        }.distinct()
+        val candidateIntents = buildList {
+            configuredUris.forEach { folderUriStr ->
+                val treeUri = Uri.parse(folderUriStr)
+                add(
+                    Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(treeUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                )
+            }
+            add(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(
+                        DocumentsContract.buildRootUri(
+                            "com.android.externalstorage.documents",
+                            "primary"
+                        ),
+                        DocumentsContract.Document.MIME_TYPE_DIR
+                    )
+                }
+            )
+            add(
+                Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_APP_FILES)
+                }
+            )
+        }
+
+        for (intent in candidateIntents) {
+            val launched = runCatching {
+                startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (launched) return
+        }
+
+        Toast.makeText(
+            ctx,
+            R.string.voip_file_manager_unavailable,
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun setupVipCardsListeners() {
@@ -269,9 +593,15 @@ class SettingsFragment : Fragment() {
     private fun bindVipCardsState() {
         isBindingVipControls = true
         try {
-            val entitled = isVipEntitled()
-            binding.switchVipAnnouncer.isChecked = entitled && prefs.announcerEnabled
-            binding.switchVipAnnouncerHeadset.isChecked = entitled && prefs.announcerHeadsetOnly
+            val entitled = isVipEntitledSnapshot()
+            val announcerOn = entitled && prefs.announcerEnabled
+            if (binding.switchVipAnnouncer.isChecked != announcerOn) {
+                binding.switchVipAnnouncer.isChecked = announcerOn
+            }
+            val headsetOn = entitled && prefs.announcerHeadsetOnly
+            if (binding.switchVipAnnouncerHeadset.isChecked != headsetOn) {
+                binding.switchVipAnnouncerHeadset.isChecked = headsetOn
+            }
 
             val shieldMode = if (entitled) prefs.unknownShieldMode else UserEntitlement.SHIELD_OFF
             val shieldRadioId = when (shieldMode) {
@@ -283,8 +613,14 @@ class SettingsFragment : Fragment() {
                 binding.rgVipUnknownShield.check(shieldRadioId)
             }
 
-            binding.switchVipAutoSms.isChecked = entitled && prefs.autoSmsFollowUp
-            binding.switchVipAutoWhatsapp.isChecked = entitled && prefs.autoWhatsappFollowUp
+            val smsOn = entitled && prefs.autoSmsFollowUp
+            if (binding.switchVipAutoSms.isChecked != smsOn) {
+                binding.switchVipAutoSms.isChecked = smsOn
+            }
+            val waFollowOn = entitled && prefs.autoWhatsappFollowUp
+            if (binding.switchVipAutoWhatsapp.isChecked != waFollowOn) {
+                binding.switchVipAutoWhatsapp.isChecked = waFollowOn
+            }
 
             val triggerRadioId = when (prefs.followUpTrigger) {
                 UserEntitlement.TRIGGER_MISSED_ONLY -> R.id.rb_trigger_missed_only
@@ -295,11 +631,17 @@ class SettingsFragment : Fragment() {
                 binding.rgVipFollowupTrigger.check(triggerRadioId)
             }
 
-            if (!binding.etVipCompletedTemplate.hasFocus()) {
-                binding.etVipCompletedTemplate.setText(prefs.completedCallTemplate)
+            val completedTemplate = prefs.completedCallTemplate
+            if (!binding.etVipCompletedTemplate.hasFocus() &&
+                binding.etVipCompletedTemplate.text?.toString() != completedTemplate
+            ) {
+                binding.etVipCompletedTemplate.setText(completedTemplate)
             }
-            if (!binding.etVipMissedTemplate.hasFocus()) {
-                binding.etVipMissedTemplate.setText(prefs.missedCallTemplate)
+            val missedTemplate = prefs.missedCallTemplate
+            if (!binding.etVipMissedTemplate.hasFocus() &&
+                binding.etVipMissedTemplate.text?.toString() != missedTemplate
+            ) {
+                binding.etVipMissedTemplate.setText(missedTemplate)
             }
         } finally {
             isBindingVipControls = false
@@ -318,6 +660,7 @@ class SettingsFragment : Fragment() {
     private fun bindCurrentValues(
         items: List<DynamicSettingItem> = RealtimeSyncManager.syncState.value.settingsItems
     ) {
+        bindVoipCardState()
         bindVipCardsState()
 
         val visibleItems = items
@@ -470,7 +813,7 @@ class SettingsFragment : Fragment() {
             return
         }
         when (item.key) {
-            DynamicSettingItem.KEY_RECORDING_FOLDER -> folderPickerLauncher.launch(null)
+            DynamicSettingItem.KEY_RECORDING_FOLDER -> launchFolderPickerForSource(null)
             DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
                 runCatching {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -637,5 +980,9 @@ class SettingsFragment : Fragment() {
 
         class RowViewHolder(val binding: ItemSimpleRowBinding) :
             RecyclerView.ViewHolder(binding.root)
+    }
+
+    companion object {
+        private const val STATE_PENDING_FOLDER_SOURCE = "state_pending_folder_source"
     }
 }

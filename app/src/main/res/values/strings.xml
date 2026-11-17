@@ -16,7 +16,7 @@
     <string name="default_dialer_banner_title">Make PulseDial your default phone app</string>
     <string name="default_dialer_banner_subtitle">Required for custom In-Call screen and built-in call recording.</string>
     <string name="permission_banner_title">Phone, Contacts &amp; Audio permissions needed</string>
-    <string name="permission_banner_subtitle">Allow Call Log, Phone, Contacts, Microphone, and Audio access to view recents, record, and play recordings.</string>
+    <string name="permission_banner_subtitle">Allow Call Log, Phone, Contacts, Microphone, and Notification access to manage calls and record into separate File Manager folders.</string>
 
     <!-- History & Recordings Tab -->
     <string name="tab_recent_calls">Recent Calls</string>
@@ -102,6 +102,17 @@
     <string name="history_delete_confirm">Delete</string>
     <string name="history_delete_failed">Call log permission is required to delete entries</string>
     <string name="history_calls_count_header">%1$d Recent Calls</string>
+    <string name="history_export_csv_button">Export CSV</string>
+    <string name="history_export_csv_cd">Export call history logs to CSV backup in Documents</string>
+    <string name="history_export_in_progress">Exporting call history…</string>
+    <string name="history_export_empty">No call history logs available to export.</string>
+    <string name="history_export_permission_required">Call log permission is required to export call history.</string>
+    <string name="history_export_storage_permission_required">Storage permission is required to save the CSV backup in Documents.</string>
+    <string name="history_export_success_title">Call History Exported</string>
+    <string name="history_export_success_message">Backed up %1$d call log entries to your device Documents folder:\n\n%2$s</string>
+    <string name="history_export_failed">Failed to export call history: %1$s</string>
+    <string name="history_export_share_button">Share CSV</string>
+    <string name="history_export_share_chooser">Share Call History CSV</string>
 
     <!-- In-Call Screen -->
     <string name="incall_unknown_caller">Unknown Caller</string>
@@ -123,10 +134,27 @@
     <string name="incall_recording_saved">Saved recording to folder: %1$s</string>
     <string name="incall_recording_failed">Unable to start call recording</string>
     <string name="incall_rec_badge">REC</string>
+    <string name="incall_add_call">Add Call</string>
+    <string name="incall_hold">Hold</string>
+    <string name="incall_resume">Resume</string>
+    <string name="incall_swap">Swap</string>
+    <string name="incall_merge">Merge</string>
+    <string name="incall_manage_conference">Manage Conference</string>
+    <string name="incall_conference_title">Conference Call (%1$d Participants)</string>
+    <string name="incall_conference_title_generic">Conference Call</string>
+    <string name="incall_conference_summary">%1$d callers connected</string>
+    <string name="incall_secondary_tap_to_swap">Tap to swap calls</string>
+    <string name="incall_conference_sheet_title">Conference Participants</string>
+    <string name="incall_conference_sheet_subtitle">Speak privately with a caller or drop them without ending the conference.</string>
+    <string name="incall_conference_empty">No conference participants connected</string>
+    <string name="incall_conference_split">Private</string>
+    <string name="incall_conference_drop">Drop</string>
+    <string name="incall_split_unsupported">Carrier does not support splitting this participant</string>
+    <string name="incall_merge_unavailable">Place or hold a second call before merging</string>
     <string name="accessibility_service_label">PulseDial Call Audio Helper</string>
-    <string name="accessibility_service_description">Enables PulseDial to capture clear two-way call audio and ringback tones during active calls on Android 10–16+ without reading screen text or personal data.</string>
+    <string name="accessibility_service_description">Enables PulseDial to capture clear two-way cellular call audio plus WhatsApp, WhatsApp Business, Google Meet, and Telegram call audio on Android 10–16+ without reading personal messages.</string>
     <string name="accessibility_prompt_title">Enable Clear Call Recording</string>
-    <string name="accessibility_prompt_message">Android 10–16+ requires enabling \"%1$s\" in Accessibility Settings so both sides of phone calls record clearly instead of silence.</string>
+    <string name="accessibility_prompt_message">Android 10–16+ requires enabling \"%1$s\" in Accessibility Settings so Cellular, WhatsApp, WhatsApp Business, Meet, and Telegram calls record clearly into separate File Manager folders.</string>
     <string name="accessibility_prompt_open">Open Accessibility</string>
 
     <!-- Minimalist Settings Tab (Strictly 6 Essential Options) -->
@@ -135,8 +163,8 @@
     <string name="setting_auto_record_title">Auto Call Recording</string>
     <string name="setting_auto_record_desc">Automatically record calls from the first ring (.mp3)</string>
     <string name="setting_folder_title">Recording Storage Folder</string>
-    <string name="setting_folder_default">Default: Music (Tap to select folder)</string>
-    <string name="setting_folder_selected">Folder: %1$s</string>
+    <string name="setting_folder_default">Saves in separate File Manager folders: Music/PulseDial/… (Tap to choose folder)</string>
+    <string name="setting_folder_selected">Folder: %1$s (separate subfolders per app)</string>
     <string name="setting_folder_updated">Recording folder saved: %1$s</string>
     <string name="setting_blocked_title">Blocked Numbers</string>
     <string name="setting_blocked_desc_count">%1$d blocked numbers</string>
@@ -373,7 +401,7 @@
 
     <!-- Google Sign-In Gate -->
     <string name="auth_gate_title">Welcome to PulseDial</string>
-    <string name="auth_gate_subtitle">New users enjoy 7 days completely free, then ₹299/month. Sign in with Google or enter your Email / 10-digit Mobile Number to verify your device and activate your trial.</string>
+    <string name="auth_gate_subtitle">New users enjoy 7 days completely free, then ₹299/month. Sign in with your Google Account to verify your device and activate your trial.</string>
     <string name="auth_gate_trial_badge">7-Day Free Trial • One Per Device</string>
     <string name="auth_gate_btn_google">Sign in with Google</string>
     <string name="auth_gate_or_divider">OR INSTANT DEVICE LOGIN</string>
@@ -381,6 +409,8 @@
     <string name="auth_gate_btn_fallback">Continue with Email / Mobile</string>
     <string name="auth_gate_fallback_invalid">Please enter a valid Email address or 10-digit Mobile Number</string>
     <string name="auth_gate_verifying">Verifying device trial status…</string>
+    <string name="auth_no_google_account">No Google account available on this device. Please add a Google account and try again.</string>
+    <string name="auth_picker_cancelled">Please choose your Google account to continue.</string>
 
     <!-- Full-Screen Account Blocked Overlay & Live Real-Time Controls -->
     <string name="blocked_overlay_title">Account Blocked by Admin</string>
@@ -430,4 +460,56 @@
     <string name="benefit_vip_followup">Auto WhatsApp &amp; SMS Business Follow-up</string>
     <string name="benefit_vip_announcer">Smart Call Name Announcer (Bike/Earphone Mode)</string>
     <string name="benefit_vip_shield">Unknown &amp; Spam Caller Shield</string>
+
+    <!-- VoIP & App Call Recording (Saved strictly in separate File Manager folders) -->
+    <string name="voip_recording_card_title">App &amp; VoIP Call Recording</string>
+    <string name="voip_recording_card_subtitle">Choose a separate File Manager folder for each app (saved directly in your chosen folder, hidden from call app)</string>
+    <string name="voip_record_whatsapp_title">WhatsApp Call Recording</string>
+    <string name="voip_record_whatsapp_desc">Default folder: Music/PulseDial/WhatsApp Call Recordings</string>
+    <string name="voip_record_whatsapp_business_title">WhatsApp Business Call Recording</string>
+    <string name="voip_record_whatsapp_business_desc">Default folder: Music/PulseDial/WhatsApp Business Call Recordings</string>
+    <string name="voip_record_meet_title">Google Meet Recording</string>
+    <string name="voip_record_meet_desc">Default folder: Music/PulseDial/Meet Call Recordings</string>
+    <string name="voip_record_telegram_title">Telegram Call Recording</string>
+    <string name="voip_record_telegram_desc">Default folder: Music/PulseDial/Telegram Call Recordings</string>
+    <string name="voip_folder_select_btn">Select Folder</string>
+    <string name="voip_folder_change_btn">Change Folder</string>
+    <string name="voip_folder_reset_btn">Reset</string>
+    <string name="voip_folder_custom_path">Custom File Manager folder: %1$s</string>
+    <string name="voip_folder_global_path">Shared folder: %1$s</string>
+    <string name="voip_folder_default_path">Default File Manager folder: %1$s</string>
+    <string name="voip_folder_updated_for_app">%1$s folder set to: %2$s</string>
+    <string name="voip_folder_reset_for_app">%1$s folder reset to default</string>
+    <string name="voip_folders_guide">Every app saves into its own separate File Manager folder. Tap \"Select Folder\" under any app above to choose your preferred folder, or use the defaults under Music/PulseDial.</string>
+    <string name="voip_open_file_manager_btn">Open File Manager Folders</string>
+    <string name="voip_file_manager_unavailable">Open your device File Manager › Music/PulseDial to browse separate call recording folders.</string>
+    <string name="voip_mic_permission_required">Microphone permission is required to record app calls.</string>
+
+    <!-- Custom Popup Ad Dialog & Admin Ad Controller -->
+    <string name="custom_ad_sponsored_tag">Sponsored</string>
+    <string name="custom_ad_featured_label">Featured Offer</string>
+    <string name="custom_ad_banner_cd">Promotional ad banner</string>
+    <string name="custom_ad_wait_countdown">Wait %1$ds…</string>
+    <string name="custom_ad_wait_countdown_default">Wait 5s…</string>
+    <string name="custom_ad_close_label">✕ Close</string>
+    <string name="custom_ad_default_cta">Open</string>
+
+    <string name="admin_popup_ad_section">Manage Custom Popup Ads</string>
+    <string name="admin_popup_ad_views_count">Total Views: %1$d</string>
+    <string name="admin_popup_ad_clicks_count">Total Clicks: %1$d</string>
+    <string name="admin_popup_ad_enable">Enable Popup Ad</string>
+    <string name="admin_popup_ad_show_premium">Show to Premium Users</string>
+    <string name="admin_popup_ad_trigger_label">Trigger Mode</string>
+    <string name="admin_popup_ad_trigger_app_open">ON_APP_OPEN</string>
+    <string name="admin_popup_ad_trigger_after_call">AFTER_CALL_END</string>
+    <string name="admin_popup_ad_trigger_both">BOTH</string>
+    <string name="admin_popup_ad_image_hint">Banner Image URL (Direct Link)</string>
+    <string name="admin_popup_ad_title_hint">Ad Title</string>
+    <string name="admin_popup_ad_message_hint">Ad Message</string>
+    <string name="admin_popup_ad_button_text_hint">Button Text (e.g. Download Now)</string>
+    <string name="admin_popup_ad_target_url_hint">Target Link (URL / APK / WhatsApp / Telegram)</string>
+    <string name="admin_popup_ad_countdown_hint">Skip Timer (Seconds)</string>
+    <string name="admin_popup_ad_publish_btn">Publish / Update Ad</string>
+    <string name="admin_popup_ad_published_toast">Custom Popup Ad published in real time!</string>
+    <string name="admin_popup_ad_validation_error">Enter an Ad Title, Message, or Banner Image URL before enabling.</string>
 </resources>

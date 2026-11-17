@@ -8,7 +8,21 @@ import com.example.billing.UpiPaymentHelper
 import com.example.data.firebase.AppConfig
 import com.example.data.firebase.TrialStatus
 import com.example.data.firebase.TrialVerificationResult
+import com.example.recording.CallRecordingSource
 import kotlin.math.ceil
+
+data class RecordingFolderTarget(
+    val treeUri: String?,
+    val displayName: String,
+    val isCustomPerSource: Boolean
+) {
+    /**
+     * When user picks a dedicated folder specifically for an app (e.g. WhatsApp -> MyWAFolder),
+     * write directly inside that folder (`createSubfolder = false`).
+     * When using the global folder fallback, isolate each app inside its own subfolder.
+     */
+    val createSubfolder: Boolean get() = !isCustomPerSource
+}
 
 class DialerPreferences(context: Context) {
 
@@ -277,8 +291,14 @@ class DialerPreferences(context: Context) {
             putString(KEY_CONFIG_ANNOUNCEMENT, config.announcementText.trim())
             putString(KEY_CONFIG_FORCE_THEME, cleanTheme)
             putBoolean(KEY_CONFIG_HIDE_SUBSCRIPTION_UI, config.hideSubscriptionUI)
-            putBoolean(KEY_DIALPAD_TONES, config.dialpadTonesDefault)
-            putBoolean(KEY_AUTO_RECORDING, config.allowCallRecording && config.defaultAutoRecording)
+            if (!prefs.getBoolean(KEY_USER_CUSTOM_DIALPAD_TONES, false)) {
+                putBoolean(KEY_DIALPAD_TONES, config.dialpadTonesDefault)
+            }
+            if (!config.allowCallRecording) {
+                putBoolean(KEY_AUTO_RECORDING, false)
+            } else if (!prefs.getBoolean(KEY_USER_CUSTOM_AUTO_RECORDING, false)) {
+                putBoolean(KEY_AUTO_RECORDING, config.defaultAutoRecording)
+            }
             if (cleanTheme == AppConfig.THEME_DARK) {
                 putInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_YES)
             } else if (cleanTheme == AppConfig.THEME_LIGHT) {
@@ -466,6 +486,67 @@ class DialerPreferences(context: Context) {
     var recordingFolderName: String?
         get() = prefs.getString(KEY_RECORDING_FOLDER_NAME, null)
         set(value) = prefs.edit { putString(KEY_RECORDING_FOLDER_NAME, value) }
+
+    fun getCustomFolderUri(source: CallRecordingSource): String? =
+        prefs.getString(KEY_SOURCE_FOLDER_URI_PREFIX + source.name, null)
+
+    fun getCustomFolderName(source: CallRecordingSource): String? =
+        prefs.getString(KEY_SOURCE_FOLDER_NAME_PREFIX + source.name, null)
+
+    fun setCustomFolder(source: CallRecordingSource, uri: String?, name: String?) {
+        val uriKey = KEY_SOURCE_FOLDER_URI_PREFIX + source.name
+        val nameKey = KEY_SOURCE_FOLDER_NAME_PREFIX + source.name
+        if (uri.isNullOrBlank()) {
+            prefs.edit {
+                remove(uriKey)
+                remove(nameKey)
+            }
+        } else {
+            val cleanName = name?.trim()?.ifBlank { null } ?: source.folderName
+            prefs.edit {
+                putString(uriKey, uri.trim())
+                putString(nameKey, cleanName)
+            }
+        }
+    }
+
+    fun clearCustomFolder(source: CallRecordingSource) {
+        setCustomFolder(source, null, null)
+    }
+
+    fun resolveFolderTarget(source: CallRecordingSource): RecordingFolderTarget {
+        val perSourceUri = getCustomFolderUri(source)
+        if (!perSourceUri.isNullOrBlank()) {
+            val perSourceName = getCustomFolderName(source)?.ifBlank { null } ?: source.folderName
+            return RecordingFolderTarget(
+                treeUri = perSourceUri,
+                displayName = perSourceName,
+                isCustomPerSource = true
+            )
+        }
+        val globalUri = recordingFolderUri
+        if (!globalUri.isNullOrBlank()) {
+            val globalRoot = recordingFolderName?.ifBlank { null } ?: CallRecordingSource.ROOT_FOLDER_NAME
+            return RecordingFolderTarget(
+                treeUri = globalUri,
+                displayName = "$globalRoot/${source.folderName}",
+                isCustomPerSource = false
+            )
+        }
+        return RecordingFolderTarget(
+            treeUri = null,
+            displayName = source.relativePublicPath(),
+            isCustomPerSource = false
+        )
+    }
+
+    fun markAutoRecordingCustomizedByUser() {
+        prefs.edit { putBoolean(KEY_USER_CUSTOM_AUTO_RECORDING, true) }
+    }
+
+    fun markDialpadTonesCustomizedByUser() {
+        prefs.edit { putBoolean(KEY_USER_CUSTOM_DIALPAD_TONES, true) }
+    }
 
     var dialpadTonesEnabled: Boolean
         get() = prefs.getBoolean(KEY_DIALPAD_TONES, true)
@@ -718,6 +799,31 @@ class DialerPreferences(context: Context) {
             prefs.edit { putString(KEY_MISSED_CALL_TEMPLATE, clean) }
         }
 
+    // --- VoIP & App Call Recording (WhatsApp, WhatsApp Business, Meet, Telegram) ---
+    var recordWhatsappCalls: Boolean
+        get() = prefs.getBoolean(KEY_RECORD_WHATSAPP_CALLS, true)
+        set(value) = prefs.edit { putBoolean(KEY_RECORD_WHATSAPP_CALLS, value) }
+
+    var recordWhatsappBusinessCalls: Boolean
+        get() = prefs.getBoolean(KEY_RECORD_WHATSAPP_BUSINESS_CALLS, true)
+        set(value) = prefs.edit { putBoolean(KEY_RECORD_WHATSAPP_BUSINESS_CALLS, value) }
+
+    var recordMeetCalls: Boolean
+        get() = prefs.getBoolean(KEY_RECORD_MEET_CALLS, true)
+        set(value) = prefs.edit { putBoolean(KEY_RECORD_MEET_CALLS, value) }
+
+    var recordTelegramCalls: Boolean
+        get() = prefs.getBoolean(KEY_RECORD_TELEGRAM_CALLS, true)
+        set(value) = prefs.edit { putBoolean(KEY_RECORD_TELEGRAM_CALLS, value) }
+
+    fun isVoipSourceEnabled(source: com.example.recording.CallRecordingSource): Boolean = when (source) {
+        com.example.recording.CallRecordingSource.CELLULAR -> autoCallRecording
+        com.example.recording.CallRecordingSource.WHATSAPP -> recordWhatsappCalls
+        com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS -> recordWhatsappBusinessCalls
+        com.example.recording.CallRecordingSource.GOOGLE_MEET -> recordMeetCalls
+        com.example.recording.CallRecordingSource.TELEGRAM -> recordTelegramCalls
+    }
+
     /**
      * 24-hour anti-spam cooldown per phone number so the same caller does not receive
      * repeated automated follow-up messages on the same day.
@@ -744,6 +850,8 @@ class DialerPreferences(context: Context) {
         const val KEY_LAST_SEEN_TIME = "last_seen_time_ms"
         const val KEY_RECORDING_FOLDER_URI = "recording_folder_uri"
         const val KEY_RECORDING_FOLDER_NAME = "recording_folder_name"
+        private const val KEY_SOURCE_FOLDER_URI_PREFIX = "recording_folder_uri_"
+        private const val KEY_SOURCE_FOLDER_NAME_PREFIX = "recording_folder_name_"
         const val KEY_IS_PREMIUM_USER = "isPremiumUser"
         const val KEY_SUBSCRIPTION_EXPIRES_AT_MS = "subscription_expires_at_ms"
         const val KEY_SERVER_CLOCK_OFFSET_MS = "server_clock_offset_ms"
@@ -774,6 +882,8 @@ class DialerPreferences(context: Context) {
 
         private const val KEY_AUTO_RECORDING = "auto_call_recording"
         private const val KEY_DIALPAD_TONES = "dialpad_tones_enabled"
+        private const val KEY_USER_CUSTOM_AUTO_RECORDING = "user_custom_auto_recording"
+        private const val KEY_USER_CUSTOM_DIALPAD_TONES = "user_custom_dialpad_tones"
         private const val KEY_THEME_MODE = "display_theme_mode"
         private const val KEY_BLOCKED_NUMBERS = "blocked_numbers"
         private const val KEY_QUICK_DECLINE_RESPONSES = "quick_decline_responses"
@@ -797,6 +907,11 @@ class DialerPreferences(context: Context) {
         const val KEY_MISSED_CALL_TEMPLATE = "missed_call_template"
         private const val KEY_FOLLOW_UP_COOLDOWN_PREFIX = "follow_up_cooldown_"
 
+        const val KEY_RECORD_WHATSAPP_CALLS = "record_whatsapp_calls"
+        const val KEY_RECORD_WHATSAPP_BUSINESS_CALLS = "record_whatsapp_business_calls"
+        const val KEY_RECORD_MEET_CALLS = "record_meet_calls"
+        const val KEY_RECORD_TELEGRAM_CALLS = "record_telegram_calls"
+
         const val TRIAL_DAYS = 7
         const val MONTHLY_SUBSCRIPTION_DAYS = 30
         const val EXPIRING_SOON_WINDOW_DAYS = 7
@@ -807,7 +922,7 @@ class DialerPreferences(context: Context) {
         const val ONE_MONTH_MILLIS = MONTHLY_SUBSCRIPTION_DAYS.toLong() * ONE_DAY_MILLIS
 
         private const val DEFAULT_USER_NAME = "PulseDial User"
-        private const val DEFAULT_USER_NUMBER = "+91 98765 43210"
+        const val DEFAULT_USER_NUMBER = "+91 98765 43210"
 
         private const val LAST_SEEN_PERSIST_INTERVAL_MS = 30_000L
         private val sealCacheLock = Any()

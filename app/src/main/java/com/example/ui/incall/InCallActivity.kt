@@ -29,6 +29,7 @@ import com.example.databinding.ActivityInCallBinding
 import com.example.telecom.CallManager
 import com.example.telecom.CallUiState
 import com.example.ui.MainActivity
+import com.example.ui.dialpad.DialpadBottomSheetFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -41,7 +42,6 @@ class InCallActivity : AppCompatActivity() {
     private lateinit var subscriptionManager: SubscriptionManager
     private var toneGenerator: ToneGenerator? = null
     private var isKeypadVisible = false
-    private var lastReportedRecordingName: String? = null
     private var dtmfDigitsEntered: String = ""
 
     private val recordingPermissionsLauncher = registerForActivityResult(
@@ -73,7 +73,7 @@ class InCallActivity : AppCompatActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.incallRoot) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.updatePadding(top = bars.top + 24, bottom = bars.bottom + 24)
+            view.updatePadding(top = bars.top + 20, bottom = bars.bottom + 20)
             insets
         }
 
@@ -89,7 +89,10 @@ class InCallActivity : AppCompatActivity() {
                 launch {
                     com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
                         if (enfState.lastEvaluatedAtMs == 0L) return@collect
-                        if (!enfState.isRecordingAllowed || !prefs.allowCallRecordingConfig || !subscriptionManager.isSubscriptionActive()) {
+                        if (!enfState.isRecordingAllowed ||
+                            !prefs.allowCallRecordingConfig ||
+                            !subscriptionManager.isSubscriptionActive()
+                        ) {
                             CallManager.stopRecordingIfNeeded()
                         }
                     }
@@ -97,7 +100,9 @@ class InCallActivity : AppCompatActivity() {
                 launch {
                     RealtimeSyncManager.syncState.collect { state ->
                         if (state.uid == null) return@collect
-                        if (!prefs.allowCallRecordingConfig || !subscriptionManager.isSubscriptionActive()) {
+                        if (!prefs.allowCallRecordingConfig ||
+                            !subscriptionManager.isSubscriptionActive()
+                        ) {
                             CallManager.stopRecordingIfNeeded()
                         }
                     }
@@ -155,6 +160,29 @@ class InCallActivity : AppCompatActivity() {
                 recordingPermissionsLauncher.launch(missing.toTypedArray())
             }
         }
+
+        // Multi-Party Conference & Dual-Call Controls
+        binding.btnAddCall.setOnClickListener {
+            CallManager.prepareForAddCall()
+            if (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG) == null) {
+                DialpadBottomSheetFragment.newInstance(isAddCallMode = true)
+                    .show(supportFragmentManager, DialpadBottomSheetFragment.TAG)
+            }
+        }
+        binding.btnHoldSwap.setOnClickListener { CallManager.toggleHoldOrSwap() }
+        binding.cardSecondaryCall.setOnClickListener { CallManager.toggleHoldOrSwap() }
+        binding.btnMergeCalls.setOnClickListener {
+            if (!CallManager.mergeCalls()) {
+                Toast.makeText(this, R.string.incall_merge_unavailable, Toast.LENGTH_SHORT).show()
+            }
+        }
+        binding.btnManageConference.setOnClickListener {
+            if (supportFragmentManager.findFragmentByTag(ConferenceParticipantsSheet.TAG) == null) {
+                ConferenceParticipantsSheet.newInstance()
+                    .show(supportFragmentManager, ConferenceParticipantsSheet.TAG)
+            }
+        }
+
         binding.btnIncallEnd.setOnClickListener { CallManager.declineOrEndCall() }
         binding.btnIncomingAnswer.setOnClickListener { CallManager.answerCall() }
         binding.btnIncomingDecline.setOnClickListener { CallManager.declineOrEndCall() }
@@ -189,7 +217,7 @@ class InCallActivity : AppCompatActivity() {
 
     private fun toggleCallRecording() {
         val started = CallManager.toggleRecording(this)
-        if (!started && !CallManager.uiState.value.isRecording && CallManager.uiState.value.lastSavedRecordingName == null) {
+        if (!started && !CallManager.uiState.value.isRecording) {
             Toast.makeText(this, R.string.incall_recording_failed, Toast.LENGTH_SHORT).show()
         }
     }
@@ -276,25 +304,41 @@ class InCallActivity : AppCompatActivity() {
     }
 
     private fun renderState(state: CallUiState) {
-        val displayName = state.callerName.ifBlank { getString(R.string.incall_unknown_caller) }
+        val displayName = when {
+            state.isConference && state.conferenceParticipantCount > 0 ->
+                getString(R.string.incall_conference_title, state.conferenceParticipantCount)
+            state.isConference ->
+                getString(R.string.incall_conference_title_generic)
+            else -> state.callerName.ifBlank { getString(R.string.incall_unknown_caller) }
+        }
         binding.tvIncallName.text = displayName
         binding.tvIncallNumber.text = state.callerNumber
-        binding.tvIncallAvatar.text = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+        binding.tvIncallAvatar.text = if (state.isConference) {
+            state.conferenceParticipantCount.coerceAtLeast(2).toString()
+        } else {
+            displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+        }
 
         val isRinging = state.callState == Call.STATE_RINGING
         binding.layoutIncomingControls.visibility = if (isRinging) View.VISIBLE else View.GONE
         binding.layoutActiveControls.visibility = if (isRinging) View.GONE else View.VISIBLE
 
+        // Secondary Call Banner (when 2+ simultaneous top-level calls exist)
+        val showSecondary = state.hasSecondaryCall && !isRinging
+        binding.cardSecondaryCall.visibility = if (showSecondary) View.VISIBLE else View.GONE
+        if (showSecondary) {
+            binding.tvSecondaryCallerName.text = state.secondaryCallerName
+                .ifBlank { state.secondaryCallerNumber }
+                .ifBlank { getString(R.string.incall_unknown_caller) }
+            binding.tvSecondaryCallStatus.text = formatCallStateLabel(state.secondaryCallState)
+        }
+
+        // Manage Conference Button
+        binding.btnManageConference.visibility =
+            if (state.isConference && !isRinging) View.VISIBLE else View.GONE
+
         if (state.callState != Call.STATE_ACTIVE) {
-            binding.tvIncallStatus.text = when (state.callState) {
-                Call.STATE_RINGING -> getString(R.string.incall_status_ringing)
-                Call.STATE_DIALING -> getString(R.string.incall_status_dialing)
-                Call.STATE_CONNECTING -> getString(R.string.incall_status_connecting)
-                Call.STATE_HOLDING -> getString(R.string.incall_status_holding)
-                Call.STATE_DISCONNECTING -> getString(R.string.incall_status_disconnecting)
-                Call.STATE_DISCONNECTED -> getString(R.string.incall_status_ended)
-                else -> getString(R.string.incall_status_connecting)
-            }
+            binding.tvIncallStatus.text = formatCallStateLabel(state.callState)
         }
 
         binding.btnIncallMute.setIconResource(if (state.isMuted) R.drawable.ic_mic_off else R.drawable.ic_mic)
@@ -312,6 +356,39 @@ class InCallActivity : AppCompatActivity() {
             )
         )
 
+        // Hold / Resume / Swap Button
+        when {
+            state.canSwap -> {
+                binding.btnHoldSwap.setIconResource(R.drawable.ic_swap_calls)
+                binding.tvHoldSwapLabel.text = getString(R.string.incall_swap)
+                binding.btnHoldSwap.contentDescription = getString(R.string.incall_swap)
+                binding.btnHoldSwap.setBackgroundColor(
+                    ContextCompat.getColor(this, R.color.incall_surface)
+                )
+            }
+            state.isHolding -> {
+                binding.btnHoldSwap.setIconResource(R.drawable.ic_play_arrow)
+                binding.tvHoldSwapLabel.text = getString(R.string.incall_resume)
+                binding.btnHoldSwap.contentDescription = getString(R.string.incall_resume)
+                binding.btnHoldSwap.setBackgroundColor(
+                    ContextCompat.getColor(this, R.color.incall_surface_active)
+                )
+            }
+            else -> {
+                binding.btnHoldSwap.setIconResource(R.drawable.ic_pause)
+                binding.tvHoldSwapLabel.text = getString(R.string.incall_hold)
+                binding.btnHoldSwap.contentDescription = getString(R.string.incall_hold)
+                binding.btnHoldSwap.setBackgroundColor(
+                    ContextCompat.getColor(this, R.color.incall_surface)
+                )
+            }
+        }
+        binding.btnHoldSwap.isEnabled = state.canHold || state.canSwap || state.isHolding
+
+        // Merge Calls Button (auto-shown/enabled when calls.size >= 2 or CAPABILITY_MERGE_CONFERENCE)
+        binding.containerMergeCalls.visibility = if (state.canMerge) View.VISIBLE else View.GONE
+        binding.btnMergeCalls.isEnabled = state.canMerge
+
         binding.chipRecordingBadge.visibility = if (state.isRecording) View.VISIBLE else View.GONE
         binding.tvIncallRecordLabel.text = getString(
             if (state.isRecording) R.string.incall_recording_active else R.string.incall_record
@@ -322,15 +399,17 @@ class InCallActivity : AppCompatActivity() {
                 if (state.isRecording) R.color.call_decline_red else R.color.incall_surface
             )
         )
+    }
 
-        val savedName = state.lastSavedRecordingName
-        if (!savedName.isNullOrBlank() && savedName != lastReportedRecordingName) {
-            lastReportedRecordingName = savedName
-            Toast.makeText(
-                this,
-                getString(R.string.incall_recording_saved, savedName),
-                Toast.LENGTH_LONG
-            ).show()
+    private fun formatCallStateLabel(callState: Int): String {
+        return when (callState) {
+            Call.STATE_RINGING -> getString(R.string.incall_status_ringing)
+            Call.STATE_DIALING -> getString(R.string.incall_status_dialing)
+            Call.STATE_CONNECTING -> getString(R.string.incall_status_connecting)
+            Call.STATE_HOLDING -> getString(R.string.incall_status_holding)
+            Call.STATE_DISCONNECTING -> getString(R.string.incall_status_disconnecting)
+            Call.STATE_DISCONNECTED -> getString(R.string.incall_status_ended)
+            else -> getString(R.string.incall_status_connecting)
         }
     }
 }

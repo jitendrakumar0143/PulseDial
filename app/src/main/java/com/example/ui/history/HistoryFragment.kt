@@ -9,46 +9,38 @@ import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.widget.doAfterTextChanged
-import androidx.documentfile.provider.DocumentFile
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.R
+import com.example.data.CallHistoryCsvExporter
+import com.example.data.CallHistoryExportResult
 import com.example.data.CallLogEntry
 import com.example.data.ContactsRepository
-import com.example.data.DialerPreferences
-import com.example.data.RecordingEntry
 import com.example.data.firebase.SettingsManager
 import com.example.databinding.FragmentHistoryBinding
-import com.example.recording.RecordingAudioPlayer
-import com.example.recording.RecordingsRepository
 import com.example.telecom.DialerHelper
 import com.example.ui.MainActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import java.util.Locale
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+/**
+ * Displays Recent Calls only.
+ * Call recordings (Cellular, WhatsApp, WhatsApp Business, Meet, Telegram) are intentionally
+ * hidden from the call app and saved directly into separate folders in the File Manager.
+ */
 class HistoryFragment : Fragment() {
 
     private var _binding: FragmentHistoryBinding? = null
     private val binding get() = _binding!!
 
     private lateinit var contactsRepo: ContactsRepository
-    private lateinit var recordingsRepo: RecordingsRepository
-    private lateinit var audioPlayer: RecordingAudioPlayer
-    private lateinit var prefs: DialerPreferences
     private lateinit var settingsManager: SettingsManager
+    private lateinit var csvExporter: CallHistoryCsvExporter
     private lateinit var callLogAdapter: CallLogAdapter
-    private lateinit var recordingsAdapter: RecordingsAdapter
 
     private var skipNextResumeReload = false
-    private var isRecordingsMode = false
     private var allRecentCalls: List<CallLogEntry> = emptyList()
-    private var allRecordings: List<RecordingEntry> = emptyList()
 
     private val writeCallLogPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -60,25 +52,17 @@ class HistoryFragment : Fragment() {
         }
     }
 
-    private val folderPickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { treeUri ->
-        if (treeUri != null && isAdded) {
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            runCatching {
-                requireContext().contentResolver.takePersistableUriPermission(treeUri, flags)
-            }
-            val folderName = DocumentFile.fromTreeUri(requireContext(), treeUri)?.name
-                ?: treeUri.lastPathSegment
-                ?: "Recordings"
-            prefs.recordingFolderUri = treeUri.toString()
-            prefs.recordingFolderName = folderName
+    private val writeStorageForExportLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            performExportCallHistoryCsv()
+        } else if (isAdded) {
             Toast.makeText(
                 requireContext(),
-                getString(R.string.setting_folder_updated, folderName),
+                R.string.history_export_storage_permission_required,
                 Toast.LENGTH_SHORT
             ).show()
-            reloadData()
         }
     }
 
@@ -95,10 +79,8 @@ class HistoryFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         val ctx = requireContext()
         contactsRepo = ContactsRepository(ctx)
-        recordingsRepo = RecordingsRepository(ctx)
-        audioPlayer = RecordingAudioPlayer(ctx)
-        prefs = DialerPreferences(ctx)
         settingsManager = SettingsManager(ctx)
+        csvExporter = CallHistoryCsvExporter(ctx)
 
         callLogAdapter = CallLogAdapter(
             onRowClick = { entry ->
@@ -115,28 +97,15 @@ class HistoryFragment : Fragment() {
             }
         )
 
-        recordingsAdapter = RecordingsAdapter(
-            onPlayPauseClick = { entry ->
-                audioPlayer.togglePlayPause(entry)
-            }
-        )
-
         binding.recyclerHistory.layoutManager = LinearLayoutManager(ctx)
         binding.recyclerHistory.adapter = callLogAdapter
 
-        binding.recyclerRecordings.layoutManager = LinearLayoutManager(ctx)
-        binding.recyclerRecordings.adapter = recordingsAdapter
+        // Recordings are strictly stored in separate File Manager folders — never displayed in app
+        binding.toggleHistoryMode.visibility = View.GONE
+        binding.cardRecordingFolderBanner.visibility = View.GONE
+        binding.recyclerRecordings.visibility = View.GONE
+        binding.cardMiniPlayer.visibility = View.GONE
 
-        binding.toggleHistoryMode.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (isChecked) {
-                isRecordingsMode = (checkedId == R.id.btn_mode_recordings)
-                renderActiveMode()
-            }
-        }
-
-        binding.btnSelectRecordingFolder.setOnClickListener {
-            folderPickerLauncher.launch(null)
-        }
         binding.btnSetDefaultDialer.setOnClickListener {
             (activity as? MainActivity)?.requestDefaultDialerRole()
         }
@@ -148,54 +117,16 @@ class HistoryFragment : Fragment() {
             applyCallLogFilter(text?.toString().orEmpty())
         }
 
+        binding.btnExportHistoryCsv.setOnClickListener {
+            startCallHistoryCsvExport()
+        }
+
         binding.btnDeleteAllCalls.setOnClickListener {
             confirmDeleteAllCallHistory()
         }
 
-        binding.btnMiniPlayPause.setOnClickListener {
-            audioPlayer.toggleActivePlayPause()
-        }
-        binding.btnMiniStop.setOnClickListener {
-            audioPlayer.stop()
-        }
-
-        observeAudioPlayback()
-
         skipNextResumeReload = true
         reloadData()
-    }
-
-    private fun observeAudioPlayback() {
-        viewLifecycleOwner.lifecycleScope.launch {
-            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                launch {
-                    audioPlayer.playbackState.collect { state ->
-                        if (_binding == null) return@collect
-                        recordingsAdapter.updatePlaybackState(state.activeUri, state.isPlaying)
-                        if (state.activeUri != null) {
-                            binding.cardMiniPlayer.visibility = View.VISIBLE
-                            binding.tvMiniPlayerTitle.text = state.title
-                            binding.btnMiniPlayPause.setImageResource(
-                                if (state.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
-                            )
-                            val posStr = formatDuration(state.positionMs.toLong())
-                            val durStr = formatDuration(state.durationMs.toLong())
-                            binding.tvMiniPlayerTime.text = "$posStr / $durStr"
-                            binding.progressMiniPlayer.max = state.durationMs.coerceAtLeast(1)
-                            binding.progressMiniPlayer.progress = state.positionMs.coerceIn(0, state.durationMs.coerceAtLeast(1))
-                        } else {
-                            binding.cardMiniPlayer.visibility = View.GONE
-                        }
-                    }
-                }
-                launch {
-                    while (isActive) {
-                        audioPlayer.refreshProgress()
-                        delay(250L)
-                    }
-                }
-            }
-        }
     }
 
     override fun onResume() {
@@ -208,7 +139,6 @@ class HistoryFragment : Fragment() {
     }
 
     override fun onDestroyView() {
-        audioPlayer.stop()
         super.onDestroyView()
         _binding = null
     }
@@ -226,42 +156,12 @@ class HistoryFragment : Fragment() {
 
         viewLifecycleOwner.lifecycleScope.launch {
             allRecentCalls = contactsRepo.getRecentCalls()
-            allRecordings = recordingsRepo.getRecordings(prefs)
             if (_binding == null) return@launch
-            recordingsAdapter.submitList(allRecordings)
-            renderActiveMode()
-        }
-    }
-
-    private fun renderActiveMode() {
-        if (_binding == null) return
-        val folderName = prefs.recordingFolderName
-        if (!folderName.isNullOrBlank()) {
-            binding.tvRecordingFolderTitle.text = getString(R.string.setting_folder_selected, folderName)
-            binding.btnSelectRecordingFolder.setText(R.string.action_change_folder)
-        } else {
-            binding.tvRecordingFolderTitle.setText(R.string.recordings_folder_banner_title)
-            binding.btnSelectRecordingFolder.setText(R.string.action_choose_folder)
-        }
-
-        if (isRecordingsMode) {
-            binding.tilHistorySearch.visibility = View.GONE
-            binding.layoutRecentCallsActions.visibility = View.GONE
-            binding.recyclerHistory.visibility = View.GONE
-            binding.cardRecordingFolderBanner.visibility = View.VISIBLE
-            binding.recyclerRecordings.visibility = View.VISIBLE
-
-            val isEmpty = allRecordings.isEmpty()
-            binding.layoutHistoryEmpty.visibility = if (isEmpty) View.VISIBLE else View.GONE
-            if (isEmpty) {
-                binding.tvHistoryEmptyTitle.setText(R.string.recordings_empty_title)
-                binding.tvHistoryEmptySubtitle.setText(R.string.recordings_empty_subtitle)
-            }
-        } else {
             binding.tilHistorySearch.visibility = View.VISIBLE
+            binding.recyclerHistory.visibility = View.VISIBLE
             binding.cardRecordingFolderBanner.visibility = View.GONE
             binding.recyclerRecordings.visibility = View.GONE
-            binding.recyclerHistory.visibility = View.VISIBLE
+            binding.cardMiniPlayer.visibility = View.GONE
             applyCallLogFilter(binding.etHistorySearch.text?.toString().orEmpty())
         }
     }
@@ -270,8 +170,6 @@ class HistoryFragment : Fragment() {
         if (_binding == null) return
         val filtered = filterCallLogs(allRecentCalls, query)
         callLogAdapter.submitList(filtered)
-
-        if (isRecordingsMode) return
 
         val hasAnyCalls = allRecentCalls.isNotEmpty()
         binding.layoutRecentCallsActions.visibility = if (hasAnyCalls) View.VISIBLE else View.GONE
@@ -319,12 +217,79 @@ class HistoryFragment : Fragment() {
         }
     }
 
-    private fun formatDuration(durationMs: Long): String {
-        if (durationMs <= 0L) return "00:00"
-        val totalSeconds = durationMs / 1000L
-        val mins = totalSeconds / 60L
-        val secs = totalSeconds % 60L
-        return String.format(Locale.US, "%02d:%02d", mins, secs)
+    private fun startCallHistoryCsvExport() {
+        val ctx = context ?: return
+        if (!contactsRepo.hasCallLogPermission()) {
+            Toast.makeText(ctx, R.string.history_export_permission_required, Toast.LENGTH_SHORT).show()
+            (activity as? MainActivity)?.requestDialerPermissions()
+            return
+        }
+        if (csvExporter.needsLegacyWritePermission()) {
+            writeStorageForExportLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
+        performExportCallHistoryCsv()
+    }
+
+    private fun performExportCallHistoryCsv() {
+        if (_binding == null) return
+        binding.btnExportHistoryCsv.isEnabled = false
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val callsToExport = contactsRepo.getRecentCalls(limit = 10_000)
+                if (!isAdded) return@launch
+                if (callsToExport.isEmpty()) {
+                    Toast.makeText(requireContext(), R.string.history_export_empty, Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val result = csvExporter.exportToDocuments(callsToExport)
+                if (!isAdded) return@launch
+                if (result.success) {
+                    showExportSuccessDialog(result)
+                } else {
+                    val reason = result.errorMessage ?: "Unknown error"
+                    Toast.makeText(
+                        requireContext(),
+                        getString(R.string.history_export_failed, reason),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } finally {
+                if (_binding != null) {
+                    binding.btnExportHistoryCsv.isEnabled = true
+                }
+            }
+        }
+    }
+
+    private fun showExportSuccessDialog(result: CallHistoryExportResult) {
+        val ctx = context ?: return
+        val builder = MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.history_export_success_title)
+            .setMessage(
+                getString(
+                    R.string.history_export_success_message,
+                    result.exportedCount,
+                    result.relativePath
+                )
+            )
+            .setPositiveButton(R.string.dialog_close, null)
+
+        val fileUri = result.fileUri
+        if (fileUri != null) {
+            builder.setNeutralButton(R.string.history_export_share_button) { _, _ ->
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = CallHistoryCsvExporter.MIME_TYPE_CSV
+                    putExtra(Intent.EXTRA_STREAM, fileUri)
+                    putExtra(Intent.EXTRA_SUBJECT, result.fileName)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                runCatching {
+                    startActivity(Intent.createChooser(shareIntent, getString(R.string.history_export_share_chooser)))
+                }
+            }
+        }
+        builder.show()
     }
 
     companion object {

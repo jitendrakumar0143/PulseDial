@@ -1,16 +1,42 @@
 package com.example.telecom
 
 import android.content.Context
+import android.os.Build
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
 import android.telecom.VideoProfile
 import com.example.recording.CallRecorder
+import com.example.recording.CallRecordingSource
+import com.example.recording.VoipCallRecorderManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+
+data class ResolvedCallIdentity(
+    val displayName: String,
+    val phoneNumber: String
+)
+
+data class ConferenceParticipantUi(
+    val callKey: Int,
+    val displayName: String,
+    val phoneNumber: String,
+    val callState: Int,
+    val canSplit: Boolean,
+    val canDrop: Boolean
+)
+
+enum class HoldSwapAction {
+    NONE,
+    HOLD,
+    UNHOLD,
+    SWAP
+}
 
 data class CallUiState(
     val hasActiveCall: Boolean = false,
@@ -21,7 +47,20 @@ data class CallUiState(
     val isSpeakerOn: Boolean = false,
     val isRecording: Boolean = false,
     val connectTimeMillis: Long = 0L,
-    val lastSavedRecordingName: String? = null
+    val lastSavedRecordingName: String? = null,
+    val topLevelCallCount: Int = 0,
+    val totalTrackedCallCount: Int = 0,
+    val isHolding: Boolean = false,
+    val canHold: Boolean = false,
+    val canSwap: Boolean = false,
+    val hasSecondaryCall: Boolean = false,
+    val secondaryCallerName: String = "",
+    val secondaryCallerNumber: String = "",
+    val secondaryCallState: Int = Call.STATE_NEW,
+    val canMerge: Boolean = false,
+    val isConference: Boolean = false,
+    val conferenceParticipantCount: Int = 0,
+    val participants: List<ConferenceParticipantUi> = emptyList()
 )
 
 object CallManager {
@@ -29,7 +68,12 @@ object CallManager {
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
 
-    private var activeCall: Call? = null
+    private val _callsFlow = MutableStateFlow<List<Call>>(emptyList())
+    val callsFlow: StateFlow<List<Call>> = _callsFlow.asStateFlow()
+
+    private val trackedCalls = CopyOnWriteArrayList<Call>()
+    private val callIdentities = ConcurrentHashMap<Call, ResolvedCallIdentity>()
+
     private var serviceRef: WeakReference<InCallService>? = null
     private var recorder: CallRecorder? = null
 
@@ -42,36 +86,186 @@ object CallManager {
 
     fun detachService() {
         stopRecordingIfNeeded()
+        trackedCalls.clear()
+        callIdentities.clear()
+        _callsFlow.value = emptyList()
+        _uiState.value = CallUiState()
         serviceRef = null
     }
 
-    fun setCurrentCall(call: Call?, callerName: String, callerNumber: String) {
-        activeCall = call
-        if (call == null) {
-            stopRecordingIfNeeded()
-            _uiState.value = CallUiState()
-        } else {
-            val state = getCompatState(call)
-            _uiState.update {
-                it.copy(
-                    hasActiveCall = true,
-                    callerName = callerName,
-                    callerNumber = callerNumber,
-                    callState = state,
-                    connectTimeMillis = call.details.connectTimeMillis
-                )
+    /**
+     * Updates the tracked multi-call list from CustomInCallService (or single-call compat callers).
+     */
+    fun syncTrackedCalls(
+        calls: List<Call>,
+        resolver: ((Call) -> ResolvedCallIdentity)? = null
+    ) {
+        trackedCalls.clear()
+        trackedCalls.addAll(calls)
+        val snapshot = trackedCalls.toList()
+        _callsFlow.value = snapshot
+
+        val currentCallSet = HashSet<Call>(snapshot.size + 4)
+        snapshot.forEach { call ->
+            currentCallSet.add(call)
+            call.children.orEmpty().forEach { child ->
+                currentCallSet.add(child)
+                if (resolver != null && !callIdentities.containsKey(child)) {
+                    callIdentities[child] = resolver(child)
+                }
             }
+            if (resolver != null) {
+                callIdentities[call] = resolver(call)
+            }
+        }
+        callIdentities.keys.retainAll(currentCallSet)
+
+        if (snapshot.isEmpty()) {
+            stopRecordingIfNeeded()
+            _uiState.update { prev ->
+                CallUiState(lastSavedRecordingName = prev.lastSavedRecordingName)
+            }
+            return
+        }
+
+        val topLevelCalls = resolveTopLevelCalls(snapshot)
+        val primaryCall = selectPrimaryCall(topLevelCalls, snapshot)
+        val secondaryCall = selectSecondaryCall(topLevelCalls, primaryCall)
+
+        val primaryState = primaryCall?.let { getCompatState(it) } ?: Call.STATE_NEW
+        val primaryDetails = primaryCall?.details
+        val children = primaryCall?.children.orEmpty()
+        val isConference = primaryCall != null && (
+            (primaryDetails?.hasProperty(Call.Details.PROPERTY_CONFERENCE) == true) ||
+                children.isNotEmpty()
+            )
+
+        val participants = children.map { child ->
+            val childIdentity = resolveIdentityForCall(child, resolver)
+            val childCapabilities = child.details?.callCapabilities ?: 0
+            ConferenceParticipantUi(
+                callKey = System.identityHashCode(child),
+                displayName = childIdentity.displayName,
+                phoneNumber = childIdentity.phoneNumber,
+                callState = getCompatState(child),
+                canSplit = canSplitParticipant(childCapabilities),
+                canDrop = getCompatState(child) != Call.STATE_DISCONNECTED
+            )
+        }
+
+        val primaryIdentity = primaryCall?.let { resolveIdentityForCall(it, resolver) }
+            ?: ResolvedCallIdentity("", "")
+        val displayPrimaryName = if (isConference) {
+            if (participants.isNotEmpty()) {
+                "Conference Call (${participants.size} Participants)"
+            } else {
+                "Conference Call"
+            }
+        } else {
+            primaryIdentity.displayName
+        }
+        val displayPrimaryNumber = if (isConference && participants.isNotEmpty()) {
+            participants.joinToString(", ") { p -> p.displayName.ifBlank { p.phoneNumber } }
+        } else {
+            primaryIdentity.phoneNumber
+        }
+
+        val secondaryIdentity = secondaryCall?.let { resolveIdentityForCall(it, resolver) }
+        val secondaryState = secondaryCall?.let { getCompatState(it) } ?: Call.STATE_NEW
+
+        val topLevelStates = topLevelCalls.map { getCompatState(it) }
+        val holdSwapAction = resolveHoldSwapAction(topLevelStates)
+        val primaryCapabilities = primaryDetails?.callCapabilities ?: 0
+        val canHoldPrimary =
+            (primaryCapabilities and Call.Details.CAPABILITY_HOLD) != 0 ||
+                (primaryCapabilities and Call.Details.CAPABILITY_SUPPORT_HOLD) != 0
+        val hasMergeCap = (primaryCapabilities and Call.Details.CAPABILITY_MERGE_CONFERENCE) != 0
+        val hasConferenceables = (primaryCall?.conferenceableCalls?.isNotEmpty() == true)
+        val canMerge = shouldEnableMergeCalls(
+            topLevelCallCount = topLevelCalls.count { getCompatState(it) != Call.STATE_DISCONNECTED },
+            hasMergeCapability = hasMergeCap,
+            hasConferenceableCalls = hasConferenceables
+        )
+
+        val connectTime = primaryDetails?.connectTimeMillis ?: 0L
+
+        _uiState.update { prev ->
+            prev.copy(
+                hasActiveCall = true,
+                callerName = displayPrimaryName,
+                callerNumber = displayPrimaryNumber,
+                callState = primaryState,
+                connectTimeMillis = if (connectTime > 0L) connectTime else prev.connectTimeMillis,
+                topLevelCallCount = topLevelCalls.size,
+                totalTrackedCallCount = snapshot.size,
+                isHolding = primaryState == Call.STATE_HOLDING,
+                canHold = holdSwapAction != HoldSwapAction.NONE || canHoldPrimary,
+                canSwap = holdSwapAction == HoldSwapAction.SWAP,
+                hasSecondaryCall = secondaryCall != null,
+                secondaryCallerName = secondaryIdentity?.displayName.orEmpty(),
+                secondaryCallerNumber = secondaryIdentity?.phoneNumber.orEmpty(),
+                secondaryCallState = secondaryState,
+                canMerge = canMerge,
+                isConference = isConference,
+                conferenceParticipantCount = participants.size,
+                participants = participants
+            )
         }
     }
 
-    fun updateCallState(call: Call, state: Int) {
-        if (call != activeCall) return
-        val connectTime = call.details.connectTimeMillis
-        _uiState.update {
-            it.copy(
-                callState = state,
-                connectTimeMillis = if (connectTime > 0L) connectTime else it.connectTimeMillis
-            )
+    /**
+     * Backward-compatible convenience method for single-call updates.
+     */
+    fun setCurrentCall(call: Call?, callerName: String, callerNumber: String) {
+        if (call == null) {
+            if (trackedCalls.isEmpty()) {
+                stopRecordingIfNeeded()
+                _uiState.value = CallUiState()
+            } else {
+                syncTrackedCalls(trackedCalls.toList())
+            }
+            return
+        }
+        callIdentities[call] = ResolvedCallIdentity(callerName, callerNumber)
+        if (!trackedCalls.contains(call)) {
+            trackedCalls.add(call)
+        }
+        syncTrackedCalls(trackedCalls.toList())
+    }
+
+    fun onCallAdded(
+        call: Call,
+        callerName: String,
+        callerNumber: String,
+        allCalls: List<Call>,
+        resolver: ((Call) -> ResolvedCallIdentity)? = null
+    ) {
+        callIdentities[call] = ResolvedCallIdentity(callerName, callerNumber)
+        syncTrackedCalls(allCalls, resolver)
+    }
+
+    fun onCallRemoved(
+        call: Call,
+        remainingCalls: List<Call>,
+        resolver: ((Call) -> ResolvedCallIdentity)? = null
+    ) {
+        callIdentities.remove(call)
+        syncTrackedCalls(remainingCalls, resolver)
+    }
+
+    fun updateCallState(
+        call: Call,
+        state: Int,
+        resolver: ((Call) -> ResolvedCallIdentity)? = null
+    ) {
+        if (!trackedCalls.contains(call)) {
+            trackedCalls.addIfAbsent(call)
+        }
+        syncTrackedCalls(trackedCalls.toList(), resolver)
+        if (state == Call.STATE_DISCONNECTED &&
+            !shouldKeepRecordingActive(trackedCalls.map { getCompatState(it) }, trackedCalls.size)
+        ) {
+            stopRecordingIfNeeded()
         }
     }
 
@@ -82,11 +276,18 @@ object CallManager {
     }
 
     fun answerCall() {
-        activeCall?.answer(VideoProfile.STATE_AUDIO_ONLY)
+        val ringingCall = trackedCalls.firstOrNull { getCompatState(it) == Call.STATE_RINGING }
+            ?: getPrimaryCall()
+        ringingCall?.answer(VideoProfile.STATE_AUDIO_ONLY)
     }
 
     fun declineOrEndCall() {
-        val call = activeCall ?: return
+        val ringingCall = trackedCalls.firstOrNull { getCompatState(it) == Call.STATE_RINGING }
+        if (ringingCall != null && getPrimaryCall() == ringingCall) {
+            ringingCall.reject(false, null)
+            return
+        }
+        val call = getPrimaryCall() ?: return
         val state = getCompatState(call)
         if (state == Call.STATE_RINGING) {
             call.reject(false, null)
@@ -96,7 +297,100 @@ object CallManager {
     }
 
     fun rejectWithQuickMessage(message: String) {
-        activeCall?.reject(true, message)
+        val ringingCall = trackedCalls.firstOrNull { getCompatState(it) == Call.STATE_RINGING }
+            ?: getPrimaryCall()
+        ringingCall?.reject(true, message)
+    }
+
+    /**
+     * Puts the currently active top-level call on hold before opening the Dialpad / Contacts
+     * picker to place an additional call. Never interrupts an ongoing call recording.
+     */
+    fun prepareForAddCall() {
+        val topLevel = resolveTopLevelCalls(trackedCalls)
+        val active = topLevel.firstOrNull { getCompatState(it) == Call.STATE_ACTIVE }
+        if (active != null) {
+            active.hold()
+        }
+    }
+
+    /**
+     * Hold/Unhold when 1 call is present, or Swap (unhold held + hold active) when 2+ calls exist.
+     */
+    fun toggleHoldOrSwap() {
+        val topLevel = resolveTopLevelCalls(trackedCalls)
+            .filter { getCompatState(it) != Call.STATE_DISCONNECTED }
+        if (topLevel.isEmpty()) return
+
+        if (topLevel.size >= 2) {
+            val active = topLevel.firstOrNull { getCompatState(it) == Call.STATE_ACTIVE }
+            val held = topLevel.firstOrNull { it != active && getCompatState(it) == Call.STATE_HOLDING }
+                ?: topLevel.firstOrNull { it != active }
+            held?.unhold()
+            if (active != null && active != held) {
+                active.hold()
+            }
+        } else {
+            val single = topLevel.first()
+            if (getCompatState(single) == Call.STATE_HOLDING) {
+                single.unhold()
+            } else {
+                single.hold()
+            }
+        }
+    }
+
+    /**
+     * Merges active & held calls into a Conference Call.
+     */
+    fun mergeCalls(): Boolean {
+        val topLevel = resolveTopLevelCalls(trackedCalls)
+            .filter { getCompatState(it) != Call.STATE_DISCONNECTED }
+        if (topLevel.isEmpty()) return false
+
+        val primary = topLevel.firstOrNull { getCompatState(it) == Call.STATE_ACTIVE }
+            ?: topLevel.firstOrNull()
+            ?: return false
+
+        val capabilities = primary.details?.callCapabilities ?: 0
+        if ((capabilities and Call.Details.CAPABILITY_MERGE_CONFERENCE) != 0) {
+            primary.mergeConference()
+            return true
+        }
+
+        val other = topLevel.firstOrNull { it != primary && getCompatState(it) == Call.STATE_HOLDING }
+            ?: topLevel.firstOrNull { it != primary }
+            ?: primary.conferenceableCalls.firstOrNull()
+
+        if (other != null) {
+            primary.conference(other)
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Splits a single participant out of a conference into a private 1:1 call while placing the rest
+     * of the conference on hold.
+     */
+    fun splitParticipant(callKey: Int): Boolean {
+        val childCall = findParticipantCallByKey(callKey) ?: return false
+        val capabilities = childCall.details?.callCapabilities ?: 0
+        if (!canSplitParticipant(capabilities)) {
+            return false
+        }
+        childCall.splitFromConference()
+        return true
+    }
+
+    /**
+     * Disconnects/drops only the selected participant from the conference without ending the
+     * conference call itself.
+     */
+    fun dropParticipant(callKey: Int): Boolean {
+        val childCall = findParticipantCallByKey(callKey) ?: return false
+        childCall.disconnect()
+        return true
     }
 
     fun toggleMute() {
@@ -106,18 +400,22 @@ object CallManager {
         _uiState.update { it.copy(isMuted = nextMuted) }
     }
 
-    @Suppress("DEPRECATION")
     fun toggleSpeaker() {
+        setSpeakerEnabled(!_uiState.value.isSpeakerOn)
+    }
+
+    @Suppress("DEPRECATION")
+    fun setSpeakerEnabled(enabled: Boolean) {
         val service = serviceRef?.get() ?: return
-        val nextSpeaker = !_uiState.value.isSpeakerOn
-        val route = if (nextSpeaker) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE
+        val route = if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE
         service.setAudioRoute(route)
-        _uiState.update { it.copy(isSpeakerOn = nextSpeaker) }
+        _uiState.update { it.copy(isSpeakerOn = enabled) }
     }
 
     fun playDtmfTone(digit: Char) {
-        activeCall?.playDtmfTone(digit)
-        activeCall?.stopDtmfTone()
+        val call = getPrimaryCall() ?: return
+        call.playDtmfTone(digit)
+        call.stopDtmfTone()
     }
 
     fun toggleRecording(context: Context): Boolean {
@@ -135,8 +433,9 @@ object CallManager {
                 _uiState.update { it.copy(isRecording = false) }
                 return false
             }
-            val numberOrLabel = _uiState.value.callerNumber.ifBlank { _uiState.value.callerName }
-            val started = mgr.startRecording(numberOrLabel)
+            VoipCallRecorderManager.onCellularCallStarted()
+            val numberOrLabel = buildRecordingLabel()
+            val started = mgr.startRecording(numberOrLabel, CallRecordingSource.CELLULAR)
             _uiState.update { it.copy(isRecording = started) }
             started
         }
@@ -151,8 +450,9 @@ object CallManager {
             recorder = it
         }
         if (!mgr.isRecording) {
-            val numberOrLabel = _uiState.value.callerNumber.ifBlank { _uiState.value.callerName }
-            val started = mgr.startRecording(numberOrLabel)
+            VoipCallRecorderManager.onCellularCallStarted()
+            val numberOrLabel = buildRecordingLabel()
+            val started = mgr.startRecording(numberOrLabel, CallRecordingSource.CELLULAR)
             _uiState.update { it.copy(isRecording = started) }
         }
     }
@@ -167,12 +467,136 @@ object CallManager {
         return savedName
     }
 
+    fun getTrackedCallsCount(): Int = trackedCalls.size
+
+    private fun buildRecordingLabel(): String {
+        val state = _uiState.value
+        return if (state.isConference) {
+            "Conference_${state.conferenceParticipantCount.coerceAtLeast(2)}"
+        } else {
+            state.callerNumber.ifBlank { state.callerName }
+        }
+    }
+
+    private fun findParticipantCallByKey(callKey: Int): Call? {
+        for (call in trackedCalls) {
+            call.children.orEmpty().forEach { child ->
+                if (System.identityHashCode(child) == callKey) {
+                    return child
+                }
+            }
+            if (call.parent != null && System.identityHashCode(call) == callKey) {
+                return call
+            }
+        }
+        return null
+    }
+
+    private fun resolveIdentityForCall(
+        call: Call,
+        resolver: ((Call) -> ResolvedCallIdentity)?
+    ): ResolvedCallIdentity {
+        val cached = callIdentities[call]
+        if (cached != null && (cached.displayName.isNotBlank() || cached.phoneNumber.isNotBlank())) {
+            return cached
+        }
+        if (resolver != null) {
+            return resolver(call).also { callIdentities[call] = it }
+        }
+        val number = call.details?.handle?.schemeSpecificPart.orEmpty()
+        val name = call.details?.callerDisplayName?.takeIf { it.isNotBlank() }
+            ?: number.ifBlank { "Unknown Caller" }
+        return ResolvedCallIdentity(name, number).also { callIdentities[call] = it }
+    }
+
+    private fun resolveTopLevelCalls(calls: List<Call>): List<Call> {
+        val topLevel = calls.filter { it.parent == null }
+        return if (topLevel.isNotEmpty()) topLevel else calls
+    }
+
+    private fun getPrimaryCall(): Call? {
+        val snapshot = trackedCalls.toList()
+        if (snapshot.isEmpty()) return null
+        return selectPrimaryCall(resolveTopLevelCalls(snapshot), snapshot)
+    }
+
+    private fun selectPrimaryCall(topLevelCalls: List<Call>, allCalls: List<Call>): Call? {
+        val pool = topLevelCalls.ifEmpty { allCalls }
+        return pool.firstOrNull { getCompatState(it) == Call.STATE_RINGING }
+            ?: pool.firstOrNull { getCompatState(it) == Call.STATE_DIALING || getCompatState(it) == Call.STATE_CONNECTING }
+            ?: pool.firstOrNull { getCompatState(it) == Call.STATE_ACTIVE }
+            ?: pool.firstOrNull { getCompatState(it) == Call.STATE_HOLDING }
+            ?: pool.firstOrNull()
+    }
+
+    private fun selectSecondaryCall(topLevelCalls: List<Call>, primaryCall: Call?): Call? {
+        if (primaryCall == null || topLevelCalls.size < 2) return null
+        return topLevelCalls.firstOrNull {
+            it != primaryCall && getCompatState(it) != Call.STATE_DISCONNECTED
+        }
+    }
+
     @Suppress("DEPRECATION")
-    private fun getCompatState(call: Call): Int {
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            call.details.state
+    fun getCompatState(call: Call): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            call.details?.state ?: call.state
         } else {
             call.state
         }
+    }
+
+    /**
+     * Pure helper: recording stays continuous across hold, add-call dialing, and conference merge
+     * transitions as long as the tracked call list is non-empty and at least one call is not disconnected.
+     */
+    fun shouldKeepRecordingActive(callStates: List<Int>, totalTrackedCalls: Int): Boolean {
+        if (totalTrackedCalls <= 0 || callStates.isEmpty()) return false
+        return callStates.any { state ->
+            state != Call.STATE_DISCONNECTED && state != Call.STATE_DISCONNECTING
+        }
+    }
+
+    /**
+     * Pure helper: determines whether the Merge Calls button should be shown & enabled.
+     */
+    fun shouldEnableMergeCalls(
+        topLevelCallCount: Int,
+        hasMergeCapability: Boolean,
+        hasConferenceableCalls: Boolean
+    ): Boolean {
+        return topLevelCallCount >= 2 || hasMergeCapability || hasConferenceableCalls
+    }
+
+    /**
+     * Pure helper: determines the behavior of the Hold / Swap button.
+     */
+    fun resolveHoldSwapAction(topLevelStates: List<Int>): HoldSwapAction {
+        val liveStates = topLevelStates.filter { it != Call.STATE_DISCONNECTED }
+        if (liveStates.isEmpty()) return HoldSwapAction.NONE
+        if (liveStates.size >= 2) {
+            return HoldSwapAction.SWAP
+        }
+        return if (liveStates.first() == Call.STATE_HOLDING) {
+            HoldSwapAction.UNHOLD
+        } else {
+            HoldSwapAction.HOLD
+        }
+    }
+
+    fun canSplitParticipant(capabilities: Int): Boolean {
+        return (capabilities and Call.Details.CAPABILITY_SEPARATE_FROM_CONFERENCE) != 0
+    }
+
+    /**
+     * Returns true when an active call is part of a multi-party session (either merged
+     * conference or 2+ simultaneous call legs).
+     */
+    fun isActiveMultiPartyCall(state: CallUiState = _uiState.value): Boolean {
+        return state.hasActiveCall &&
+            state.callState == Call.STATE_ACTIVE &&
+            (state.isConference ||
+                state.topLevelCallCount >= 2 ||
+                state.totalTrackedCallCount >= 2 ||
+                state.conferenceParticipantCount >= 2)
     }
 }

@@ -12,10 +12,10 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.speech.tts.TextToSpeech
-import android.telephony.SmsManager
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
+import android.telephony.SmsManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.PulseDialApp
@@ -24,9 +24,12 @@ import com.example.billing.SubscriptionEnforcementService
 import com.example.billing.SubscriptionManager
 import com.example.data.ContactsRepository
 import com.example.data.DialerPreferences
+import com.example.data.firebase.CustomPopupAd
+import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.data.firebase.UserEntitlement
 import com.example.recording.CallRecordingAccessibilityService
+import com.example.ui.MainActivity
 import com.example.ui.incall.InCallActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,17 +37,23 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Default Dialer InCallService paired with CallRecordingAccessibilityService and CallRecorder.
  *
- * Includes:
- * 1. Bell-to-bell silent call recording from the first ring (`STATE_DIALING`, `STATE_RINGING`, `STATE_CONNECTING`).
- * 2. Smart Call Announcer (`TextToSpeech` with `AudioAttributes.USAGE_NOTIFICATION_RINGTONE` and Headset/Bluetooth-Only mode).
- * 3. Unknown Caller Shield (`OFF`, `SILENT_RECORD`, `AUTO_REJECT`) for unsaved numbers.
- * 4. VIP Auto WhatsApp & SMS Follow-up Engine (`COMPLETED_CALL` vs `MISSED_OR_BUSY_CALL` with 24-hour per-number anti-spam cooldown).
+ * Supports:
+ * 1. Multi-Party Call & Conference State Tracking (`CopyOnWriteArrayList<Call>` + `StateFlow<List<Call>>`).
+ * 2. Bell-to-bell continuous silent call recording across hold/swap/add-call/merge until ALL calls end.
+ * 3. Smart Call Announcer (`TextToSpeech` with `AudioAttributes.USAGE_NOTIFICATION_RINGTONE` & Headset mode).
+ * 4. Unknown Caller Shield (`OFF`, `SILENT_RECORD`, `AUTO_REJECT`) for unsaved numbers.
+ * 5. VIP Auto WhatsApp & SMS Follow-up Engine (`COMPLETED_CALL` vs `MISSED_OR_BUSY_CALL`).
  */
 class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
@@ -54,51 +63,108 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         MISSED_OR_BUSY_CALL
     }
 
+    private data class TrackedCallMeta(
+        val number: String,
+        val savedContactName: String?,
+        val displayName: String,
+        var wasIncomingRinging: Boolean,
+        var reachedActive: Boolean,
+        var followUpHandled: Boolean = false
+    )
+
     private lateinit var prefs: DialerPreferences
     private lateinit var subscriptionManager: SubscriptionManager
     private lateinit var contactsRepo: ContactsRepository
     private var audioManager: AudioManager? = null
 
-    private var currentCall: Call? = null
-    private var currentCallNumber: String = ""
-    private var currentCallWasIncomingRinging: Boolean = false
-    private var currentCallReachedActive: Boolean = false
+    /** Live multi-call list tracking all active, held, dialing, ringing, and conference calls simultaneously. */
+    private val trackedCalls = CopyOnWriteArrayList<Call>()
+    private val _callsState = MutableStateFlow<List<Call>>(emptyList())
+    val callsState: StateFlow<List<Call>> = _callsState.asStateFlow()
+
+    private val callMetadata = ConcurrentHashMap<Call, TrackedCallMeta>()
     private var ringerMutedByShield: Boolean = false
 
     private var tts: TextToSpeech? = null
     private var isTtsReady: Boolean = false
     private var pendingAnnouncementSpeech: String? = null
     private var announcerLoopJob: Job? = null
+    private var proximitySpeakerController: ProximitySpeakerController? = null
+
+    @Volatile
+    private var latestCustomPopupAd: CustomPopupAd = CustomPopupAd()
+    private var rtdbCustomPopupAdCleanup: (() -> Unit)? = null
+    private var afterCallAdDispatchedForCurrentSession: Boolean = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val callCallback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
             super.onStateChanged(call, state)
-            CallManager.updateCallState(call, state)
-
+            val meta = callMetadata[call]
             if (state == Call.STATE_RINGING) {
-                currentCallWasIncomingRinging = true
+                meta?.wasIncomingRinging = true
             } else if (state == Call.STATE_ACTIVE) {
-                currentCallReachedActive = true
-                stopCallAnnouncer()
-                restoreRingerIfMutedByShield()
+                meta?.reachedActive = true
+                if (trackedCalls.none { getCompatState(it) == Call.STATE_RINGING }) {
+                    stopCallAnnouncer()
+                    restoreRingerIfMutedByShield()
+                }
             }
 
-            if (isEarlyOrActiveRecordingState(state)) {
+            broadcastTrackedCalls()
+
+            if (isEarlyOrActiveRecordingState(state) || state == Call.STATE_HOLDING) {
+                // Keep recording continuously during hold/swap/add-call/merge
                 triggerAutoRecordingIfPermitted()
             } else if (state == Call.STATE_DISCONNECTED) {
-                stopCallAnnouncer()
-                restoreRingerIfMutedByShield()
-                CallManager.stopRecordingIfNeeded()
-                cancelCallNotification()
+                if (trackedCalls.none { getCompatState(it) == Call.STATE_RINGING }) {
+                    stopCallAnnouncer()
+                    restoreRingerIfMutedByShield()
+                }
 
-                val outcome = resolveCallEndOutcome(
-                    wasIncomingRinging = currentCallWasIncomingRinging,
-                    reachedActive = currentCallReachedActive
-                )
-                handleCallDisconnectedFollowUp(currentCallNumber, outcome)
+                // Follow-up triggers per disconnected caller if not already handled and not a synthetic conference node
+                val isConferenceParent =
+                    call.details?.hasProperty(Call.Details.PROPERTY_CONFERENCE) == true
+                if (meta != null && !meta.followUpHandled && !isConferenceParent) {
+                    meta.followUpHandled = true
+                    val outcome = resolveCallEndOutcome(
+                        wasIncomingRinging = meta.wasIncomingRinging,
+                        reachedActive = meta.reachedActive
+                    )
+                    handleCallDisconnectedFollowUp(meta.number, outcome)
+                }
+
+                // Never stop CallRecorderForegroundService while another call or conference remains connected
+                val allStates = trackedCalls.map { getCompatState(it) }
+                if (!CallManager.shouldKeepRecordingActive(allStates, trackedCalls.size)) {
+                    CallManager.stopRecordingIfNeeded()
+                    maybeDispatchAfterCallPopupAd()
+                }
+                refreshCallNotificationFromCurrentCalls()
             }
+        }
+
+        override fun onDetailsChanged(call: Call, details: Call.Details) {
+            super.onDetailsChanged(call, details)
+            broadcastTrackedCalls()
+            refreshCallNotificationFromCurrentCalls()
+        }
+
+        override fun onChildrenChanged(call: Call, children: List<Call>) {
+            super.onChildrenChanged(call, children)
+            children.forEach { child ->
+                if (!callMetadata.containsKey(child)) {
+                    resolveAndCacheCallMeta(child, getCompatState(child))
+                }
+            }
+            broadcastTrackedCalls()
+            refreshCallNotificationFromCurrentCalls()
+        }
+
+        override fun onConferenceableCallsChanged(call: Call, conferenceableCalls: List<Call>) {
+            super.onConferenceableCallsChanged(call, conferenceableCalls)
+            broadcastTrackedCalls()
         }
     }
 
@@ -113,38 +179,52 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         CallManager.attachService(this)
         SubscriptionEnforcementService.init(applicationContext)
         RealtimeSyncManager.init(applicationContext)
+        rtdbCustomPopupAdCleanup = RealtimeDatabaseSync.attachCustomPopupAdListener(applicationContext) { ad ->
+            latestCustomPopupAd = ad
+        }
+
+        val proxController = ProximitySpeakerController(applicationContext) { speakerOn ->
+            CallManager.setSpeakerEnabled(speakerOn)
+        }
+        proximitySpeakerController = proxController
+        serviceScope.launch {
+            CallManager.uiState.collect { uiState ->
+                proxController.onCallUiStateChanged(uiState)
+            }
+        }
 
         serviceScope.launch {
             SubscriptionEnforcementService.state.collect { enforcementState ->
-                val activeCall = currentCall ?: return@collect
-                val callState = getCompatState(activeCall)
+                if (trackedCalls.isEmpty()) return@collect
+                val vipAllowed = !enforcementState.shouldRestrictUiToAccountTab &&
+                    subscriptionManager.isSubscriptionActive() &&
+                    !prefs.adminBlockedUser
+                if (!vipAllowed) {
+                    stopCallAnnouncer()
+                }
                 if (!enforcementState.isRecordingAllowed ||
-                    !subscriptionManager.isSubscriptionActive() ||
-                    !prefs.allowCallRecordingConfig ||
-                    prefs.adminBlockedUser
+                    !vipAllowed ||
+                    !prefs.allowCallRecordingConfig
                 ) {
                     CallManager.stopRecordingIfNeeded()
-                    stopCallAnnouncer()
-                } else if (isEarlyOrActiveRecordingState(callState)) {
+                } else if (hasAnyEarlyOrActiveRecordingCall()) {
                     triggerAutoRecordingIfPermitted()
                 }
             }
         }
         serviceScope.launch {
             RealtimeSyncManager.syncState.collect {
-                val activeCall = currentCall ?: return@collect
-                val callState = getCompatState(activeCall)
-                if (!prefs.announcerEnabled) {
+                if (trackedCalls.isEmpty()) return@collect
+                val vipAllowed = hasVipFeatureAccess()
+                if (!prefs.announcerEnabled || !vipAllowed) {
                     stopCallAnnouncer()
                 }
                 if (!SubscriptionEnforcementService.canStartCallRecording(applicationContext) ||
-                    !subscriptionManager.isSubscriptionActive() ||
-                    !prefs.allowCallRecordingConfig ||
-                    prefs.adminBlockedUser
+                    !vipAllowed ||
+                    !prefs.allowCallRecordingConfig
                 ) {
                     CallManager.stopRecordingIfNeeded()
-                    stopCallAnnouncer()
-                } else if (isEarlyOrActiveRecordingState(callState)) {
+                } else if (hasAnyEarlyOrActiveRecordingCall()) {
                     triggerAutoRecordingIfPermitted()
                 }
             }
@@ -177,10 +257,8 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             }
             isTtsReady = true
             val pending = pendingAnnouncementSpeech
-            if (!pending.isNullOrBlank() &&
-                currentCall != null &&
-                getCompatState(currentCall!!) == Call.STATE_RINGING
-            ) {
+            val hasRingingCall = trackedCalls.any { getCompatState(it) == Call.STATE_RINGING }
+            if (!pending.isNullOrBlank() && hasRingingCall) {
                 pendingAnnouncementSpeech = null
                 startRepeatedAnnouncement(pending)
             }
@@ -191,6 +269,10 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        rtdbCustomPopupAdCleanup?.invoke()
+        rtdbCustomPopupAdCleanup = null
+        proximitySpeakerController?.release()
+        proximitySpeakerController = null
         stopCallAnnouncer()
         restoreRingerIfMutedByShield()
         runCatching {
@@ -199,6 +281,12 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         }
         tts = null
         isTtsReady = false
+        trackedCalls.forEach { call ->
+            runCatching { call.unregisterCallback(callCallback) }
+        }
+        trackedCalls.clear()
+        callMetadata.clear()
+        _callsState.value = emptyList()
         serviceScope.cancel()
         CallManager.stopRecordingIfNeeded()
         cancelCallNotification()
@@ -207,7 +295,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
-        val rawNumber = call.details.handle?.schemeSpecificPart.orEmpty()
+        val rawNumber = call.details?.handle?.schemeSpecificPart.orEmpty()
         val initialState = getCompatState(call)
 
         // 1. Automatically reject explicitly blocked numbers before any recording or UI starts
@@ -234,21 +322,40 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             }
         }
 
-        currentCall = call
-        currentCallNumber = rawNumber
-        currentCallWasIncomingRinging = (initialState == Call.STATE_RINGING)
-        currentCallReachedActive = (initialState == Call.STATE_ACTIVE)
-        call.registerCallback(callCallback)
-
         val resolvedName = savedContactName
-            ?: call.details.callerDisplayName?.takeIf { it.isNotBlank() }
+            ?: call.details?.callerDisplayName?.takeIf { it.isNotBlank() }
             ?: getString(R.string.incall_unknown_caller)
 
-        CallManager.setCurrentCall(call, resolvedName, rawNumber)
-        postCallNotification(resolvedName, rawNumber, initialState == Call.STATE_RINGING)
+        callMetadata[call] = TrackedCallMeta(
+            number = rawNumber,
+            savedContactName = savedContactName,
+            displayName = resolvedName,
+            wasIncomingRinging = (initialState == Call.STATE_RINGING),
+            reachedActive = (initialState == Call.STATE_ACTIVE)
+        )
+        call.children.orEmpty().forEach { child ->
+            resolveAndCacheCallMeta(child, getCompatState(child))
+        }
 
-        // 3. Start silent recording from the very first bell (Dialing / Ringing / Connecting)
-        if (isEarlyOrActiveRecordingState(initialState)) {
+        if (trackedCalls.isEmpty()) {
+            afterCallAdDispatchedForCurrentSession = false
+        }
+        trackedCalls.addIfAbsent(call)
+        call.registerCallback(callCallback)
+
+        val snapshot = trackedCalls.toList()
+        _callsState.value = snapshot
+        CallManager.onCallAdded(
+            call = call,
+            callerName = resolvedName,
+            callerNumber = rawNumber,
+            allCalls = snapshot,
+            resolver = ::resolveIdentityForCall
+        )
+        refreshCallNotificationFromCurrentCalls()
+
+        // 3. Start/continue silent recording from the very first bell (never restarted on 2nd call/merge)
+        if (isEarlyOrActiveRecordingState(initialState) || initialState == Call.STATE_HOLDING) {
             triggerAutoRecordingIfPermitted()
         }
 
@@ -269,32 +376,131 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
-        call.unregisterCallback(callCallback)
-        if (call == currentCall) {
+        runCatching { call.unregisterCallback(callCallback) }
+        trackedCalls.remove(call)
+        val meta = callMetadata.remove(call)
+
+        val snapshot = trackedCalls.toList()
+        _callsState.value = snapshot
+        CallManager.onCallRemoved(call, snapshot, ::resolveIdentityForCall)
+
+        if (meta != null && !meta.followUpHandled) {
+            val isConferenceParent =
+                call.details?.hasProperty(Call.Details.PROPERTY_CONFERENCE) == true
+            if (!isConferenceParent) {
+                meta.followUpHandled = true
+                val outcome = resolveCallEndOutcome(
+                    wasIncomingRinging = meta.wasIncomingRinging,
+                    reachedActive = meta.reachedActive
+                )
+                handleCallDisconnectedFollowUp(meta.number, outcome)
+            }
+        }
+
+        if (trackedCalls.none { getCompatState(it) == Call.STATE_RINGING }) {
             stopCallAnnouncer()
             restoreRingerIfMutedByShield()
+        }
+
+        // Only stop call recording & remove foreground service when ALL calls are disconnected
+        if (snapshot.isEmpty() ||
+            !CallManager.shouldKeepRecordingActive(snapshot.map { getCompatState(it) }, snapshot.size)
+        ) {
             CallManager.stopRecordingIfNeeded()
-            currentCall = null
-            currentCallNumber = ""
-            currentCallWasIncomingRinging = false
-            currentCallReachedActive = false
-            CallManager.setCurrentCall(null, "", "")
+        }
+
+        if (snapshot.isEmpty()) {
             cancelCallNotification()
+            maybeDispatchAfterCallPopupAd()
+        } else {
+            refreshCallNotificationFromCurrentCalls()
         }
     }
 
+    private fun maybeDispatchAfterCallPopupAd() {
+        if (afterCallAdDispatchedForCurrentSession) return
+        val syncedAd = RealtimeSyncManager.syncState.value.customPopupAd
+        val ad = if (latestCustomPopupAd.adId.isNotBlank() || latestCustomPopupAd.isEnabled) {
+            latestCustomPopupAd
+        } else {
+            syncedAd
+        }
+        val isPremium = prefs.isPremiumUser || subscriptionManager.isPremiumActive()
+        if (!ad.shouldDisplayFor(CustomPopupAd.TRIGGER_AFTER_CALL_END, isPremium)) return
+
+        afterCallAdDispatchedForCurrentSession = true
+        val adIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_SHOW_AFTER_CALL_POPUP_AD, true)
+            putExtra(MainActivity.EXTRA_POPUP_AD_BUNDLE, ad.toBundle())
+        }
+        runCatching { startActivity(adIntent) }
+            .onFailure { e -> Log.w(TAG, "Failed to launch post-call popup ad: ${e.message}") }
+    }
+
+    @Deprecated("Deprecated in Java")
     @Suppress("DEPRECATION")
     override fun onCallAudioStateChanged(audioState: CallAudioState?) {
         super.onCallAudioStateChanged(audioState)
         audioState ?: return
+        proximitySpeakerController?.onAudioRouteChanged(audioState.route)
         val isSpeaker = (audioState.route and CallAudioState.ROUTE_SPEAKER) != 0
         CallManager.updateAudioState(audioState.isMuted, isSpeaker)
     }
 
+    private fun broadcastTrackedCalls() {
+        val snapshot = trackedCalls.toList()
+        _callsState.value = snapshot
+        CallManager.syncTrackedCalls(snapshot, ::resolveIdentityForCall)
+    }
+
+    private fun resolveAndCacheCallMeta(call: Call, state: Int): TrackedCallMeta {
+        callMetadata[call]?.let { return it }
+        val rawNumber = call.details?.handle?.schemeSpecificPart.orEmpty()
+        val savedName = contactsRepo.lookupCallerName(rawNumber)?.takeIf { it.isNotBlank() }
+        val displayName = savedName
+            ?: call.details?.callerDisplayName?.takeIf { it.isNotBlank() }
+            ?: rawNumber.ifBlank { getString(R.string.incall_unknown_caller) }
+        return TrackedCallMeta(
+            number = rawNumber,
+            savedContactName = savedName,
+            displayName = displayName,
+            wasIncomingRinging = (state == Call.STATE_RINGING),
+            reachedActive = (state == Call.STATE_ACTIVE)
+        ).also { callMetadata[call] = it }
+    }
+
+    private fun resolveIdentityForCall(call: Call): ResolvedCallIdentity {
+        val meta = resolveAndCacheCallMeta(call, getCompatState(call))
+        return ResolvedCallIdentity(
+            displayName = meta.displayName,
+            phoneNumber = meta.number
+        )
+    }
+
+    private fun refreshCallNotificationFromCurrentCalls() {
+        val ui = CallManager.uiState.value
+        if (!ui.hasActiveCall || trackedCalls.isEmpty()) {
+            cancelCallNotification()
+            return
+        }
+        val title = ui.callerName.ifBlank { getString(R.string.incall_unknown_caller) }
+        val subtitle = ui.callerNumber.ifBlank { getString(R.string.incall_unknown_caller) }
+        val isRinging = (ui.callState == Call.STATE_RINGING)
+        postCallNotification(title, subtitle, isRinging)
+    }
+
+    private fun hasAnyEarlyOrActiveRecordingCall(): Boolean {
+        return trackedCalls.any { call ->
+            val st = getCompatState(call)
+            isEarlyOrActiveRecordingState(st) || st == Call.STATE_HOLDING
+        }
+    }
+
     private fun hasVipFeatureAccess(): Boolean {
         return !prefs.adminBlockedUser &&
-            subscriptionManager.isSubscriptionActive() &&
-            SubscriptionEnforcementService.canStartCallRecording(applicationContext)
+            !SubscriptionEnforcementService.shouldRestrictUi(applicationContext) &&
+            subscriptionManager.isSubscriptionActive()
     }
 
     private fun muteRingerForShield() {
@@ -338,8 +544,8 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         announcerLoopJob?.cancel()
         announcerLoopJob = serviceScope.launch {
             repeat(2) { index ->
-                val active = currentCall
-                if (active == null || getCompatState(active) != Call.STATE_RINGING || !prefs.announcerEnabled) {
+                val ringing = trackedCalls.firstOrNull { getCompatState(it) == Call.STATE_RINGING }
+                if (ringing == null || !prefs.announcerEnabled) {
                     stopCallAnnouncer()
                     return@launch
                 }
@@ -414,7 +620,6 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         )
         if (!shouldTrigger) return
 
-        // Enforce 24-hour anti-spam cooldown per phone number
         val nowMs = System.currentTimeMillis()
         if (!prefs.canSendFollowUpToday(rawNumber, nowMs)) {
             return
@@ -552,7 +757,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
     @Suppress("DEPRECATION")
     private fun getCompatState(call: Call): Int {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            call.details.state
+            call.details?.state ?: call.state
         } else {
             call.state
         }

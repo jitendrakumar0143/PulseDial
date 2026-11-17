@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/dialer_app_icon_1794724622095"
+        android:drawable="@drawable/pulsedial_enhanced_icon_fg"
         android:gravity="center" />
 </layer-list>

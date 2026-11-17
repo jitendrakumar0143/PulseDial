@@ -136,19 +136,12 @@
                     android:orientation="vertical"
                     android:padding="32dp">
 
-                    <FrameLayout
+                    <ImageView
                         android:layout_width="84dp"
                         android:layout_height="84dp"
-                        android:background="@drawable/bg_circle_avatar">
-
-                        <ImageView
-                            android:layout_width="42dp"
-                            android:layout_height="42dp"
-                            android:layout_gravity="center"
-                            android:contentDescription="@string/app_name"
-                            android:src="@drawable/ic_verified_shield"
-                            app:tint="@color/md_theme_primary" />
-                    </FrameLayout>
+                        android:contentDescription="@string/app_name"
+                        android:scaleType="centerCrop"
+                        android:src="@mipmap/ic_launcher_round" />
 
                     <TextView
                         android:layout_width="wrap_content"

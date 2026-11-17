@@ -48,6 +48,7 @@ class CallRecorderForegroundService : Service() {
                         prefs.adminBlockedUser
                     ) {
                         CallManager.stopRecordingIfNeeded()
+                        VoipCallRecorderManager.stopRecordingIfNeeded()
                         stopForegroundCompat()
                         stopSelf()
                     }
@@ -72,8 +73,9 @@ class CallRecorderForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        val isCellularCall = intent?.getBooleanExtra(EXTRA_IS_CELLULAR_CALL, true) ?: true
         val notification = buildSilentNotification()
-        startForegroundWithCompatTypes(notification)
+        startForegroundWithCompatTypes(notification, isCellularCall)
         return START_NOT_STICKY
     }
 
@@ -83,9 +85,9 @@ class CallRecorderForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun startForegroundWithCompatTypes(notification: Notification) {
+    private fun startForegroundWithCompatTypes(notification: Notification, isCellularCall: Boolean) {
         val primaryType = when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isCellularCall -> {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
             }
@@ -151,10 +153,12 @@ class CallRecorderForegroundService : Service() {
         private const val NOTIFICATION_ID = 4402
         private const val ACTION_START = "com.example.recording.ACTION_START"
         private const val ACTION_STOP = "com.example.recording.ACTION_STOP"
+        private const val EXTRA_IS_CELLULAR_CALL = "extra_is_cellular_call"
 
-        fun start(context: Context) {
+        fun start(context: Context, isCellularCall: Boolean = true) {
             val intent = Intent(context, CallRecorderForegroundService::class.java).apply {
                 action = ACTION_START
+                putExtra(EXTRA_IS_CELLULAR_CALL, isCellularCall)
             }
             runCatching {
                 ContextCompat.startForegroundService(context.applicationContext, intent)

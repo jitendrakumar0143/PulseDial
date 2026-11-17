@@ -53,7 +53,9 @@ class CallRecorder(private val context: Context) {
     private var mediaRecorder: MediaRecorder? = null
     private var currentTempFile: File? = null
     private var currentTargetFolderUri: String? = null
+    private var currentCreateSubfolderForSaf: Boolean = true
     private var currentFileName: String? = null
+    private var currentSource: CallRecordingSource = CallRecordingSource.CELLULAR
     private var activeSessionId: Long = 0L
     private var silenceMonitorJob: Job? = null
 
@@ -63,7 +65,12 @@ class CallRecorder(private val context: Context) {
     val isRecording: Boolean
         get() = isRecordingActive
 
-    fun startRecording(phoneNumber: String): Boolean {
+    fun getActiveSource(): CallRecordingSource? = if (isRecordingActive) currentSource else null
+
+    fun startRecording(
+        phoneNumber: String,
+        source: CallRecordingSource = CallRecordingSource.CELLULAR
+    ): Boolean {
         synchronized(recorderLock) {
             if (isRecordingActive) return true
 
@@ -73,7 +80,9 @@ class CallRecorder(private val context: Context) {
                 return false
             }
             val subscriptionManager = SubscriptionManager(appContext)
-            if (!subscriptionManager.isSubscriptionActive()) {
+            if (!subscriptionManager.isSubscriptionActive() ||
+                com.example.billing.SubscriptionEnforcementService.shouldRestrictUi(appContext)
+            ) {
                 Log.w(TAG, "Trial or monthly subscription expired and user is not subscribed")
                 return false
             }
@@ -85,28 +94,29 @@ class CallRecorder(private val context: Context) {
             }
 
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val sanitizedNumber = phoneNumber
-                .replace(Regex("[^+0-9a-zA-Z_-]"), "_")
-                .trim('_')
-                .take(24)
-                .ifEmpty { "Unknown" }
-            val fileName = "${sanitizedNumber}_$timestamp.mp3"
+            val fileName = buildFileName(phoneNumber, source, timestamp)
+            val isCellular = (source == CallRecordingSource.CELLULAR)
 
-            // 1. Start Android 14/15/16+ microphone|phoneCall Foreground Service silently
-            CallRecorderForegroundService.start(appContext)
+            // 1. Start Android 14/15/16+ Foreground Service silently
+            CallRecorderForegroundService.start(appContext, isCellularCall = isCellular)
 
-            // 2. Configure AudioManager for clear two-way & ringback capture
-            configureAudioManagerForCall()
+            // 2. Configure AudioManager only for cellular calls (VoIP apps manage their own audio mode)
+            if (isCellular) {
+                configureAudioManagerForCall()
+            }
 
             // 3. Try AudioSource fallback chain from index 0
             val tempFile = createTempRecordingFile()
             val startedIndex = startRecorderFromIndex(0, tempFile)
             if (startedIndex >= 0) {
+                val folderTarget = prefs.resolveFolderTarget(source)
                 val sessionId = System.nanoTime()
                 activeSessionId = sessionId
                 currentTempFile = tempFile
-                currentTargetFolderUri = prefs.recordingFolderUri
+                currentTargetFolderUri = folderTarget.treeUri
+                currentCreateSubfolderForSaf = folderTarget.createSubfolder
                 currentFileName = fileName
+                currentSource = source
                 isRecordingActive = true
 
                 // Monitor initial amplitude and fall back automatically if HAL outputs silence (0)
@@ -115,7 +125,9 @@ class CallRecorder(private val context: Context) {
                 }
                 return true
             } else {
-                restoreAudioManagerState()
+                if (isCellular) {
+                    restoreAudioManagerState()
+                }
                 CallRecorderForegroundService.stop(appContext)
                 runCatching { tempFile.delete() }
                 cleanupHandlesLocked()
@@ -273,6 +285,8 @@ class CallRecorder(private val context: Context) {
         val tempFile: File?
         val fileName: String?
         val safFolderUri: String?
+        val createSubfolderForSaf: Boolean
+        val recordingSource: CallRecordingSource
 
         synchronized(recorderLock) {
             if (!isRecordingActive) return null
@@ -283,6 +297,8 @@ class CallRecorder(private val context: Context) {
             tempFile = currentTempFile
             fileName = currentFileName
             safFolderUri = currentTargetFolderUri
+            createSubfolderForSaf = currentCreateSubfolderForSaf
+            recordingSource = currentSource
 
             try {
                 mediaRecorder?.stop()
@@ -293,19 +309,29 @@ class CallRecorder(private val context: Context) {
                 runCatching { mediaRecorder?.release() }
                 mediaRecorder = null
                 isRecordingActive = false
-                restoreAudioManagerState()
+                if (recordingSource == CallRecordingSource.CELLULAR) {
+                    restoreAudioManagerState()
+                }
                 CallRecorderForegroundService.stop(appContext)
             }
 
             currentTempFile = null
             currentTargetFolderUri = null
+            currentCreateSubfolderForSaf = true
             currentFileName = null
+            currentSource = CallRecordingSource.CELLULAR
         }
 
         var exportedName: String? = null
         try {
             if (tempFile != null && fileName != null && tempFile.exists() && tempFile.length() > 0L) {
-                exportedName = exportTempRecordingToFileManager(tempFile, fileName, safFolderUri)
+                exportedName = exportTempRecordingToFileManager(
+                    tempFile = tempFile,
+                    fileName = fileName,
+                    safFolderUri = safFolderUri,
+                    createSubfolder = createSubfolderForSaf,
+                    source = recordingSource
+                )
             } else {
                 Log.w(TAG, "Finalized temp recording missing or empty: size=${tempFile?.length() ?: -1L}")
             }
@@ -318,27 +344,43 @@ class CallRecorder(private val context: Context) {
     private fun exportTempRecordingToFileManager(
         tempFile: File,
         fileName: String,
-        safFolderUri: String?
+        safFolderUri: String?,
+        createSubfolder: Boolean,
+        source: CallRecordingSource
     ): String? {
         if (!safFolderUri.isNullOrBlank()) {
-            val safSaved = exportToSafFolder(tempFile, fileName, Uri.parse(safFolderUri))
+            val safSaved = exportToSafFolder(
+                tempFile = tempFile,
+                fileName = fileName,
+                treeUri = Uri.parse(safFolderUri),
+                source = source,
+                createSubfolder = createSubfolder
+            )
             if (safSaved != null) return safSaved
         }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            exportToScopedMediaStore(tempFile, fileName)
+            exportToScopedMediaStore(tempFile, fileName, source)
         } else {
-            exportToLegacyMusicFolder(tempFile, fileName)
+            exportToLegacyMusicFolder(tempFile, fileName, source)
         }
     }
 
-    private fun exportToSafFolder(tempFile: File, fileName: String, treeUri: Uri): String? {
+    private fun exportToSafFolder(
+        tempFile: File,
+        fileName: String,
+        treeUri: Uri,
+        source: CallRecordingSource,
+        createSubfolder: Boolean = true
+    ): String? {
         return try {
-            val treeDir = DocumentFile.fromTreeUri(appContext, treeUri)
-            if (treeDir == null || !treeDir.canWrite()) {
+            val rootDir = DocumentFile.fromTreeUri(appContext, treeUri)
+            if (rootDir == null || !rootDir.canWrite()) {
                 Log.w(TAG, "Selected SAF folder not writable: $treeUri")
                 return null
             }
-            val targetDoc = treeDir.createFile(MIME_TYPE_MP3, fileName) ?: return null
+            val targetDir = resolveSafTargetDirectory(rootDir, source, createSubfolder)
+
+            val targetDoc = targetDir.createFile(MIME_TYPE_MP3, fileName) ?: return null
             val outStream = appContext.contentResolver.openOutputStream(targetDoc.uri, "w") ?: run {
                 targetDoc.delete()
                 return null
@@ -350,7 +392,8 @@ class CallRecorder(private val context: Context) {
                 }
             }
             val resolvedName = targetDoc.name ?: fileName
-            resolvePrimaryStoragePath(treeUri, resolvedName)?.let { filePath ->
+            val subRel = if (targetDir != rootDir) "${source.folderName}/$resolvedName" else resolvedName
+            resolvePrimaryStoragePath(treeUri, subRel)?.let { filePath ->
                 MediaScannerConnection.scanFile(
                     appContext,
                     arrayOf(filePath),
@@ -377,13 +420,18 @@ class CallRecorder(private val context: Context) {
         return if (relative.isEmpty()) "$root/$fileName" else "$root/$relative/$fileName"
     }
 
-    private fun exportToScopedMediaStore(tempFile: File, fileName: String): String? {
+    private fun exportToScopedMediaStore(
+        tempFile: File,
+        fileName: String,
+        source: CallRecordingSource
+    ): String? {
         val resolver = appContext.contentResolver
+        val relativePath = source.relativePublicPath()
         val values = ContentValues().apply {
             put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Audio.Media.TITLE, fileName.removeSuffix(".mp3"))
             put(MediaStore.Audio.Media.MIME_TYPE, MIME_TYPE_MP3)
-            put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/$PUBLIC_FOLDER_NAME")
+            put(MediaStore.Audio.Media.RELATIVE_PATH, relativePath)
             put(MediaStore.Audio.Media.IS_MUSIC, 1)
             put(MediaStore.Audio.Media.IS_PENDING, 1)
         }
@@ -437,11 +485,15 @@ class CallRecorder(private val context: Context) {
     }
 
     @Suppress("DEPRECATION")
-    private fun exportToLegacyMusicFolder(tempFile: File, fileName: String): String? {
+    private fun exportToLegacyMusicFolder(
+        tempFile: File,
+        fileName: String,
+        source: CallRecordingSource
+    ): String? {
         return try {
             val musicDir = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-                PUBLIC_FOLDER_NAME
+                "${CallRecordingSource.ROOT_FOLDER_NAME}/${source.folderName}"
             )
             if (!musicDir.exists()) {
                 musicDir.mkdirs()
@@ -471,14 +523,15 @@ class CallRecorder(private val context: Context) {
         runCatching { currentTempFile?.delete() }
         currentTempFile = null
         currentTargetFolderUri = null
+        currentCreateSubfolderForSaf = true
         currentFileName = null
+        currentSource = CallRecordingSource.CELLULAR
         isRecordingActive = false
     }
 
     companion object {
         private const val TAG = "CallRecorder"
         private const val MIME_TYPE_MP3 = "audio/mpeg"
-        private const val PUBLIC_FOLDER_NAME = "PulseDial"
         private const val SILENCE_CHECK_INTERVAL_MS = 250L
         private const val SILENCE_CHECK_SAMPLES = 6
 
@@ -487,5 +540,37 @@ class CallRecorder(private val context: Context) {
             MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             MediaRecorder.AudioSource.MIC
         )
+
+        fun resolveSafTargetDirectory(
+            rootDir: DocumentFile,
+            source: CallRecordingSource,
+            createSubfolder: Boolean
+        ): DocumentFile {
+            if (!createSubfolder) {
+                return rootDir
+            }
+            val subFolderName = source.folderName
+            return rootDir.findFile(subFolderName)?.takeIf { it.isDirectory }
+                ?: rootDir.createDirectory(subFolderName)
+                ?: rootDir
+        }
+
+        fun buildFileName(
+            labelOrNumber: String,
+            source: CallRecordingSource,
+            timestamp: String
+        ): String {
+            val sanitized = labelOrNumber
+                .replace(Regex("[^+0-9a-zA-Z_-]"), "_")
+                .replace(Regex("_+"), "_")
+                .trim('_')
+                .take(24)
+                .ifEmpty { "Unknown" }
+            return if (source.filePrefix.isBlank()) {
+                "${sanitized}_$timestamp.mp3"
+            } else {
+                "${source.filePrefix}_${sanitized}_$timestamp.mp3"
+            }
+        }
     }
 }

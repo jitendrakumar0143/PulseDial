@@ -533,6 +533,235 @@
                 android:orientation="vertical"
                 android:paddingBottom="28dp">
 
+                <!-- MANAGE CUSTOM POPUP ADS (Real-Time /custom_popup_ad Controller) -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/card_admin_custom_popup_ad"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    app:cardBackgroundColor="@color/md_theme_surface"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/md_theme_primary"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/admin_popup_ad_section"
+                            android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                            android:textColor="@color/md_theme_onSurface"
+                            android:textStyle="bold" />
+
+                        <!-- Live Analytics Counter Badges -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.card.MaterialCardView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                app:cardBackgroundColor="@color/md_theme_primaryContainer"
+                                app:cardCornerRadius="12dp"
+                                app:cardElevation="0dp"
+                                app:strokeWidth="0dp">
+
+                                <TextView
+                                    android:id="@+id/tv_popup_ad_impressions_badge"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:gravity="center"
+                                    android:paddingHorizontal="10dp"
+                                    android:paddingVertical="10dp"
+                                    android:text="@string/admin_popup_ad_views_count"
+                                    android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                                    android:textColor="@color/md_theme_onPrimaryContainer"
+                                    android:textStyle="bold" />
+                            </com.google.android.material.card.MaterialCardView>
+
+                            <Space
+                                android:layout_width="10dp"
+                                android:layout_height="1dp" />
+
+                            <com.google.android.material.card.MaterialCardView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                app:cardBackgroundColor="@color/md_theme_secondaryContainer"
+                                app:cardCornerRadius="12dp"
+                                app:cardElevation="0dp"
+                                app:strokeWidth="0dp">
+
+                                <TextView
+                                    android:id="@+id/tv_popup_ad_clicks_badge"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:gravity="center"
+                                    android:paddingHorizontal="10dp"
+                                    android:paddingVertical="10dp"
+                                    android:text="@string/admin_popup_ad_clicks_count"
+                                    android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                                    android:textColor="@color/md_theme_onSecondaryContainer"
+                                    android:textStyle="bold" />
+                            </com.google.android.material.card.MaterialCardView>
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_popup_ad_enable"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:minHeight="48dp"
+                            android:text="@string/admin_popup_ad_enable" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_popup_ad_show_premium"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:checked="true"
+                            android:minHeight="48dp"
+                            android:text="@string/admin_popup_ad_show_premium" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/admin_popup_ad_trigger_label"
+                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                            android:textColor="@color/md_theme_onSurface" />
+
+                        <RadioGroup
+                            android:id="@+id/rg_popup_ad_trigger_mode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:orientation="vertical">
+
+                            <com.google.android.material.radiobutton.MaterialRadioButton
+                                android:id="@+id/rb_popup_ad_trigger_app_open"
+                                android:layout_width="match_parent"
+                                android:layout_height="48dp"
+                                android:text="@string/admin_popup_ad_trigger_app_open" />
+
+                            <com.google.android.material.radiobutton.MaterialRadioButton
+                                android:id="@+id/rb_popup_ad_trigger_after_call"
+                                android:layout_width="match_parent"
+                                android:layout_height="48dp"
+                                android:text="@string/admin_popup_ad_trigger_after_call" />
+
+                            <com.google.android.material.radiobutton.MaterialRadioButton
+                                android:id="@+id/rb_popup_ad_trigger_both"
+                                android:layout_width="match_parent"
+                                android:layout_height="48dp"
+                                android:checked="true"
+                                android:text="@string/admin_popup_ad_trigger_both" />
+                        </RadioGroup>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_popup_ad_image_url"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_popup_ad_image_hint"
+                                android:inputType="textUri" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_popup_ad_title"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_popup_ad_title_hint"
+                                android:inputType="textCapSentences" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_popup_ad_message"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_popup_ad_message_hint"
+                                android:inputType="textCapSentences|textMultiLine" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_popup_ad_button_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_popup_ad_button_text_hint"
+                                android:inputType="textCapWords" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_popup_ad_target_url"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_popup_ad_target_url_hint"
+                                android:inputType="textUri" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_popup_ad_countdown"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_popup_ad_countdown_hint"
+                                android:inputType="number"
+                                android:text="5" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_publish_custom_popup_ad"
+                            style="@style/Widget.Material3.Button"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:layout_marginTop="14dp"
+                            android:text="@string/admin_popup_ad_publish_btn"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

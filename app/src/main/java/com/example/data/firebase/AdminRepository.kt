@@ -690,6 +690,9 @@ class AdminRepository(
         )
         return try {
             RealtimeDatabaseSync.setNavigationTabs(normalized, adminUid)
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -764,6 +767,9 @@ class AdminRepository(
         )
         return try {
             RealtimeDatabaseSync.setDynamicSettings(normalized, adminUid)
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -832,6 +838,9 @@ class AdminRepository(
         )
         return try {
             RealtimeDatabaseSync.setLiveBroadcast(broadcast, adminUid)
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
             docRef.set(payload).awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {

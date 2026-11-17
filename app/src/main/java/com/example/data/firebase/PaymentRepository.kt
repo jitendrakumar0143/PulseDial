@@ -260,6 +260,27 @@ class PaymentRepository(
         val cleanNote = reviewNote.trim().take(240)
 
         return try {
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                val nowMs = System.currentTimeMillis()
+                val nextExpiresAtMs = nowMs + DialerPreferences.ONE_MONTH_MILLIS
+                RealtimeDatabaseSync.updatePaymentRequestStatus(
+                    requestId = request.id,
+                    status = PaymentRequest.STATUS_APPROVED,
+                    reviewedByUid = adminUid,
+                    reviewNote = cleanNote
+                )
+                RealtimeDatabaseSync.pushUserFields(
+                    request.userId,
+                    mapOf(
+                        "isPremium" to true,
+                        "isPremiumUser" to true,
+                        "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                        "subscriptionExpiresAtMs" to nextExpiresAtMs,
+                        "updatedAtMs" to nowMs
+                    )
+                )
+                return Result.success(Unit)
+            }
             val userSnap = userRef.snapshots().first()
             val deviceSnap = deviceRef.snapshots().first()
 
@@ -352,9 +373,6 @@ class PaymentRepository(
         val cleanNote = reviewNote.trim().take(240)
 
         return try {
-            val userSnap = userRef.snapshots().first()
-            val deviceSnap = deviceRef.snapshots().first()
-
             RealtimeDatabaseSync.updatePaymentRequestStatus(
                 requestId = request.id,
                 status = PaymentRequest.STATUS_REJECTED,
@@ -371,6 +389,11 @@ class PaymentRepository(
                     "updatedAtMs" to System.currentTimeMillis()
                 )
             )
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
+            val userSnap = userRef.snapshots().first()
+            val deviceSnap = deviceRef.snapshots().first()
 
             val batch = db.batch()
             batch.update(

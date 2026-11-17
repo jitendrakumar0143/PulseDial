@@ -52,6 +52,10 @@
         </intent>
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
+        <package android:name="com.google.android.apps.meetings" />
+        <package android:name="com.google.android.apps.tachyon" />
+        <package android:name="org.telegram.messenger" />
+        <package android:name="org.telegram.messenger.web" />
     </queries>
 
     <application

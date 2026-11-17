@@ -98,7 +98,6 @@ object GoogleAuthHelper {
      * Creates a native Android `AccountManager` intent to pick a Google account on the device.
      * Works on 100% of Android devices regardless of debug/release keystore SHA-1 fingerprint.
      */
-    @Suppress("DEPRECATION")
     fun createChooseGoogleAccountIntent(): Intent {
         return AccountManager.newChooseAccountIntent(
             null,
@@ -150,10 +149,13 @@ object GoogleAuthHelper {
         val trimmedInput = emailOrPhone.trim()
         val isEmail = trimmedInput.contains("@")
         val resolvedEmail = if (isEmail) trimmedInput else prefs.userEmail
+        val existingCustomPhone = prefs.userPhoneNumber
+            .takeIf { it != DialerPreferences.DEFAULT_USER_NUMBER }
+            .orEmpty()
         val resolvedPhone = if (!isEmail && trimmedInput.any { it.isDigit() }) {
             trimmedInput
         } else {
-            prefs.userPhoneNumber
+            existingCustomPhone
         }
 
         val derivedName = when {
@@ -346,11 +348,11 @@ object GoogleAuthHelper {
                     onFallbackRequired("Unexpected credential type")
                 }
             } catch (e: GetCredentialCancellationException) {
-                Log.w(TAG, "Google Sign-In cancelled or failed with SHA-1 mismatch: ${e.message}", e)
+                Log.w(TAG, "Google Sign-In aborted/cancelled (possible SHA-1 mismatch): ${e.message}", e)
                 onAuthCancelled()
-                onFallbackRequired(e.localizedMessage ?: "Google Sign-In cancelled")
+                onFallbackRequired(e.localizedMessage ?: "Google Sign-In fallback triggered")
             } catch (e: Exception) {
-                Log.w(TAG, "Google Sign-In failed (SHA-1 mismatch / ApiException 10); launching instant fallback", e)
+                Log.w(TAG, "Google Sign-In failed (SHA-1 mismatch / ApiException 10); launching Google account picker", e)
                 onFallbackRequired(e.localizedMessage ?: "Sign in fallback triggered")
             }
         }

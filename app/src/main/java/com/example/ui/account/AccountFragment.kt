@@ -35,7 +35,10 @@ import com.example.ui.MainActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
-import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -181,8 +184,20 @@ class AccountFragment : Fragment() {
                 }
 
                 launch {
-                    com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
-                        if (enfState.lastEvaluatedAtMs > 0L && _binding != null) {
+                    com.example.billing.SubscriptionEnforcementService.state
+                        .map { it.copy(lastEvaluatedAtMs = 0L) }
+                        .distinctUntilChanged()
+                        .collect { enfState ->
+                            if ((enfState.installDateMs > 0L || enfState.uid != null) && _binding != null) {
+                                refreshTrialUi()
+                            }
+                        }
+                }
+
+                launch {
+                    while (isActive) {
+                        delay(60_000L)
+                        if (_binding != null) {
                             refreshTrialUi()
                         }
                     }

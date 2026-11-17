@@ -3,6 +3,7 @@ package com.example.billing
 import android.content.Context
 import android.util.Log
 import com.example.data.DialerPreferences
+import com.example.data.firebase.GoogleAuthHelper
 import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.UserEntitlement
 import com.example.telecom.CallManager
@@ -106,6 +107,9 @@ object SubscriptionEnforcementService {
     @Volatile
     private var liveBonusTrialDays: Int = 0
 
+    @Volatile
+    private var hasLiveNodeState: Boolean = false
+
     /**
      * Initializes the service layer and binds to Firebase Auth state changes.
      */
@@ -125,17 +129,22 @@ object SubscriptionEnforcementService {
             .getOrDefault(false)
         if (!firebaseAvailable) return
 
-        val auth = runCatching { Firebase.auth }.getOrNull() ?: return
+        val auth = runCatching { Firebase.auth }.getOrNull()
         isInitialized = true
-        auth.addAuthStateListener { firebaseAuth ->
+        auth?.addAuthStateListener { firebaseAuth ->
             val uid = firebaseAuth.currentUser?.uid
+                ?: GoogleAuthHelper.resolveActiveUid(cleanContext)
             if (uid != null) {
-                startMonitoringUser(uid)
+                startMonitoringUser(uid, cleanContext)
             } else {
                 stopMonitoring()
             }
         }
-        auth.currentUser?.uid?.let { startMonitoringUser(it) }
+        val initialUid = runCatching { auth?.currentUser?.uid }.getOrNull()
+            ?: GoogleAuthHelper.resolveActiveUid(cleanContext)
+        if (initialUid != null) {
+            startMonitoringUser(initialUid, cleanContext)
+        }
     }
 
     /**
@@ -243,11 +252,28 @@ object SubscriptionEnforcementService {
         val ctx = context?.applicationContext ?: appContext
         val prefs = ctx?.let { DialerPreferences(it) }
 
-        if (!subscriptionStatus.isNullOrBlank()) {
-            liveSubscriptionStatus = subscriptionStatus.trim()
+        val cleanIncomingStatus = subscriptionStatus?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        if (cleanIncomingStatus != null) {
+            liveSubscriptionStatus = cleanIncomingStatus
+            if (isPremium == null) {
+                when (cleanIncomingStatus) {
+                    UserEntitlement.STATUS_ACTIVE -> liveIsPremium = true
+                    UserEntitlement.STATUS_TRIAL,
+                    UserEntitlement.STATUS_EXPIRED,
+                    UserEntitlement.STATUS_REJECTED,
+                    UserEntitlement.STATUS_BLOCKED -> liveIsPremium = false
+                }
+            }
         }
         if (isPremium != null) {
             liveIsPremium = isPremium
+            if (cleanIncomingStatus == null) {
+                if (isPremium && liveSubscriptionStatus != UserEntitlement.STATUS_BLOCKED) {
+                    liveSubscriptionStatus = UserEntitlement.STATUS_ACTIVE
+                } else if (!isPremium && liveSubscriptionStatus == UserEntitlement.STATUS_ACTIVE) {
+                    liveSubscriptionStatus = UserEntitlement.STATUS_TRIAL
+                }
+            }
         }
         if (isBlocked != null) {
             liveIsBlocked = isBlocked
@@ -263,6 +289,7 @@ object SubscriptionEnforcementService {
         if (bonusTrialDays != null) {
             liveBonusTrialDays = bonusTrialDays.coerceAtLeast(0)
         }
+        hasLiveNodeState = true
 
         if (prefs != null) {
             val effectiveBlocked = liveIsBlocked || liveSubscriptionStatus == UserEntitlement.STATUS_BLOCKED
@@ -296,7 +323,12 @@ object SubscriptionEnforcementService {
             allowCallRecordingConfig = true,
             nowMs = nowMs
         )
-        _state.value = evaluated
+        val previous = _state.value
+        val materiallyChanged = previous.lastEvaluatedAtMs == 0L ||
+            previous.copy(lastEvaluatedAtMs = evaluated.lastEvaluatedAtMs) != evaluated
+        if (materiallyChanged) {
+            _state.value = evaluated
+        }
         return evaluated
     }
 
@@ -387,11 +419,21 @@ object SubscriptionEnforcementService {
     ): SubscriptionEnforcementState {
         val previous = _state.value
         val installMs = if (liveInstallDateMs > 0L) liveInstallDateMs else prefs.firstLaunchTime
+        val effectivePremiumSignal = if (hasLiveNodeState) {
+            liveIsPremium
+        } else {
+            liveIsPremium || prefs.isPremiumActive(nowMs)
+        }
+        val effectiveBlockedSignal = if (hasLiveNodeState) {
+            liveIsBlocked
+        } else {
+            liveIsBlocked || prefs.adminBlockedUser
+        }
         val evaluated = evaluateNodeState(
             uid = activeUid,
             subscriptionStatus = liveSubscriptionStatus,
-            isPremium = liveIsPremium || prefs.isPremiumActive(nowMs),
-            isBlocked = liveIsBlocked || prefs.adminBlockedUser,
+            isPremium = effectivePremiumSignal,
+            isBlocked = effectiveBlockedSignal,
             installDateMs = installMs,
             subscriptionExpiresAtMs = if (liveExpiresAtMs > 0L) liveExpiresAtMs else prefs.subscriptionExpiresAtMs,
             bonusTrialDays = liveBonusTrialDays.coerceAtLeast(prefs.adminBonusTrialDays),
@@ -400,7 +442,11 @@ object SubscriptionEnforcementService {
             nowMs = nowMs
         )
 
-        _state.value = evaluated
+        val materiallyChanged = previous.lastEvaluatedAtMs == 0L ||
+            previous.copy(lastEvaluatedAtMs = evaluated.lastEvaluatedAtMs) != evaluated
+        if (materiallyChanged) {
+            _state.value = evaluated
+        }
 
         // Immediately stop any active call recording if recording is no longer allowed
         if (!evaluated.isRecordingAllowed) {
@@ -413,7 +459,7 @@ object SubscriptionEnforcementService {
         }
 
         // Emit transition events for UI reaction
-        if (previous.lastEvaluatedAtMs > 0L) {
+        if (materiallyChanged && previous.lastEvaluatedAtMs > 0L) {
             if (!previous.isBlocked && evaluated.isBlocked) {
                 _restrictionEvents.tryEmit(SubscriptionRestrictionEvent.AccountBlockedByAdmin)
             } else if (!previous.isPremium && evaluated.isPremium) {
@@ -484,6 +530,7 @@ object SubscriptionEnforcementService {
         liveIsBlocked = false
         liveExpiresAtMs = 0L
         liveBonusTrialDays = 0
+        hasLiveNodeState = false
         _state.value = SubscriptionEnforcementState()
     }
 }

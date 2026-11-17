@@ -22,19 +22,47 @@ class CallRecordingAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         _isRunning.value = true
+        VoipCallRecorderManager.init(applicationContext)
         Log.i(TAG, "CallRecordingAccessibilityService connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString().orEmpty()
         if ((pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") && consumeValidWhatsappAutoSendWindow()) {
-            val root = rootInActiveWindow ?: return
-            val sendNodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/send")
+            val root = runCatching { rootInActiveWindow }.getOrNull()
+            val sendNodes = root?.findAccessibilityNodeInfosByViewId("$pkg:id/send")
             val sendButton = sendNodes?.firstOrNull { it.isClickable && it.isEnabled }
             if (sendButton != null) {
                 sendButton.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
                 clearPendingWhatsappAutoSend()
             }
+        }
+
+        val voipSource = CallRecordingSource.fromPackageName(pkg) ?: return
+        val eventType = event?.eventType ?: return
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
+        ) {
+            val combinedText = buildString {
+                event.contentDescription?.let { append(it).append(' ') }
+                event.text?.forEach { append(it).append(' ') }
+                event.className?.let { append(it) }
+            }
+            val lower = combinedText.lowercase()
+            val isCallHint = eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED ||
+                lower.contains("call") ||
+                lower.contains("ringing") ||
+                lower.contains("calling") ||
+                lower.contains("ongoing") ||
+                lower.contains("meet") ||
+                lower.contains("voip") ||
+                lower.contains("video")
+            VoipCallRecorderManager.onVoipAppEvent(
+                context = applicationContext,
+                source = voipSource,
+                isCallHint = isCallHint,
+                labelHint = voipSource.filePrefix
+            )
         }
     }
 
@@ -44,11 +72,13 @@ class CallRecordingAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         _isRunning.value = false
+        VoipCallRecorderManager.stopRecordingIfNeeded()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         _isRunning.value = false
+        VoipCallRecorderManager.stopRecordingIfNeeded()
         super.onDestroy()
     }
 

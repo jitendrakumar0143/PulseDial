@@ -62,6 +62,14 @@ data class UserEntitlement(
     val followUpTrigger: String = TRIGGER_ALL_CALLS,
     val completedCallTemplate: String = DEFAULT_COMPLETED_CALL_TEMPLATE,
     val missedCallTemplate: String = DEFAULT_MISSED_CALL_TEMPLATE,
+    @get:PropertyName("recordWhatsappCalls")
+    val recordWhatsappCalls: Boolean = true,
+    @get:PropertyName("recordWhatsappBusinessCalls")
+    val recordWhatsappBusinessCalls: Boolean = true,
+    @get:PropertyName("recordMeetCalls")
+    val recordMeetCalls: Boolean = true,
+    @get:PropertyName("recordTelegramCalls")
+    val recordTelegramCalls: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {

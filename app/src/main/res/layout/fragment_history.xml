@@ -5,13 +5,14 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- Segmented Mode Toggle: Recent Calls vs Recordings Playlist -->
+    <!-- Segmented Mode Toggle hidden so recordings are only browsed in File Manager folders -->
     <com.google.android.material.button.MaterialButtonToggleGroup
         android:id="@+id/toggle_history_mode"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="16dp"
         android:layout_marginTop="10dp"
+        android:visibility="gone"
         app:checkedButton="@id/btn_mode_calls"
         app:selectionRequired="true"
         app:singleSelection="true">
@@ -244,14 +245,14 @@
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
-    <!-- Recent Calls Action Bar (Count + Delete All History) -->
+    <!-- Recent Calls Action Bar (Count + Export CSV Backup + Delete All History) -->
     <LinearLayout
         android:id="@+id/layout_recent_calls_actions"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="20dp"
+        android:paddingHorizontal="16dp"
         android:paddingTop="6dp"
         android:visibility="gone">
 
@@ -260,16 +261,33 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
             android:text="@string/history_calls_count_header"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
             android:textColor="@color/md_theme_primary"
             android:textStyle="bold" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_export_history_csv"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:contentDescription="@string/history_export_csv_cd"
+            android:minHeight="48dp"
+            android:paddingHorizontal="12dp"
+            android:text="@string/history_export_csv_button"
+            app:cornerRadius="14dp"
+            app:icon="@drawable/ic_export_csv" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_delete_all_calls"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
-            android:layout_height="48dp"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:paddingHorizontal="10dp"
             android:text="@string/history_delete_all_button"
             android:textColor="@color/md_theme_error"
             app:icon="@drawable/ic_delete"

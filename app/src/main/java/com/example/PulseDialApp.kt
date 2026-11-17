@@ -20,6 +20,7 @@ class PulseDialApp : Application() {
         com.example.data.firebase.RealtimeDatabaseSync.init(this)
         com.example.billing.SubscriptionEnforcementService.init(this)
         com.example.data.firebase.RealtimeSyncManager.init(this)
+        com.example.recording.VoipCallRecorderManager.init(this)
     }
 
     private fun createNotificationChannels() {

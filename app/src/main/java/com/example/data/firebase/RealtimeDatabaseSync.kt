@@ -38,11 +38,13 @@ object RealtimeDatabaseSync {
     const val STORAGE_BUCKET = "gen-lang-client-0353534085.firebasestorage.app"
 
     const val NODE_USERS = "users"
+    const val NODE_DEVICE_TRIALS = "device_trials"
     const val NODE_APP_CONFIG = "app_config"
     const val NODE_PAYMENT_REQUESTS = "payment_requests"
     const val NODE_NAVIGATION_TABS = "navigation_tabs"
     const val NODE_SETTINGS_ITEMS = "settings_items"
     const val NODE_LIVE_BROADCAST = "live_broadcast"
+    const val NODE_CUSTOM_POPUP_AD = "custom_popup_ad"
 
     private val persistenceConfigured = AtomicBoolean(false)
 
@@ -67,6 +69,7 @@ object RealtimeDatabaseSync {
                         instance.getReference(NODE_USERS).keepSynced(true)
                         instance.getReference(NODE_APP_CONFIG).keepSynced(true)
                         instance.getReference(NODE_PAYMENT_REQUESTS).keepSynced(true)
+                        instance.getReference(NODE_CUSTOM_POPUP_AD).keepSynced(true)
                     }
                     databaseInstance = instance
                 }
@@ -180,12 +183,49 @@ object RealtimeDatabaseSync {
         currentFallback: () -> UserEntitlement?,
         onUpdate: (UserEntitlement) -> Unit
     ): (() -> Unit)? {
+        return attachUserListenerWithRawMap(context, uid, currentFallback) { parsed, _ ->
+            onUpdate(parsed)
+        }
+    }
+
+    fun attachUserListenerWithRawMap(
+        context: Context,
+        uid: String,
+        currentFallback: () -> UserEntitlement?,
+        onUpdate: (UserEntitlement, Map<*, *>) -> Unit
+    ): (() -> Unit)? {
         if (uid.isBlank()) return null
         return onValue("$NODE_USERS/$uid", context) { snapshot ->
             if (!snapshot.exists()) return@onValue
             val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
             val parsed = parseUserSnapshot(uid, rawMap, currentFallback())
-            onUpdate(parsed)
+            onUpdate(parsed, rawMap)
+        }
+    }
+
+    /**
+     * Listens to Firebase RTDB's built-in `.info/serverTimeOffset` so offline/RTDB-only sessions
+     * always track accurate server clock offset without relying on stale `user.updatedAt`.
+     */
+    fun attachServerTimeOffsetListener(
+        context: Context,
+        onOffsetChanged: (Long) -> Unit
+    ): (() -> Unit)? {
+        val db = init(context) ?: return null
+        val ref = db.getReference(".info/serverTimeOffset")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val offset = asLong(snapshot.value) ?: return
+                onOffsetChanged(offset)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.d(TAG, "RTDB .info/serverTimeOffset cancelled: ${error.message}")
+            }
+        }
+        ref.addValueEventListener(listener)
+        return {
+            runCatching { ref.removeEventListener(listener) }
         }
     }
 
@@ -221,21 +261,12 @@ object RealtimeDatabaseSync {
 
         onValue("$NODE_USERS/$uid/isPremium", context) { snapshot ->
             if (!snapshot.exists()) return@onValue
-            val premium = when (val raw = snapshot.value) {
-                is Boolean -> raw
-                is String -> raw.equals("true", ignoreCase = true)
-                is Number -> raw.toInt() != 0
-                else -> null
-            }
-            if (premium != null) {
-                onIsPremiumChanged(premium)
-            }
+            asBool(snapshot.value)?.let(onIsPremiumChanged)
         }?.let { cleanups.add(it) }
 
         onValue("$NODE_USERS/$uid/installDate", context) { snapshot ->
             if (!snapshot.exists()) return@onValue
-            val installMs = (snapshot.value as? Number)?.toLong()
-                ?: (snapshot.value as? String)?.toLongOrNull()
+            val installMs = asLong(snapshot.value)
             if (installMs != null && installMs > 0L) {
                 onInstallDateChanged(installMs)
             }
@@ -243,15 +274,7 @@ object RealtimeDatabaseSync {
 
         onValue("$NODE_USERS/$uid/isBlocked", context) { snapshot ->
             if (!snapshot.exists()) return@onValue
-            val blocked = when (val raw = snapshot.value) {
-                is Boolean -> raw
-                is String -> raw.equals("true", ignoreCase = true)
-                is Number -> raw.toInt() != 0
-                else -> null
-            }
-            if (blocked != null) {
-                onIsBlockedChanged(blocked)
-            }
+            asBool(snapshot.value)?.let(onIsBlockedChanged)
         }?.let { cleanups.add(it) }
 
         onValue("$NODE_USERS/$uid/subscriptionExpiresAtMs", context) { snapshot ->
@@ -259,9 +282,7 @@ object RealtimeDatabaseSync {
                 onExpiresAtChanged(null)
                 return@onValue
             }
-            val expMs = (snapshot.value as? Number)?.toLong()
-                ?: (snapshot.value as? String)?.toLongOrNull()
-            onExpiresAtChanged(expMs)
+            onExpiresAtChanged(asLong(snapshot.value))
         }?.let { cleanups.add(it) }
 
         if (cleanups.isEmpty()) return null
@@ -425,6 +446,57 @@ object RealtimeDatabaseSync {
     }
 
     /**
+     * Attaches a persistent `addValueEventListener` (`onValue`) to `/custom_popup_ad`
+     * for sub-1-second real-time Custom Popup Ad updates across Admin & User devices.
+     */
+    fun attachCustomPopupAdListener(
+        context: Context,
+        onUpdate: (CustomPopupAd) -> Unit
+    ): (() -> Unit)? {
+        return onValue(NODE_CUSTOM_POPUP_AD, context) { snapshot ->
+            if (!snapshot.exists()) {
+                onUpdate(CustomPopupAd())
+                return@onValue
+            }
+            val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
+            onUpdate(parseCustomPopupAdSnapshot(rawMap))
+        }
+    }
+
+    /**
+     * Publishes or updates editable `/custom_popup_ad` fields via `updateChildren`
+     * while preserving concurrent `ServerValue.increment(1)` analytics counters.
+     */
+    fun publishCustomPopupAd(
+        ad: CustomPopupAd,
+        context: Context? = null
+    ): Boolean {
+        return update(NODE_CUSTOM_POPUP_AD, toRtdbCustomPopupAdPublishMap(ad), context)
+    }
+
+    /**
+     * Atomically increments `/custom_popup_ad/impressionsCount` using `ServerValue.increment(1)`.
+     */
+    fun incrementCustomPopupAdImpression(context: Context? = null): Boolean {
+        return update(
+            NODE_CUSTOM_POPUP_AD,
+            mapOf("impressionsCount" to ServerValue.increment(1L)),
+            context
+        )
+    }
+
+    /**
+     * Atomically increments `/custom_popup_ad/clicksCount` using `ServerValue.increment(1)`.
+     */
+    fun incrementCustomPopupAdClick(context: Context? = null): Boolean {
+        return update(
+            NODE_CUSTOM_POPUP_AD,
+            mapOf("clicksCount" to ServerValue.increment(1L)),
+            context
+        )
+    }
+
+    /**
      * Builds the Realtime Database registration map for `/users/{userId}` on login.
      * Uses `ServerValue.TIMESTAMP` for `installDate` on first registration on this device
      * to enforce "7-Day Free Trial • One Per Device".
@@ -460,9 +532,9 @@ object RealtimeDatabaseSync {
     }
 
     /**
-     * Immediately creates or updates `/users/{userId}` in Firebase Realtime Database
-     * (`https://gen-lang-client-0353534085-default-rtdb.firebaseio.com`) when a user logs in
-     * (either via Google Sign-In or SHA-1 Fallback Login).
+     * Safely creates or updates `/users/{userId}` and `/device_trials/{deviceHash}` in Firebase
+     * Realtime Database without ever resetting an existing user's `installDate`, `isPremium`,
+     * `subscriptionStatus`, or `isBlocked` on reinstall or re-login.
      */
     fun registerOrUpdateUserOnLogin(
         context: Context,
@@ -475,18 +547,119 @@ object RealtimeDatabaseSync {
         isFirstRegistrationOnDevice: Boolean
     ): Map<String, Any?> {
         val cleanUid = userId.trim()
+        val cleanEmail = email.trim()
+        val cleanPhone = phone.trim()
+        val cleanName = displayName.trim().ifBlank { "PulseDial User" }
+        val cleanDeviceId = deviceId.trim()
+        val cleanDeviceHash = deviceHash.trim()
+
         val payload = buildInitialUserRegistrationPayload(
             userId = cleanUid,
-            email = email.trim(),
-            phone = phone.trim(),
-            displayName = displayName.trim().ifBlank { "PulseDial User" },
-            deviceId = deviceId.trim(),
-            deviceHash = deviceHash.trim(),
+            email = cleanEmail,
+            phone = cleanPhone,
+            displayName = cleanName,
+            deviceId = cleanDeviceId,
+            deviceHash = cleanDeviceHash,
             isFirstRegistrationOnDevice = isFirstRegistrationOnDevice
         )
-        if (cleanUid.isNotEmpty()) {
-            update("$NODE_USERS/$cleanUid", payload, context)
+        if (cleanUid.isEmpty()) return payload
+
+        val identityUpdate = mutableMapOf<String, Any?>(
+            "uid" to cleanUid,
+            "userId" to cleanUid,
+            "displayName" to cleanName,
+            "deviceId" to cleanDeviceId,
+            "deviceHash" to cleanDeviceHash,
+            "updatedAtMs" to ServerValue.TIMESTAMP
+        ).apply {
+            if (cleanEmail.isNotEmpty()) {
+                put("email", cleanEmail)
+            }
+            if (cleanPhone.isNotEmpty()) {
+                put("phone", cleanPhone)
+                put("phoneNumber", cleanPhone)
+            }
         }
+
+        val root = rootRef(context) ?: return payload
+        val userRef = root.child(NODE_USERS).child(cleanUid)
+        val deviceRef = if (cleanDeviceHash.isNotEmpty()) {
+            root.child(NODE_DEVICE_TRIALS).child(cleanDeviceHash)
+        } else {
+            null
+        }
+
+        val syncUserNode: (Long?) -> Unit = { deviceTrialStartMs ->
+            runCatching {
+                userRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        val updateMap = identityUpdate.toMutableMap()
+                        if (!snapshot.exists() || !snapshot.hasChild("installDate")) {
+                            updateMap["installDate"] = deviceTrialStartMs ?: ServerValue.TIMESTAMP
+                        }
+                        if (!snapshot.exists() || !snapshot.hasChild("subscriptionStatus")) {
+                            updateMap["subscriptionStatus"] = UserEntitlement.STATUS_TRIAL
+                        }
+                        if (!snapshot.exists() || !snapshot.hasChild("isPremium")) {
+                            updateMap["isPremium"] = false
+                            updateMap["isPremiumUser"] = false
+                        }
+                        if (!snapshot.exists() || !snapshot.hasChild("isBlocked")) {
+                            updateMap["isBlocked"] = false
+                        }
+                        userRef.updateChildren(updateMap)
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        userRef.updateChildren(identityUpdate)
+                    }
+                })
+            }.onFailure {
+                update("$NODE_USERS/$cleanUid", identityUpdate, context)
+            }
+        }
+
+        if (deviceRef != null) {
+            runCatching {
+                deviceRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        val existingStartMs = asLong(snapshot.child("trialStartedAtMs").value)
+                            ?.takeIf { it > 0L }
+                        val ownerUid = (snapshot.child("ownerUid").value as? String).orEmpty()
+                        val lastUid = (snapshot.child("lastUserId").value as? String).orEmpty()
+                        val prevSwitches = asLong(snapshot.child("accountSwitchCount").value) ?: 0L
+
+                        val deviceUpdate = mutableMapOf<String, Any?>(
+                            "deviceHash" to cleanDeviceHash,
+                            "lastUserId" to cleanUid,
+                            "lastVerifiedAtMs" to ServerValue.TIMESTAMP,
+                            "updatedAtMs" to ServerValue.TIMESTAMP
+                        )
+                        if (!snapshot.exists() || existingStartMs == null) {
+                            deviceUpdate["trialStartedAtMs"] = ServerValue.TIMESTAMP
+                        }
+                        if (!snapshot.exists() || ownerUid.isBlank()) {
+                            deviceUpdate["ownerUid"] = cleanUid
+                            deviceUpdate["accountSwitchCount"] = 0L
+                            deviceUpdate["isPremiumDevice"] = false
+                        } else if (ownerUid != cleanUid && lastUid != cleanUid) {
+                            deviceUpdate["accountSwitchCount"] = prevSwitches + 1L
+                        }
+                        deviceRef.updateChildren(deviceUpdate)
+                        syncUserNode(existingStartMs)
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        syncUserNode(null)
+                    }
+                })
+            }.onFailure {
+                syncUserNode(null)
+            }
+        } else {
+            syncUserNode(null)
+        }
+
         return payload
     }
 
@@ -634,6 +807,8 @@ object RealtimeDatabaseSync {
             "autoCallRecording" to entitlement.autoCallRecording,
             "themeMode" to entitlement.themeMode,
             "dialpadTonesEnabled" to entitlement.dialpadTonesEnabled,
+            "blockedNumbers" to entitlement.blockedNumbers.take(500),
+            "quickDeclineResponses" to entitlement.quickDeclineResponses.take(50),
             "bonusTrialDays" to entitlement.bonusTrialDays,
             "subscriptionExpiresAtMs" to expiresMs,
             "adminNote" to entitlement.adminNote,
@@ -646,6 +821,10 @@ object RealtimeDatabaseSync {
             "followUpTrigger" to entitlement.followUpTrigger,
             "completedCallTemplate" to entitlement.completedCallTemplate,
             "missedCallTemplate" to entitlement.missedCallTemplate,
+            "recordWhatsappCalls" to entitlement.recordWhatsappCalls,
+            "recordWhatsappBusinessCalls" to entitlement.recordWhatsappBusinessCalls,
+            "recordMeetCalls" to entitlement.recordMeetCalls,
+            "recordTelegramCalls" to entitlement.recordTelegramCalls,
             "updatedAtMs" to (entitlement.updatedAt?.toDate()?.time ?: nowMs)
         )
     }
@@ -663,28 +842,28 @@ object RealtimeDatabaseSync {
             ?.ifBlank { map["phoneNumber"] as? String ?: base.phoneNumber }
             ?: (map["phoneNumber"] as? String)
             ?: base.phoneNumber
-        val isPremiumVal = (map["isPremium"] as? Boolean)
-            ?: (map["isPremiumUser"] as? Boolean)
+        val isPremiumVal = asBool(map["isPremium"])
+            ?: asBool(map["isPremiumUser"])
             ?: base.isPremiumUser
-        val autoRecordVal = (map["autoRecordEnabled"] as? Boolean)
-            ?: (map["autoCallRecording"] as? Boolean)
+        val autoRecordVal = asBool(map["autoRecordEnabled"])
+            ?: asBool(map["autoCallRecording"])
             ?: base.autoCallRecording
-        val installDateMs = (map["installDate"] as? Number)?.toLong()
-            ?: (map["trialStartedAtMs"] as? Number)?.toLong()
+        val installDateMs = asLong(map["installDate"])
+            ?: asLong(map["trialStartedAtMs"])
         val trialStartedTs = if (installDateMs != null && installDateMs > 0L) {
             Timestamp(Date(installDateMs))
         } else {
             base.trialStartedAt
         }
-        val expiresMs = (map["subscriptionExpiresAtMs"] as? Number)?.toLong()
-            ?: (map["subscriptionExpiresAt"] as? Number)?.toLong()
+        val expiresMs = asLong(map["subscriptionExpiresAtMs"])
+            ?: asLong(map["subscriptionExpiresAt"])
         val subscriptionExpiresTs = when {
             map.containsKey("subscriptionExpiresAtMs") && map["subscriptionExpiresAtMs"] == null -> null
             expiresMs != null && expiresMs > 0L -> Timestamp(Date(expiresMs))
             else -> base.subscriptionExpiresAt
         }
-        val updatedAtMs = (map["updatedAtMs"] as? Number)?.toLong()
-            ?: (map["updatedAt"] as? Number)?.toLong()
+        val updatedAtMs = asLong(map["updatedAtMs"])
+            ?: asLong(map["updatedAt"])
         val updatedAtTs = if (updatedAtMs != null && updatedAtMs > 0L) {
             Timestamp(Date(updatedAtMs))
         } else {
@@ -707,6 +886,16 @@ object RealtimeDatabaseSync {
             UserEntitlement.TRIGGER_ALL_CALLS -> UserEntitlement.TRIGGER_ALL_CALLS
             else -> base.followUpTrigger
         }
+        val parsedBlockedNumbers = if (map.containsKey("blockedNumbers")) {
+            asStringList(map["blockedNumbers"]).orEmpty()
+        } else {
+            base.blockedNumbers
+        }
+        val parsedQuickDeclines = if (map.containsKey("quickDeclineResponses")) {
+            asStringList(map["quickDeclineResponses"]).orEmpty()
+        } else {
+            base.quickDeclineResponses
+        }
 
         return base.copy(
             id = resolvedUid,
@@ -717,28 +906,59 @@ object RealtimeDatabaseSync {
             phoneNumber = phoneVal,
             trialStartedAt = trialStartedTs,
             isPremiumUser = isPremiumVal,
-            isBlocked = (map["isBlocked"] as? Boolean) ?: base.isBlocked,
-            subscriptionStatus = (map["subscriptionStatus"] as? String) ?: base.subscriptionStatus,
+            isBlocked = asBool(map["isBlocked"]) ?: base.isBlocked,
+            subscriptionStatus = (map["subscriptionStatus"] as? String)?.trim()?.lowercase()?.ifBlank { null }
+                ?: base.subscriptionStatus,
             paymentRefId = (map["paymentRefId"] as? String) ?: base.paymentRefId,
             autoCallRecording = autoRecordVal,
             themeMode = (map["themeMode"] as? String) ?: base.themeMode,
-            dialpadTonesEnabled = (map["dialpadTonesEnabled"] as? Boolean) ?: base.dialpadTonesEnabled,
-            bonusTrialDays = (map["bonusTrialDays"] as? Number)?.toLong() ?: base.bonusTrialDays,
+            dialpadTonesEnabled = asBool(map["dialpadTonesEnabled"]) ?: base.dialpadTonesEnabled,
+            blockedNumbers = parsedBlockedNumbers,
+            quickDeclineResponses = parsedQuickDeclines,
+            bonusTrialDays = asLong(map["bonusTrialDays"]) ?: base.bonusTrialDays,
             subscriptionExpiresAt = subscriptionExpiresTs,
             adminNote = (map["adminNote"] as? String) ?: base.adminNote,
-            hideSubscriptionUI = (map["hideSubscriptionUI"] as? Boolean) ?: base.hideSubscriptionUI,
-            announcerEnabled = (map["announcerEnabled"] as? Boolean) ?: base.announcerEnabled,
-            announcerHeadsetOnly = (map["announcerHeadsetOnly"] as? Boolean) ?: base.announcerHeadsetOnly,
+            hideSubscriptionUI = asBool(map["hideSubscriptionUI"]) ?: base.hideSubscriptionUI,
+            announcerEnabled = asBool(map["announcerEnabled"]) ?: base.announcerEnabled,
+            announcerHeadsetOnly = asBool(map["announcerHeadsetOnly"]) ?: base.announcerHeadsetOnly,
             unknownShieldMode = shieldVal,
-            autoSmsFollowUp = (map["autoSmsFollowUp"] as? Boolean) ?: base.autoSmsFollowUp,
-            autoWhatsappFollowUp = (map["autoWhatsappFollowUp"] as? Boolean) ?: base.autoWhatsappFollowUp,
+            autoSmsFollowUp = asBool(map["autoSmsFollowUp"]) ?: base.autoSmsFollowUp,
+            autoWhatsappFollowUp = asBool(map["autoWhatsappFollowUp"]) ?: base.autoWhatsappFollowUp,
             followUpTrigger = triggerVal,
             completedCallTemplate = (map["completedCallTemplate"] as? String)
                 ?.takeIf { it.isNotBlank() } ?: base.completedCallTemplate,
             missedCallTemplate = (map["missedCallTemplate"] as? String)
                 ?.takeIf { it.isNotBlank() } ?: base.missedCallTemplate,
+            recordWhatsappCalls = asBool(map["recordWhatsappCalls"]) ?: base.recordWhatsappCalls,
+            recordWhatsappBusinessCalls = asBool(map["recordWhatsappBusinessCalls"])
+                ?: base.recordWhatsappBusinessCalls,
+            recordMeetCalls = asBool(map["recordMeetCalls"]) ?: base.recordMeetCalls,
+            recordTelegramCalls = asBool(map["recordTelegramCalls"]) ?: base.recordTelegramCalls,
             updatedAt = updatedAtTs
         )
+    }
+
+    private fun asBool(raw: Any?): Boolean? = when (raw) {
+        is Boolean -> raw
+        is String -> when (raw.trim().lowercase()) {
+            "true", "1", "yes" -> true
+            "false", "0", "no" -> false
+            else -> null
+        }
+        is Number -> raw.toInt() != 0
+        else -> null
+    }
+
+    private fun asLong(raw: Any?): Long? = when (raw) {
+        is Number -> raw.toLong()
+        is String -> raw.trim().toLongOrNull()
+        else -> null
+    }
+
+    private fun asStringList(raw: Any?): List<String>? = when (raw) {
+        is List<*> -> raw.mapNotNull { (it as? String)?.trim() }.filter { it.isNotEmpty() }
+        is Map<*, *> -> raw.values.mapNotNull { (it as? String)?.trim() }.filter { it.isNotEmpty() }
+        else -> null
     }
 
     /**
@@ -773,8 +993,8 @@ object RealtimeDatabaseSync {
         map: Map<*, *>,
         fallback: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
     ): AppConfig {
-        val price = (map["subscriptionPrice"] as? Number)?.toLong()
-            ?: (map["subscriptionPriceInr"] as? Number)?.toLong()
+        val price = asLong(map["subscriptionPrice"])
+            ?: asLong(map["subscriptionPriceInr"])
             ?: fallback.subscriptionPriceInr
         val upi = (map["adminUpiId"] as? String)?.ifBlank { null }
             ?: (map["upiVpa"] as? String)?.ifBlank { null }
@@ -782,28 +1002,28 @@ object RealtimeDatabaseSync {
         return fallback.copy(
             subscriptionPriceInr = price.coerceAtLeast(1L),
             upiVpa = upi,
-            trialDays = (map["trialDays"] as? Number)?.toLong() ?: fallback.trialDays,
+            trialDays = asLong(map["trialDays"]) ?: fallback.trialDays,
             whatsappNumber = (map["whatsappNumber"] as? String)?.ifBlank { fallback.whatsappNumber }
                 ?: fallback.whatsappNumber,
-            enforceSingleDeviceTrial = (map["enforceSingleDeviceTrial"] as? Boolean)
+            enforceSingleDeviceTrial = asBool(map["enforceSingleDeviceTrial"])
                 ?: fallback.enforceSingleDeviceTrial,
-            allowCallRecording = (map["allowCallRecording"] as? Boolean)
+            allowCallRecording = asBool(map["allowCallRecording"])
                 ?: fallback.allowCallRecording,
-            allowManualUtr = (map["allowManualUtr"] as? Boolean)
+            allowManualUtr = asBool(map["allowManualUtr"])
                 ?: fallback.allowManualUtr,
-            maintenanceMode = (map["maintenanceMode"] as? Boolean)
+            maintenanceMode = asBool(map["maintenanceMode"])
                 ?: fallback.maintenanceMode,
             maintenanceMessage = (map["maintenanceMessage"] as? String)
                 ?: fallback.maintenanceMessage,
             announcementText = (map["announcementText"] as? String)
                 ?: fallback.announcementText,
-            dialpadTonesDefault = (map["dialpadTonesDefault"] as? Boolean)
+            dialpadTonesDefault = asBool(map["dialpadTonesDefault"])
                 ?: fallback.dialpadTonesDefault,
-            defaultAutoRecording = (map["defaultAutoRecording"] as? Boolean)
+            defaultAutoRecording = asBool(map["defaultAutoRecording"])
                 ?: fallback.defaultAutoRecording,
             forceThemeMode = (map["forceThemeMode"] as? String)
                 ?: fallback.forceThemeMode,
-            hideSubscriptionUI = (map["hideSubscriptionUI"] as? Boolean)
+            hideSubscriptionUI = asBool(map["hideSubscriptionUI"])
                 ?: fallback.hideSubscriptionUI
         )
     }
@@ -933,6 +1153,53 @@ object RealtimeDatabaseSync {
             bannerImageUrl = (map["bannerImageUrl"] as? String).orEmpty(),
             bannerActionUrl = (map["bannerActionUrl"] as? String).orEmpty(),
             updatedByUid = (map["updatedByUid"] as? String).orEmpty()
+        )
+    }
+
+    /**
+     * Deterministic conversion from `CustomPopupAd` to `/custom_popup_ad` RTDB update map.
+     * Omits `impressionsCount`/`clicksCount` so atomic `ServerValue.increment(1)` counts remain intact.
+     */
+    fun toRtdbCustomPopupAdPublishMap(ad: CustomPopupAd): Map<String, Any?> {
+        val resolvedId = ad.adId.trim().ifBlank { "ad_${System.currentTimeMillis()}" }
+        return mapOf(
+            "adId" to resolvedId,
+            "isEnabled" to ad.isEnabled,
+            "showToPremiumUsers" to ad.showToPremiumUsers,
+            "triggerMode" to CustomPopupAd.normalizedTriggerMode(ad.triggerMode),
+            "imageUrl" to ad.imageUrl.trim(),
+            "title" to ad.title.trim(),
+            "message" to ad.message.trim(),
+            "buttonText" to ad.buttonText.trim().ifBlank { CustomPopupAd.DEFAULT_BUTTON_TEXT },
+            "targetUrl" to ad.targetUrl.trim(),
+            "countdownSeconds" to ad.countdownSeconds.coerceIn(0, CustomPopupAd.MAX_COUNTDOWN_SECONDS),
+            "updatedAtMs" to ServerValue.TIMESTAMP
+        )
+    }
+
+    /**
+     * Deterministic conversion from `/custom_popup_ad` RTDB snapshot map to `CustomPopupAd`.
+     */
+    fun parseCustomPopupAdSnapshot(map: Map<*, *>): CustomPopupAd {
+        val countdown = (asLong(map["countdownSeconds"])
+            ?: CustomPopupAd.DEFAULT_COUNTDOWN_SECONDS.toLong())
+            .toInt()
+            .coerceIn(0, CustomPopupAd.MAX_COUNTDOWN_SECONDS)
+        return CustomPopupAd(
+            adId = (map["adId"] as? String).orEmpty(),
+            isEnabled = asBool(map["isEnabled"]) ?: false,
+            showToPremiumUsers = asBool(map["showToPremiumUsers"]) ?: true,
+            triggerMode = CustomPopupAd.normalizedTriggerMode(map["triggerMode"] as? String),
+            imageUrl = (map["imageUrl"] as? String).orEmpty(),
+            title = (map["title"] as? String).orEmpty(),
+            message = (map["message"] as? String).orEmpty(),
+            buttonText = (map["buttonText"] as? String)
+                ?.ifBlank { CustomPopupAd.DEFAULT_BUTTON_TEXT }
+                ?: CustomPopupAd.DEFAULT_BUTTON_TEXT,
+            targetUrl = (map["targetUrl"] as? String).orEmpty(),
+            countdownSeconds = countdown,
+            impressionsCount = (asLong(map["impressionsCount"]) ?: 0L).coerceAtLeast(0L),
+            clicksCount = (asLong(map["clicksCount"]) ?: 0L).coerceAtLeast(0L)
         )
     }
 }

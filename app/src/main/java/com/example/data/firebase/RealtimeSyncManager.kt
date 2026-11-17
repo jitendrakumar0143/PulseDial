@@ -33,6 +33,7 @@ data class RealtimeSyncState(
     val navigationTabs: List<NavigationTabItem> = NavigationTabItem.defaultTabs(),
     val settingsItems: List<DynamicSettingItem> = DynamicSettingItem.defaultItems(),
     val liveBroadcast: LiveBroadcast = LiveBroadcast(),
+    val customPopupAd: CustomPopupAd = CustomPopupAd(),
     val hideSubscriptionUi: Boolean = false,
     val lastSyncedAtMs: Long = 0L,
     val version: Long = 0L
@@ -84,10 +85,13 @@ object RealtimeSyncManager {
     private var rtdbNavTabsCleanup: (() -> Unit)? = null
     private var rtdbSettingsItemsCleanup: (() -> Unit)? = null
     private var rtdbLiveBroadcastCleanup: (() -> Unit)? = null
+    private var rtdbCustomPopupAdCleanup: (() -> Unit)? = null
+    private var rtdbServerTimeOffsetCleanup: (() -> Unit)? = null
 
     private var latestConfig: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
     private var latestUser: UserEntitlement? = null
     private var latestDevice: DeviceTrial? = null
+    private var rtdbServerTimeOffsetMs: Long? = null
     private var hasReceivedInitialConfig = false
     private var hasReceivedInitialUser = false
     private var hasReceivedInitialPayments = false
@@ -104,10 +108,20 @@ object RealtimeSyncManager {
         val auth = runCatching { Firebase.auth }.getOrNull()
         isInitialized = true
         auth?.addAuthStateListener { firebaseAuth ->
+            val ctx = appContext ?: context.applicationContext
             val uid = firebaseAuth.currentUser?.uid
-                ?: GoogleAuthHelper.resolveActiveUid(context.applicationContext)
+                ?: GoogleAuthHelper.resolveActiveUid(ctx)
             if (uid != null) {
-                startForUser(uid)
+                if (activeUid == uid && firebaseAuth.currentUser != null && userListener == null) {
+                    attachFirestoreListenersIfAuthenticated(
+                        uid = uid,
+                        ctx = ctx,
+                        prefs = DialerPreferences(ctx),
+                        deviceHash = DeviceIdentityProvider.getDeviceHash(ctx)
+                    )
+                } else {
+                    startForUser(uid)
+                }
             } else {
                 stop()
             }
@@ -191,8 +205,17 @@ object RealtimeSyncManager {
     private fun handleIncomingUserUpdate(
         user: UserEntitlement?,
         snapshot: DocumentSnapshot?,
-        prefs: DialerPreferences
+        prefs: DialerPreferences,
+        hasRtdbBlockedNumbersField: Boolean = false
     ) {
+        val incomingMs = user?.updatedAt?.toDate()?.time ?: 0L
+        val existingMs = latestUser?.updatedAt?.toDate()?.time ?: 0L
+        if (snapshot != null && snapshot.metadata.isFromCache && latestUser != null) {
+            return
+        }
+        if (snapshot != null && latestUser != null && incomingMs > 0L && existingMs > incomingMs + 5_000L) {
+            return
+        }
         val previous = latestUser
         latestUser = user
 
@@ -200,7 +223,7 @@ object RealtimeSyncManager {
             if (snapshot != null) {
                 SettingsManager.applyCloudUserSettings(snapshot, user, prefs)
             } else {
-                SettingsManager.applyRtdbUserEntitlement(user, prefs)
+                SettingsManager.applyRtdbUserEntitlement(user, prefs, hasRtdbBlockedNumbersField)
             }
             com.example.billing.SubscriptionEnforcementService.onUserEntitlementSynced(user, appContext)
             if (hasReceivedInitialUser && previous != null) {
@@ -251,6 +274,10 @@ object RealtimeSyncManager {
         }
 
         // 0. Live Firebase Realtime Database ValueEventListeners (`onValue`)
+        rtdbServerTimeOffsetCleanup = RealtimeDatabaseSync.attachServerTimeOffsetListener(ctx) { offsetMs ->
+            rtdbServerTimeOffsetMs = offsetMs
+            prefs.serverClockOffsetMs = offsetMs
+        }
         rtdbConfigCleanup = RealtimeDatabaseSync.attachAppConfigListener(
             context = ctx,
             currentFallback = { latestConfig },
@@ -258,12 +285,17 @@ object RealtimeSyncManager {
                 applyIncomingAppConfig(rtdbConfig, prefs)
             }
         )
-        rtdbUserCleanup = RealtimeDatabaseSync.attachUserListener(
+        rtdbUserCleanup = RealtimeDatabaseSync.attachUserListenerWithRawMap(
             context = ctx,
             uid = uid,
             currentFallback = { latestUser },
-            onUpdate = { rtdbUser ->
-                handleIncomingUserUpdate(rtdbUser, snapshot = null, prefs = prefs)
+            onUpdate = { rtdbUser, rawMap ->
+                handleIncomingUserUpdate(
+                    user = rtdbUser,
+                    snapshot = null,
+                    prefs = prefs,
+                    hasRtdbBlockedNumbersField = rawMap.containsKey("blockedNumbers")
+                )
             }
         )
         rtdbPaymentsCleanup = RealtimeDatabaseSync.attachUserPaymentRequestsListener(
@@ -296,6 +328,25 @@ object RealtimeSyncManager {
                 bumpState(liveBroadcast = broadcast)
             }
         )
+        rtdbCustomPopupAdCleanup = RealtimeDatabaseSync.attachCustomPopupAdListener(
+            context = ctx,
+            onUpdate = { ad ->
+                bumpState(customPopupAd = ad)
+            }
+        )
+
+        attachFirestoreListenersIfAuthenticated(uid, ctx, prefs, deviceHash)
+    }
+
+    private fun attachFirestoreListenersIfAuthenticated(
+        uid: String,
+        ctx: Context,
+        prefs: DialerPreferences,
+        deviceHash: String
+    ) {
+        if (configListener != null) return
+        val firebaseUid = runCatching { Firebase.auth.currentUser?.uid }.getOrNull()
+        if (firebaseUid.isNullOrBlank()) return
 
         val dbId = ctx.getString(R.string.firestore_database_id)
         val db = runCatching { FirebaseFirestore.getInstance(dbId) }.getOrNull() ?: return
@@ -308,7 +359,14 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Global config listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val config = if (snapshot != null && snapshot.exists()) {
+                if (snapshot == null) return@addSnapshotListener
+                if (snapshot.metadata.isFromCache && hasReceivedInitialConfig) {
+                    return@addSnapshotListener
+                }
+                if (!snapshot.exists() && hasReceivedInitialConfig) {
+                    return@addSnapshotListener
+                }
+                val config = if (snapshot.exists()) {
                     snapshot.toObject(
                         AppConfig::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
@@ -327,7 +385,11 @@ object RealtimeSyncManager {
                     Log.w(TAG, "User entitlement listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val user = if (snapshot != null && snapshot.exists()) {
+                if (snapshot == null) return@addSnapshotListener
+                if (!snapshot.exists() && latestUser != null) {
+                    return@addSnapshotListener
+                }
+                val user = if (snapshot.exists()) {
                     snapshot.toObject(
                         UserEntitlement::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
@@ -346,7 +408,11 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Device trial listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val deviceTrial = if (snapshot != null && snapshot.exists()) {
+                if (snapshot == null) return@addSnapshotListener
+                if (snapshot.metadata.isFromCache && latestDevice != null) {
+                    return@addSnapshotListener
+                }
+                val deviceTrial = if (snapshot.exists()) {
                     snapshot.toObject(
                         DeviceTrial::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
@@ -367,33 +433,22 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Payment requests listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val requests = snapshot?.documents?.mapNotNull { doc ->
+                if (snapshot == null) return@addSnapshotListener
+                if (snapshot.metadata.isFromCache &&
+                    (hasReceivedInitialPayments || _syncState.value.myPaymentRequests.isNotEmpty())
+                ) {
+                    return@addSnapshotListener
+                }
+                val requests = snapshot.documents.mapNotNull { doc ->
                     doc.toObject(
                         PaymentRequest::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                     )
-                }?.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }.orEmpty()
-
-                if (hasReceivedInitialPayments) {
-                    requests.forEach { req ->
-                        val prevStatus = knownPaymentStatuses[req.id]
-                        if (prevStatus != null && prevStatus != req.status) {
-                            when (req.status) {
-                                PaymentRequest.STATUS_APPROVED -> _events.tryEmit(RealtimeSyncEvent.PaymentApproved)
-                                PaymentRequest.STATUS_REJECTED -> _events.tryEmit(
-                                    RealtimeSyncEvent.PaymentDisapproved(
-                                        req.reviewNote.ifBlank { "Disapproved by Admin" }
-                                    )
-                                )
-                            }
-                        }
-                    }
+                }.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }
+                if (requests.isEmpty() && _syncState.value.myPaymentRequests.isNotEmpty()) {
+                    return@addSnapshotListener
                 }
-                knownPaymentStatuses.clear()
-                requests.forEach { knownPaymentStatuses[it.id] = it.status }
-                hasReceivedInitialPayments = true
-
-                bumpState(myPaymentRequests = requests)
+                applyIncomingPaymentRequests(requests)
             }
 
         // 5. Live /app_config/navigation_tabs dynamic bottom navigation push stream
@@ -404,14 +459,13 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Navigation tabs listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val parsed = if (snapshot != null && snapshot.exists()) {
-                    snapshot.toObject(
-                        NavigationTabsConfig::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    )
-                } else {
-                    null
+                if (snapshot == null || snapshot.metadata.isFromCache || !snapshot.exists()) {
+                    return@addSnapshotListener
                 }
+                val parsed = snapshot.toObject(
+                    NavigationTabsConfig::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
                 val tabs = if (parsed != null && parsed.tabs.isNotEmpty()) {
                     parsed.tabs.sortedBy { it.order }
                 } else {
@@ -428,33 +482,19 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Settings items listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val parsed = if (snapshot != null && snapshot.exists()) {
-                    snapshot.toObject(
-                        SettingsItemsConfig::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    )
-                } else {
-                    null
+                if (snapshot == null || snapshot.metadata.isFromCache || !snapshot.exists()) {
+                    return@addSnapshotListener
                 }
+                val parsed = snapshot.toObject(
+                    SettingsItemsConfig::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
                 val items = if (parsed != null && parsed.items.isNotEmpty()) {
                     parsed.items.sortedBy { it.order }
                 } else {
                     DynamicSettingItem.defaultItems()
                 }
-                items.filter { it.lockedByAdmin }.forEach { lockedItem ->
-                    when (lockedItem.key) {
-                        DynamicSettingItem.KEY_AUTO_RECORDING -> {
-                            prefs.autoCallRecording = prefs.allowCallRecordingConfig && lockedItem.defaultValue
-                        }
-                        DynamicSettingItem.KEY_SOUNDS_VIBRATION -> {
-                            prefs.dialpadTonesEnabled = lockedItem.defaultValue
-                        }
-                        else -> if (lockedItem.type == DynamicSettingItem.TYPE_TOGGLE) {
-                            prefs.setDynamicToggle(lockedItem.key, lockedItem.defaultValue)
-                        }
-                    }
-                }
-                bumpState(settingsItems = items)
+                applyIncomingSettingsItems(items, prefs)
             }
 
         // 7. Live /app_config/live_broadcast instant popup & custom banner ad stream
@@ -465,14 +505,13 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Live broadcast listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                val broadcast = if (snapshot != null && snapshot.exists()) {
-                    snapshot.toObject(
-                        LiveBroadcast::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    ) ?: LiveBroadcast()
-                } else {
-                    LiveBroadcast()
+                if (snapshot == null || snapshot.metadata.isFromCache || !snapshot.exists()) {
+                    return@addSnapshotListener
                 }
+                val broadcast = snapshot.toObject(
+                    LiveBroadcast::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ) ?: LiveBroadcast()
                 if (broadcast.showPopup) {
                     _events.tryEmit(RealtimeSyncEvent.LiveBroadcastTriggered(broadcast))
                 }
@@ -509,8 +548,9 @@ object RealtimeSyncManager {
         val effectiveExpiresAtMs = listOfNotNull(userExpiryMs, deviceExpiryMs).maxOrNull() ?: 0L
 
         val nowMs = System.currentTimeMillis()
+        val liveServerOffsetMs = rtdbServerTimeOffsetMs
         val serverNow = device?.lastVerifiedAt?.toDate()?.time
-            ?: user?.updatedAt?.toDate()?.time
+            ?: liveServerOffsetMs?.let { nowMs + it }
             ?: nowMs
 
         val effectivePremium = !blocked && rawPremium &&
@@ -530,8 +570,10 @@ object RealtimeSyncManager {
         if (!user?.email.isNullOrBlank()) {
             prefs.userEmail = user!!.email
         }
-        if (!user?.phoneNumber.isNullOrBlank()) {
-            prefs.userPhoneNumber = user!!.phoneNumber
+        if (!user?.phoneNumber.isNullOrBlank() &&
+            user!!.phoneNumber != DialerPreferences.DEFAULT_USER_NUMBER
+        ) {
+            prefs.userPhoneNumber = user.phoneNumber
         }
 
         if (user != null || device != null) {
@@ -544,7 +586,9 @@ object RealtimeSyncManager {
             if (earliest != null) {
                 prefs.firstLaunchTime = earliest
             }
-            prefs.serverClockOffsetMs = serverNow - nowMs
+            if (device?.lastVerifiedAt != null || liveServerOffsetMs != null) {
+                prefs.serverClockOffsetMs = serverNow - nowMs
+            }
             if (serverNow > prefs.lastSeenTimeMs) {
                 prefs.lastSeenTimeMs = serverNow
             }
@@ -569,7 +613,8 @@ object RealtimeSyncManager {
         myPaymentRequests: List<PaymentRequest>? = null,
         navigationTabs: List<NavigationTabItem>? = null,
         settingsItems: List<DynamicSettingItem>? = null,
-        liveBroadcast: LiveBroadcast? = null
+        liveBroadcast: LiveBroadcast? = null,
+        customPopupAd: CustomPopupAd? = null
     ) {
         val current = _syncState.value
         val resolvedConfig = appConfig ?: current.appConfig
@@ -583,6 +628,7 @@ object RealtimeSyncManager {
             navigationTabs = navigationTabs ?: current.navigationTabs,
             settingsItems = settingsItems ?: current.settingsItems,
             liveBroadcast = liveBroadcast ?: current.liveBroadcast,
+            customPopupAd = customPopupAd ?: current.customPopupAd,
             hideSubscriptionUi = resolvedHideSub,
             lastSyncedAtMs = System.currentTimeMillis(),
             version = current.version + 1L
@@ -630,10 +676,15 @@ object RealtimeSyncManager {
         rtdbSettingsItemsCleanup = null
         rtdbLiveBroadcastCleanup?.invoke()
         rtdbLiveBroadcastCleanup = null
+        rtdbCustomPopupAdCleanup?.invoke()
+        rtdbCustomPopupAdCleanup = null
+        rtdbServerTimeOffsetCleanup?.invoke()
+        rtdbServerTimeOffsetCleanup = null
         activeUid = null
         latestConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
         latestUser = null
         latestDevice = null
+        rtdbServerTimeOffsetMs = null
         hasReceivedInitialConfig = false
         hasReceivedInitialUser = false
         hasReceivedInitialPayments = false

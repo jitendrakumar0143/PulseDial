@@ -40,6 +40,7 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
     private var cachedContacts: List<ContactEntry> = emptyList()
     private var lastDialedNumber: String? = null
     private var rawInput: String = ""
+    private var isAddCallMode: Boolean = false
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -70,6 +71,7 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         binding.recyclerT9Suggestions.adapter = suggestionAdapter
 
         rawInput = arguments?.getString(ARG_INITIAL_NUMBER).orEmpty()
+        isAddCallMode = arguments?.getBoolean(ARG_ADD_CALL_MODE, false) ?: false
         loadContactsAndLastCall()
         setupKeypadButtons()
         setupActionChips()
@@ -233,7 +235,11 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
     }
 
     private fun updateT9Suggestions() {
-        val matches = T9Matcher.matchContacts(rawInput, cachedContacts)
+        val matches = if (rawInput.isBlank() && isAddCallMode) {
+            cachedContacts.take(12)
+        } else {
+            T9Matcher.matchContacts(rawInput, cachedContacts)
+        }
         suggestionAdapter.submitList(matches)
         binding.recyclerT9Suggestions.visibility = if (matches.isEmpty()) View.GONE else View.VISIBLE
     }
@@ -267,11 +273,16 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
     companion object {
         const val TAG = "DialpadBottomSheetFragment"
         private const val ARG_INITIAL_NUMBER = "initial_number"
+        private const val ARG_ADD_CALL_MODE = "add_call_mode"
 
-        fun newInstance(initialNumber: String = ""): DialpadBottomSheetFragment {
+        fun newInstance(
+            initialNumber: String = "",
+            isAddCallMode: Boolean = false
+        ): DialpadBottomSheetFragment {
             return DialpadBottomSheetFragment().apply {
                 arguments = Bundle().apply {
                     putString(ARG_INITIAL_NUMBER, initialNumber)
+                    putBoolean(ARG_ADD_CALL_MODE, isAddCallMode)
                 }
             }
         }

@@ -5,22 +5,91 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/bg_incall_gradient"
-    android:padding="24dp">
+    android:paddingHorizontal="20dp"
+    android:paddingVertical="16dp">
+
+    <!-- Secondary Call (Held / Background Call) Banner -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/card_secondary_call"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clickable="true"
+        android:contentDescription="@string/incall_secondary_tap_to_swap"
+        android:focusable="true"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/incall_surface"
+        app:cardCornerRadius="16dp"
+        app:cardElevation="0dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:strokeColor="#334155"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:minHeight="52dp"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="10dp">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_swap_calls"
+                app:tint="#2DD4BF" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tv_secondary_caller_name"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_secondary_call_status"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/incall_status_holding"
+                    android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                    android:textColor="#94A3B8" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/incall_swap"
+                android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                android:textColor="#2DD4BF"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 
     <!-- Caller Info Section -->
     <LinearLayout
         android:id="@+id/layout_caller_header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
+        android:layout_marginTop="16dp"
         android:gravity="center_horizontal"
         android:orientation="vertical"
-        app:layout_constraintTop_toTopOf="parent">
+        app:layout_constraintTop_toBottomOf="@id/card_secondary_call">
 
         <TextView
             android:id="@+id/tv_incall_avatar"
-            android:layout_width="96dp"
-            android:layout_height="96dp"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
             android:background="@drawable/bg_circle_avatar"
             android:gravity="center"
             android:text="?"
@@ -32,9 +101,10 @@
             android:id="@+id/tv_incall_name"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
+            android:layout_marginTop="14dp"
             android:ellipsize="end"
-            android:maxLines="1"
+            android:gravity="center"
+            android:maxLines="2"
             android:text="@string/incall_unknown_caller"
             android:textAppearance="@style/TextAppearance.Material3.HeadlineMedium"
             android:textColor="#FFFFFF"
@@ -45,13 +115,16 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
             android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
             android:textColor="#94A3B8" />
 
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="8dp"
             android:gravity="center"
             android:orientation="horizontal">
 
@@ -76,6 +149,23 @@
                 app:chipIconTint="#FFFFFF"
                 app:chipStrokeWidth="0dp" />
         </LinearLayout>
+
+        <!-- Manage Conference Trigger Button (Shown when PROPERTY_CONFERENCE or children exist) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_manage_conference"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:contentDescription="@string/incall_manage_conference"
+            android:minHeight="48dp"
+            android:text="@string/incall_manage_conference"
+            android:textColor="#FFFFFF"
+            android:visibility="gone"
+            app:backgroundTint="@color/incall_surface_active"
+            app:cornerRadius="24dp"
+            app:icon="@drawable/ic_group_conference"
+            app:iconTint="#FFFFFF" />
     </LinearLayout>
 
     <!-- Enhanced In-Call DTMF Keypad Overlay with Live Readout -->
@@ -83,7 +173,10 @@
         android:id="@+id/layout_incall_keypad_panel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:background="#E609121F"
+        android:elevation="6dp"
         android:orientation="vertical"
+        android:paddingVertical="8dp"
         android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@id/layout_active_controls"
         app:layout_constraintTop_toBottomOf="@id/layout_caller_header">
@@ -112,7 +205,7 @@
                 android:id="@+id/dtmf_1"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="1"
@@ -125,7 +218,7 @@
                 android:id="@+id/dtmf_2"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="2  ABC"
@@ -138,7 +231,7 @@
                 android:id="@+id/dtmf_3"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="3  DEF"
@@ -151,7 +244,7 @@
                 android:id="@+id/dtmf_4"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="4  GHI"
@@ -164,7 +257,7 @@
                 android:id="@+id/dtmf_5"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="5  JKL"
@@ -177,7 +270,7 @@
                 android:id="@+id/dtmf_6"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="6  MNO"
@@ -190,7 +283,7 @@
                 android:id="@+id/dtmf_7"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="7  PQRS"
@@ -203,7 +296,7 @@
                 android:id="@+id/dtmf_8"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="8  TUV"
@@ -216,7 +309,7 @@
                 android:id="@+id/dtmf_9"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="9  WXYZ"
@@ -229,7 +322,7 @@
                 android:id="@+id/dtmf_star"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="*"
@@ -242,7 +335,7 @@
                 android:id="@+id/dtmf_0"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="0  +"
@@ -255,7 +348,7 @@
                 android:id="@+id/dtmf_hash"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
-                android:layout_height="54dp"
+                android:layout_height="52dp"
                 android:layout_columnWeight="1"
                 android:layout_margin="4dp"
                 android:text="#"
@@ -266,15 +359,16 @@
         </GridLayout>
     </LinearLayout>
 
-    <!-- Active Call Action Controls: Mute, Keypad, Speaker, Record -->
+    <!-- Active Call Action Controls: Row 1 (Mute, Keypad, Speaker, Record) & Row 2 (Add Call, Hold/Swap, Merge) -->
     <LinearLayout
         android:id="@+id/layout_active_controls"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="24dp"
+        android:layout_marginBottom="16dp"
         android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent">
 
+        <!-- Row 1: Audio & Recording Controls -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -293,8 +387,8 @@
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_incall_mute"
                     style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
-                    android:layout_width="60dp"
-                    android:layout_height="60dp"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
                     android:contentDescription="@string/incall_mute"
                     app:backgroundTint="@color/incall_surface"
                     app:icon="@drawable/ic_mic"
@@ -320,8 +414,8 @@
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_incall_keypad"
                     style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
-                    android:layout_width="60dp"
-                    android:layout_height="60dp"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
                     android:contentDescription="@string/incall_keypad"
                     app:backgroundTint="@color/incall_surface"
                     app:icon="@drawable/ic_dialpad"
@@ -347,8 +441,8 @@
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_incall_speaker"
                     style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
-                    android:layout_width="60dp"
-                    android:layout_height="60dp"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
                     android:contentDescription="@string/incall_speaker"
                     app:backgroundTint="@color/incall_surface"
                     app:icon="@drawable/ic_volume_up"
@@ -374,8 +468,8 @@
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_incall_record"
                     style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
-                    android:layout_width="60dp"
-                    android:layout_height="60dp"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
                     android:contentDescription="@string/incall_record"
                     app:backgroundTint="@color/incall_surface"
                     app:icon="@drawable/ic_record_dot"
@@ -392,16 +486,111 @@
             </LinearLayout>
         </LinearLayout>
 
+        <!-- Row 2: Multi-Party & Conference Controls (Add Call, Hold/Swap, Merge) -->
+        <LinearLayout
+            android:id="@+id/layout_conference_controls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:weightSum="3">
+
+            <!-- Add Call -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_add_call"
+                    style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:contentDescription="@string/incall_add_call"
+                    app:backgroundTint="@color/incall_surface"
+                    app:icon="@drawable/ic_add_call"
+                    app:iconTint="#FFFFFF" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/incall_add_call"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                    android:textColor="#CBD5E1" />
+            </LinearLayout>
+
+            <!-- Hold / Resume / Swap -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_hold_swap"
+                    style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:contentDescription="@string/incall_hold"
+                    app:backgroundTint="@color/incall_surface"
+                    app:icon="@drawable/ic_pause"
+                    app:iconTint="#FFFFFF" />
+
+                <TextView
+                    android:id="@+id/tv_hold_swap_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/incall_hold"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                    android:textColor="#CBD5E1" />
+            </LinearLayout>
+
+            <!-- Merge Calls -->
+            <LinearLayout
+                android:id="@+id/container_merge_calls"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_merge_calls"
+                    style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:contentDescription="@string/incall_merge"
+                    app:backgroundTint="@color/incall_surface"
+                    app:icon="@drawable/ic_merge_calls"
+                    app:iconTint="#FFFFFF" />
+
+                <TextView
+                    android:id="@+id/tv_merge_calls_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/incall_merge"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                    android:textColor="#CBD5E1" />
+            </LinearLayout>
+        </LinearLayout>
+
         <!-- End Call Button -->
         <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/btn_incall_end"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
-            android:layout_marginTop="28dp"
+            android:layout_marginTop="22dp"
             android:contentDescription="@string/incall_end_call"
             app:backgroundTint="@color/call_decline_red"
-            app:fabCustomSize="72dp"
+            app:fabCustomSize="70dp"
             app:srcCompat="@drawable/ic_call_end"
             app:tint="#FFFFFF" />
     </LinearLayout>

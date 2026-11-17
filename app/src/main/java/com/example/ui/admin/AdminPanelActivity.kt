@@ -31,6 +31,7 @@ import com.example.data.firebase.AdminRepository
 import com.example.data.firebase.AdminSubscriberFilter
 import com.example.data.firebase.AdminUserFilter
 import com.example.data.firebase.AppConfig
+import com.example.data.firebase.CustomPopupAd
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.DynamicSettingItem
 import com.example.data.firebase.GoogleAuthHelper
@@ -38,6 +39,7 @@ import com.example.data.firebase.LiveBroadcast
 import com.example.data.firebase.NavigationTabItem
 import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.PaymentRequest
+import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.UserEntitlement
 import com.example.databinding.ActivityAdminPanelBinding
 import com.example.ui.account.PaymentRequestsAdapter
@@ -67,10 +69,17 @@ class AdminPanelActivity : AppCompatActivity() {
     private var expiringSubscriptionUsers: List<UserEntitlement> = emptyList()
     private var allActiveSubscribers: List<UserEntitlement> = emptyList()
     private var allPayments: List<PaymentRequest> = emptyList()
+    private val firestoreUsersById = mutableMapOf<String, UserEntitlement>()
+    private val rtdbUsersById = mutableMapOf<String, UserEntitlement>()
+    private val firestorePaymentsById = mutableMapOf<String, PaymentRequest>()
+    private val rtdbPaymentsById = mutableMapOf<String, PaymentRequest>()
+    private var hasLoadedRtdbConfig = false
     private var currentConfig: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
     private var currentNavTabs: List<NavigationTabItem> = NavigationTabItem.defaultTabs()
     private var currentSettingItems: List<DynamicSettingItem> = DynamicSettingItem.defaultItems()
     private var currentBroadcast: LiveBroadcast = LiveBroadcast()
+    private var currentCustomPopupAd: CustomPopupAd = CustomPopupAd()
+    private var hasBoundInitialPopupAd = false
 
     private var suppressHideSubSwitchListener = false
 
@@ -88,6 +97,7 @@ class AdminPanelActivity : AppCompatActivity() {
     private var rtdbAdminNavTabsCleanup: (() -> Unit)? = null
     private var rtdbAdminSettingsItemsCleanup: (() -> Unit)? = null
     private var rtdbAdminBroadcastCleanup: (() -> Unit)? = null
+    private var rtdbAdminCustomPopupAdCleanup: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,55 +137,32 @@ class AdminPanelActivity : AppCompatActivity() {
         rtdbAdminUsersCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAllUsersListener(
             context = this,
             onUpdate = { rtdbUsers ->
-                if (rtdbUsers.isNotEmpty() || allUsers.isEmpty()) {
-                    val mergedById = allUsers.associateBy { it.uid }.toMutableMap()
-                    rtdbUsers.forEach { rtdbUser ->
-                        mergedById[rtdbUser.uid] = rtdbUser
+                rtdbUsersById.clear()
+                rtdbUsers.forEach { user ->
+                    if (user.uid.isNotBlank()) {
+                        rtdbUsersById[user.uid] = user
                     }
-                    allUsers = mergedById.values.toList()
-                    val nowMs = System.currentTimeMillis()
-                    expiringSubscriptionUsers = allUsers.filter { user ->
-                        user.isPremiumUser && !user.isBlocked &&
-                            AdminRepository.getSubscriptionRemainingDays(user, nowMs) in 1..AdminRepository.SUB_EXPIRING_SOON_DAYS
-                    }
-                    allActiveSubscribers = allUsers.filter { user ->
-                        user.isPremiumUser && !user.isBlocked &&
-                            AdminRepository.getSubscriptionRemainingDays(user, nowMs) != 0
-                    }
-                    updateKpis()
-                    applyUserFilters()
-                    applySubscriberFilters()
                 }
+                mergeAndPublishUsers()
             }
         )
         rtdbAdminPaymentsCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAllPaymentRequestsListener(
             context = this,
             onUpdate = { rtdbRequests ->
-                if (rtdbRequests.isNotEmpty() || allPayments.isEmpty()) {
-                    val mergedById = allPayments.associateBy { it.id }.toMutableMap()
-                    rtdbRequests.forEach { req ->
-                        if (req.id.isNotBlank()) {
-                            mergedById[req.id] = req
-                        }
+                rtdbPaymentsById.clear()
+                rtdbRequests.forEach { req ->
+                    if (req.id.isNotBlank()) {
+                        rtdbPaymentsById[req.id] = req
                     }
-                    allPayments = mergedById.values.sortedWith(
-                        compareBy<PaymentRequest> {
-                            when (it.status) {
-                                PaymentRequest.STATUS_PENDING -> 0
-                                PaymentRequest.STATUS_APPROVED -> 1
-                                else -> 2
-                            }
-                        }.thenByDescending { it.createdAt?.toDate()?.time ?: 0L }
-                    )
-                    updateKpis()
-                    applyPaymentFilters()
                 }
+                mergeAndPublishPayments()
             }
         )
         rtdbAdminConfigCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAppConfigListener(
             context = this,
             currentFallback = { currentConfig },
             onUpdate = { rtdbConfig ->
+                hasLoadedRtdbConfig = true
                 currentConfig = rtdbConfig
                 prefs.applyAppConfig(rtdbConfig)
                 usersAdapter.trialDaysConfig = rtdbConfig.trialDays.toInt()
@@ -201,10 +188,16 @@ class AdminPanelActivity : AppCompatActivity() {
                 }
             }
         )
-        rtdbAdminBroadcastCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachLiveBroadcastListener(
+        rtdbAdminBroadcastCleanup = RealtimeDatabaseSync.attachLiveBroadcastListener(
             context = this,
             onUpdate = { broadcast ->
                 bindBroadcastInputs(broadcast)
+            }
+        )
+        rtdbAdminCustomPopupAdCleanup = RealtimeDatabaseSync.attachCustomPopupAdListener(
+            context = this,
+            onUpdate = { ad ->
+                bindCustomPopupAdState(ad)
             }
         )
     }
@@ -222,6 +215,8 @@ class AdminPanelActivity : AppCompatActivity() {
         rtdbAdminSettingsItemsCleanup = null
         rtdbAdminBroadcastCleanup?.invoke()
         rtdbAdminBroadcastCleanup = null
+        rtdbAdminCustomPopupAdCleanup?.invoke()
+        rtdbAdminCustomPopupAdCleanup = null
         super.onDestroy()
     }
 
@@ -312,6 +307,12 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.btnRefreshExpiring.isEnabled = false
         val requestedFilter = currentSubscriberFilter
         lifecycleScope.launch {
+            if (Firebase.auth.currentUser == null) {
+                mergeAndPublishUsers()
+                binding.progressAdminExpiring.visibility = View.GONE
+                binding.btnRefreshExpiring.isEnabled = true
+                return@launch
+            }
             val result = if (requestedFilter == AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS) {
                 adminRepository.fetchAllActiveSubscribers()
             } else {
@@ -322,12 +323,17 @@ class AdminPanelActivity : AppCompatActivity() {
             binding.progressAdminExpiring.visibility = View.GONE
             binding.btnRefreshExpiring.isEnabled = true
             result.onSuccess { list ->
-                if (requestedFilter == AdminSubscriberFilter.ALL_ACTIVE_SUBSCRIBERS) {
-                    allActiveSubscribers = list
-                } else {
-                    expiringSubscriptionUsers = list
+                list.forEach { user ->
+                    if (user.uid.isNotBlank()) {
+                        val rtdbCopy = rtdbUsersById[user.uid]
+                        val fsMs = user.updatedAt?.toDate()?.time ?: 0L
+                        val rtdbMs = rtdbCopy?.updatedAt?.toDate()?.time ?: 0L
+                        if (rtdbCopy == null || fsMs > rtdbMs) {
+                            firestoreUsersById[user.uid] = user
+                        }
+                    }
                 }
-                applySubscriberFilters()
+                mergeAndPublishUsers()
             }.onFailure { err ->
                 Toast.makeText(
                     this@AdminPanelActivity,
@@ -336,6 +342,78 @@ class AdminPanelActivity : AppCompatActivity() {
                 ).show()
             }
         }
+    }
+
+    private fun mergeAndPublishUsers() {
+        val mergedById = LinkedHashMap<String, UserEntitlement>()
+        val allIds = LinkedHashSet<String>().apply {
+            addAll(firestoreUsersById.keys)
+            addAll(rtdbUsersById.keys)
+        }
+        for (uid in allIds) {
+            val fsUser = firestoreUsersById[uid]
+            val rtdbUser = rtdbUsersById[uid]
+            val winner = when {
+                fsUser == null -> rtdbUser
+                rtdbUser == null -> fsUser
+                else -> {
+                    val fsMs = fsUser.updatedAt?.toDate()?.time ?: 0L
+                    val rtdbMs = rtdbUser.updatedAt?.toDate()?.time ?: 0L
+                    if (rtdbMs >= fsMs) rtdbUser else fsUser
+                }
+            }
+            if (winner != null) {
+                mergedById[uid] = winner
+            }
+        }
+        allUsers = mergedById.values.toList()
+        val nowMs = System.currentTimeMillis()
+        expiringSubscriptionUsers = allUsers.filter { user ->
+            user.isPremiumUser && !user.isBlocked &&
+                AdminRepository.getSubscriptionRemainingDays(user, nowMs) in 1..AdminRepository.SUB_EXPIRING_SOON_DAYS
+        }
+        allActiveSubscribers = allUsers.filter { user ->
+            user.isPremiumUser && !user.isBlocked &&
+                AdminRepository.getSubscriptionRemainingDays(user, nowMs) != 0
+        }
+        updateKpis()
+        applyUserFilters()
+        applySubscriberFilters()
+    }
+
+    private fun mergeAndPublishPayments() {
+        val mergedById = LinkedHashMap<String, PaymentRequest>()
+        val allIds = LinkedHashSet<String>().apply {
+            addAll(firestorePaymentsById.keys)
+            addAll(rtdbPaymentsById.keys)
+        }
+        for (id in allIds) {
+            val fsReq = firestorePaymentsById[id]
+            val rtdbReq = rtdbPaymentsById[id]
+            val winner = when {
+                fsReq == null -> rtdbReq
+                rtdbReq == null -> fsReq
+                else -> {
+                    val fsMs = fsReq.updatedAt?.toDate()?.time ?: fsReq.createdAt?.toDate()?.time ?: 0L
+                    val rtdbMs = rtdbReq.updatedAt?.toDate()?.time ?: rtdbReq.createdAt?.toDate()?.time ?: 0L
+                    if (rtdbMs >= fsMs) rtdbReq else fsReq
+                }
+            }
+            if (winner != null) {
+                mergedById[id] = winner
+            }
+        }
+        allPayments = mergedById.values.sortedWith(
+            compareBy<PaymentRequest> {
+                when (it.status) {
+                    PaymentRequest.STATUS_PENDING -> 0
+                    PaymentRequest.STATUS_APPROVED -> 1
+                    else -> 2
+                }
+            }.thenByDescending { it.createdAt?.toDate()?.time ?: 0L }
+        )
+        updateKpis()
+        applyPaymentFilters()
     }
 
     private fun applySubscriberFilters() {
@@ -530,6 +608,105 @@ class AdminPanelActivity : AppCompatActivity() {
                 bannerActionUrl = binding.etBannerAdActionUrl.text?.toString()?.trim().orEmpty()
             )
             saveLiveBroadcast(next, R.string.admin_banner_saved_toast)
+        }
+
+        // Initialize Custom Popup Ad live counters & publish button
+        updatePopupAdCounters(0L, 0L)
+        binding.btnPublishCustomPopupAd.setOnClickListener {
+            publishCustomPopupAdFromInputs()
+        }
+    }
+
+    private fun selectedPopupAdTriggerMode(): String {
+        return when (binding.rgPopupAdTriggerMode.checkedRadioButtonId) {
+            R.id.rb_popup_ad_trigger_app_open -> CustomPopupAd.TRIGGER_ON_APP_OPEN
+            R.id.rb_popup_ad_trigger_after_call -> CustomPopupAd.TRIGGER_AFTER_CALL_END
+            else -> CustomPopupAd.TRIGGER_BOTH
+        }
+    }
+
+    private fun updatePopupAdCounters(impressions: Long, clicks: Long) {
+        binding.tvPopupAdImpressionsBadge.text =
+            getString(R.string.admin_popup_ad_views_count, impressions)
+        binding.tvPopupAdClicksBadge.text =
+            getString(R.string.admin_popup_ad_clicks_count, clicks)
+    }
+
+    private fun bindCustomPopupAdState(ad: CustomPopupAd) {
+        val previousAdId = currentCustomPopupAd.adId
+        currentCustomPopupAd = ad
+        updatePopupAdCounters(ad.impressionsCount, ad.clicksCount)
+
+        val anyAdFieldFocused = binding.etPopupAdImageUrl.hasFocus() ||
+            binding.etPopupAdTitle.hasFocus() ||
+            binding.etPopupAdMessage.hasFocus() ||
+            binding.etPopupAdButtonText.hasFocus() ||
+            binding.etPopupAdTargetUrl.hasFocus() ||
+            binding.etPopupAdCountdown.hasFocus()
+
+        if (!hasBoundInitialPopupAd || (ad.adId.isNotBlank() && ad.adId != previousAdId && !anyAdFieldFocused)) {
+            hasBoundInitialPopupAd = true
+            binding.switchPopupAdEnable.isChecked = ad.isEnabled
+            binding.switchPopupAdShowPremium.isChecked = ad.showToPremiumUsers
+            val radioId = when (CustomPopupAd.normalizedTriggerMode(ad.triggerMode)) {
+                CustomPopupAd.TRIGGER_ON_APP_OPEN -> R.id.rb_popup_ad_trigger_app_open
+                CustomPopupAd.TRIGGER_AFTER_CALL_END -> R.id.rb_popup_ad_trigger_after_call
+                else -> R.id.rb_popup_ad_trigger_both
+            }
+            binding.rgPopupAdTriggerMode.check(radioId)
+            binding.etPopupAdImageUrl.setText(ad.imageUrl)
+            binding.etPopupAdTitle.setText(ad.title)
+            binding.etPopupAdMessage.setText(ad.message)
+            binding.etPopupAdButtonText.setText(ad.buttonText)
+            binding.etPopupAdTargetUrl.setText(ad.targetUrl)
+            binding.etPopupAdCountdown.setText(ad.countdownSeconds.toString())
+        }
+    }
+
+    private fun publishCustomPopupAdFromInputs() {
+        val isEnabled = binding.switchPopupAdEnable.isChecked
+        val showPremium = binding.switchPopupAdShowPremium.isChecked
+        val triggerMode = selectedPopupAdTriggerMode()
+        val imageUrl = binding.etPopupAdImageUrl.text?.toString()?.trim().orEmpty()
+        val title = binding.etPopupAdTitle.text?.toString()?.trim().orEmpty()
+        val message = binding.etPopupAdMessage.text?.toString()?.trim().orEmpty()
+        val buttonText = binding.etPopupAdButtonText.text?.toString()?.trim()
+            ?.ifBlank { CustomPopupAd.DEFAULT_BUTTON_TEXT }
+            ?: CustomPopupAd.DEFAULT_BUTTON_TEXT
+        val targetUrl = binding.etPopupAdTargetUrl.text?.toString()?.trim().orEmpty()
+        val countdown = binding.etPopupAdCountdown.text?.toString()?.trim()?.toIntOrNull()
+            ?.coerceIn(0, CustomPopupAd.MAX_COUNTDOWN_SECONDS)
+            ?: CustomPopupAd.DEFAULT_COUNTDOWN_SECONDS
+
+        if (isEnabled && title.isBlank() && message.isBlank() && imageUrl.isBlank()) {
+            Toast.makeText(this, R.string.admin_popup_ad_validation_error, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val updated = CustomPopupAd(
+            adId = "ad_${System.currentTimeMillis()}",
+            isEnabled = isEnabled,
+            showToPremiumUsers = showPremium,
+            triggerMode = triggerMode,
+            imageUrl = imageUrl,
+            title = title,
+            message = message,
+            buttonText = buttonText,
+            targetUrl = targetUrl,
+            countdownSeconds = countdown,
+            impressionsCount = currentCustomPopupAd.impressionsCount,
+            clicksCount = currentCustomPopupAd.clicksCount
+        )
+        val ok = RealtimeDatabaseSync.publishCustomPopupAd(updated, this)
+        if (ok) {
+            currentCustomPopupAd = updated
+            Toast.makeText(this, R.string.admin_popup_ad_published_toast, Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(
+                this,
+                getString(R.string.admin_action_failed, "RTDB unavailable"),
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -992,76 +1169,75 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun observeAdminData() {
+        if (Firebase.auth.currentUser == null) return
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     adminRepository.observeAllUsers()
                         .catch { /* logged in repository */ }
                         .collect { users ->
-                            allUsers = users
-                            updateKpis()
-                            applyUserFilters()
-                        }
-                }
-                launch {
-                    adminRepository.observeUsersExpiringWithinDays(
-                        days = AdminRepository.SUB_EXPIRING_SOON_DAYS
-                    )
-                        .catch { /* logged in repository */ }
-                        .collect { expiring ->
-                            expiringSubscriptionUsers = expiring
-                            applySubscriberFilters()
-                        }
-                }
-                launch {
-                    adminRepository.observeAllActiveSubscribers()
-                        .catch { /* logged in repository */ }
-                        .collect { activeList ->
-                            allActiveSubscribers = activeList
-                            applySubscriberFilters()
+                            firestoreUsersById.clear()
+                            users.forEach { user ->
+                                if (user.uid.isNotBlank()) {
+                                    firestoreUsersById[user.uid] = user
+                                }
+                            }
+                            mergeAndPublishUsers()
                         }
                 }
                 launch {
                     paymentRepository.observeAllPaymentRequestsForAdmin()
                         .catch { /* logged in repository */ }
                         .collect { requests ->
-                            allPayments = requests
-                            updateKpis()
-                            applyPaymentFilters()
+                            firestorePaymentsById.clear()
+                            requests.forEach { req ->
+                                if (req.id.isNotBlank()) {
+                                    firestorePaymentsById[req.id] = req
+                                }
+                            }
+                            mergeAndPublishPayments()
                         }
                 }
                 launch {
                     adminRepository.observeGlobalAppConfig()
                         .catch { /* logged in repository */ }
                         .collect { config ->
-                            currentConfig = config
-                            prefs.applyAppConfig(config)
-                            usersAdapter.trialDaysConfig = config.trialDays.toInt()
-                            bindSettingsInputs(config)
-                            applyUserFilters()
+                            if (!hasLoadedRtdbConfig || (config.updatedAt?.toDate()?.time ?: 0L) > (currentConfig.updatedAt?.toDate()?.time ?: 0L)) {
+                                currentConfig = config
+                                prefs.applyAppConfig(config)
+                                usersAdapter.trialDaysConfig = config.trialDays.toInt()
+                                bindSettingsInputs(config)
+                                applyUserFilters()
+                            }
                         }
                 }
                 launch {
                     adminRepository.observeNavigationTabs()
                         .catch { /* logged in repository */ }
                         .collect { tabsConfig ->
-                            currentNavTabs = tabsConfig.tabs
-                            navTabsAdapter.submitList(tabsConfig.tabs)
+                            if (currentNavTabs.isEmpty() || tabsConfig.tabs.isNotEmpty()) {
+                                currentNavTabs = tabsConfig.tabs
+                                navTabsAdapter.submitList(tabsConfig.tabs)
+                            }
                         }
                 }
                 launch {
                     adminRepository.observeDynamicSettings()
                         .catch { /* logged in repository */ }
                         .collect { settingsConfig ->
-                            currentSettingItems = settingsConfig.items
-                            settingsItemsAdapter.submitList(settingsConfig.items)
+                            if (currentSettingItems.isEmpty() || settingsConfig.items.isNotEmpty()) {
+                                currentSettingItems = settingsConfig.items
+                                settingsItemsAdapter.submitList(settingsConfig.items)
+                            }
                         }
                 }
                 launch {
                     adminRepository.observeLiveBroadcast()
                         .catch { /* logged in repository */ }
                         .collect { broadcast ->
-                            bindBroadcastInputs(broadcast)
+                            if ((broadcast.updatedAt?.toDate()?.time ?: 0L) >= (currentBroadcast.updatedAt?.toDate()?.time ?: 0L)) {
+                                bindBroadcastInputs(broadcast)
+                            }
                         }
                 }
             }

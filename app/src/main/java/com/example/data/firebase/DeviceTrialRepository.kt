@@ -104,13 +104,52 @@ class DeviceTrialRepository(
     }
 
     suspend fun syncDeviceAndUserTrial(deviceHash: String): Result<TrialVerificationResult> {
-        val uid = try {
-            requireUserId()
-        } catch (e: Exception) {
-            return Result.failure(e)
+        val currentUser = runCatching { auth.currentUser }.getOrNull()
+        if (currentUser == null) {
+            val fallbackUid = prefs?.loggedInUserId?.takeIf { prefs.isLoggedIn && it.isNotBlank() }
+                ?: return Result.failure(
+                    IllegalStateException("User must be signed in with Google before verifying device trial.")
+                )
+            val nowMs = System.currentTimeMillis()
+            val cleanPrefs = prefs!!
+            val totalTrialDays = (cleanPrefs.configuredTrialDays + cleanPrefs.adminBonusTrialDays)
+                .coerceIn(1, 4000)
+            val totalTrialMs = totalTrialDays.toLong() * DialerPreferences.ONE_DAY_MILLIS
+            val startMs = cleanPrefs.firstLaunchTime
+            val isPremium = !cleanPrefs.adminBlockedUser && cleanPrefs.isPremiumActive(nowMs)
+            val trialExpired = (nowMs - startMs) >= totalTrialMs
+            val status = when {
+                isPremium -> TrialStatus.PREMIUM_ACTIVE
+                cleanPrefs.trialBlockedByDevice && trialExpired -> TrialStatus.DEVICE_TRIAL_ALREADY_USED
+                trialExpired -> TrialStatus.TRIAL_EXPIRED
+                else -> TrialStatus.FREE_TRIAL_ACTIVE
+            }
+            val result = TrialVerificationResult(
+                status = status,
+                deviceHash = deviceHash,
+                shortDeviceTag = cleanPrefs.shortDeviceTag.ifBlank {
+                    DeviceIdentityProvider.formatShortDeviceTag(deviceHash)
+                },
+                daysRemaining = cleanPrefs.getTrialDaysRemaining(nowMs),
+                isPremium = isPremium,
+                hasRecordingAccess = !cleanPrefs.adminBlockedUser && (isPremium || !trialExpired),
+                trialStartedAtMs = startMs,
+                serverNowMs = nowMs,
+                accountSwitchCount = cleanPrefs.accountSwitchCount,
+                isBlocked = cleanPrefs.adminBlockedUser,
+                bonusTrialDays = cleanPrefs.adminBonusTrialDays.toLong(),
+                subscriptionExpiresAtMs = cleanPrefs.subscriptionExpiresAtMs
+            )
+            RealtimeDatabaseSync.pushUserFields(
+                fallbackUid,
+                mapOf(
+                    "deviceHash" to deviceHash,
+                    "updatedAtMs" to nowMs
+                )
+            )
+            return Result.success(result)
         }
-
-        val currentUser = auth.currentUser
+        val uid = currentUser.uid
         val deviceDocPath = "$COLLECTION_DEVICE_TRIALS/$deviceHash"
         val deviceDocRef = db.collection(COLLECTION_DEVICE_TRIALS).document(deviceHash)
 
@@ -376,15 +415,28 @@ class DeviceTrialRepository(
     }
 
     suspend fun updateUserProfilePhone(displayName: String, phoneNumber: String): Result<Unit> {
-        val uid = try {
-            requireUserId()
-        } catch (e: Exception) {
-            return Result.failure(e)
+        val currentUser = runCatching { auth.currentUser }.getOrNull()
+        val uid = currentUser?.uid
+            ?: prefs?.loggedInUserId?.takeIf { prefs.isLoggedIn && it.isNotBlank() }
+            ?: return Result.failure(
+                IllegalStateException("User must be signed in with Google before updating profile.")
+            )
+        val cleanName = displayName.trim().take(120)
+        val cleanPhone = phoneNumber.trim().take(32)
+        RealtimeDatabaseSync.pushUserFields(
+            uid,
+            mapOf(
+                "displayName" to cleanName,
+                "phone" to cleanPhone,
+                "phoneNumber" to cleanPhone,
+                "updatedAtMs" to System.currentTimeMillis()
+            )
+        )
+        if (currentUser == null) {
+            return Result.success(Unit)
         }
         val userDocRef = db.collection(COLLECTION_USERS).document(uid)
         return try {
-            val cleanName = displayName.trim().take(120)
-            val cleanPhone = phoneNumber.trim().take(32)
             userDocRef.update(
                 mapOf(
                     "displayName" to cleanName,
@@ -392,15 +444,6 @@ class DeviceTrialRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).awaitTask()
-            RealtimeDatabaseSync.pushUserFields(
-                uid,
-                mapOf(
-                    "displayName" to cleanName,
-                    "phone" to cleanPhone,
-                    "phoneNumber" to cleanPhone,
-                    "updatedAtMs" to System.currentTimeMillis()
-                )
-            )
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e

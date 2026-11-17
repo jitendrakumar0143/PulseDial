@@ -26,6 +26,7 @@ import com.example.data.CallLogEntry
 import com.example.data.ContactEntry
 import com.example.data.ContactsRepository
 import com.example.data.DialerPreferences
+import com.example.data.firebase.GoogleAuthHelper
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.data.firebase.SettingsManager
 import com.example.databinding.ActivityCallDetailBinding
@@ -109,7 +110,7 @@ class CallDetailActivity : AppCompatActivity() {
 
     private fun hasAuthorizedAccess(): Boolean {
         val manager = SubscriptionManager(this)
-        val currentEmail = runCatching { Firebase.auth.currentUser?.email }.getOrNull()
+        val currentEmail = GoogleAuthHelper.resolveActiveEmail(this)
         val isAdmin = UpiPaymentHelper.isAdminEmail(currentEmail)
         return manager.isSubscriptionActive() && !manager.isMaintenanceLocked(isAdmin)
     }

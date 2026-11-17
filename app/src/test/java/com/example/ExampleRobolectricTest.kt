@@ -3,6 +3,7 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.DialerPreferences
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -876,17 +877,16 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `history fragment layout provides recent calls and playable recordings playlist with mini player`() {
+    fun `history fragment layout shows recent calls only and hides recordings playlist from call app`() {
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
         val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
         val root = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_history, null)
 
-        assertTrue(root.findViewById<android.view.View>(R.id.recycler_history) != null)
-        assertTrue(root.findViewById<android.view.View>(R.id.recycler_recordings) != null)
-        assertTrue(root.findViewById<android.view.View>(R.id.btn_mode_calls) != null)
-        assertTrue(root.findViewById<android.view.View>(R.id.btn_mode_recordings) != null)
-        assertTrue(root.findViewById<android.view.View>(R.id.card_recording_folder_banner) != null)
-        assertTrue(root.findViewById<android.view.View>(R.id.card_mini_player) != null)
+        assertEquals(android.view.View.VISIBLE, root.findViewById<android.view.View>(R.id.recycler_history).visibility)
+        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.toggle_history_mode).visibility)
+        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.recycler_recordings).visibility)
+        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.card_recording_folder_banner).visibility)
+        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.card_mini_player).visibility)
     }
 
     @Test
@@ -1553,5 +1553,1040 @@ class ExampleRobolectricTest {
         assertFalse(prefs.isLoggedIn)
         assertFalse(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
     }
+
+    @Test
+    fun `subscriptionEnforcementService revokes Pro immediately on single-node RTDB updates`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+        com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+
+        val nowMs = 1_900_000_000_000L
+        val expiredInstallMs = nowMs - (10L * DialerPreferences.ONE_DAY_MILLIS)
+
+        // 1. Grant Pro on an expired trial
+        val activeState = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = app,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            isPremium = true,
+            isBlocked = false,
+            installDateMs = expiredInstallMs,
+            nowMs = nowMs
+        )
+        assertTrue(activeState.isPremium)
+        assertTrue(activeState.isSubscriptionActive)
+        assertTrue(activeState.isRecordingAllowed)
+        assertFalse(activeState.shouldRestrictUiToAccountTab)
+
+        // 2. Single-node RTDB update: only /users/{uid}/isPremium -> false
+        val revokedViaPremiumFlag = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = app,
+            isPremium = false,
+            nowMs = nowMs + 1000L
+        )
+        assertFalse(revokedViaPremiumFlag.isPremium)
+        assertFalse(revokedViaPremiumFlag.isSubscriptionActive)
+        assertFalse(revokedViaPremiumFlag.isRecordingAllowed)
+        assertTrue(revokedViaPremiumFlag.shouldRestrictUiToAccountTab)
+
+        // 3. Re-grant Pro, then revoke via single-node /users/{uid}/subscriptionStatus -> "expired"
+        com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = app,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            isPremium = true,
+            nowMs = nowMs + 2000L
+        )
+        val revokedViaStatusNode = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = app,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_EXPIRED,
+            nowMs = nowMs + 3000L
+        )
+        assertFalse(revokedViaStatusNode.isPremium)
+        assertFalse(revokedViaStatusNode.isSubscriptionActive)
+        assertFalse(revokedViaStatusNode.isRecordingAllowed)
+        assertTrue(revokedViaStatusNode.shouldRestrictUiToAccountTab)
+
+        com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+    }
+
+    @Test
+    fun `realtimeDatabaseSync round-trips blockedNumbers and quickDeclineResponses and coerces mixed RTDB types`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+        prefs.userPhoneNumber = "+91 90000 11111"
+
+        val mixedRawUser = mapOf<String, Any?>(
+            "uid" to "u_mixed_1",
+            "email" to "user@example.com",
+            "phone" to DialerPreferences.DEFAULT_USER_NUMBER,
+            "isPremium" to "true",
+            "isBlocked" to 0,
+            "installDate" to "1800000000000",
+            "announcerEnabled" to 1,
+            "blockedNumbers" to listOf("9876543210", "9123456789"),
+            "quickDeclineResponses" to listOf("Busy right now", "Call you back")
+        )
+        val parsedUser = com.example.data.firebase.RealtimeDatabaseSync.parseUserSnapshot(
+            uid = "u_mixed_1",
+            map = mixedRawUser,
+            fallback = null
+        )
+        assertTrue(parsedUser.isPremiumUser)
+        assertFalse(parsedUser.isBlocked)
+        assertTrue(parsedUser.announcerEnabled)
+        assertEquals(1800000000000L, parsedUser.installDate?.toDate()?.time)
+        assertEquals(listOf("9876543210", "9123456789"), parsedUser.blockedNumbers)
+        assertEquals(listOf("Busy right now", "Call you back"), parsedUser.quickDeclineResponses)
+
+        com.example.data.firebase.SettingsManager.applyRtdbUserEntitlement(
+            user = parsedUser,
+            prefs = prefs,
+            hasBlockedNumbersField = true
+        )
+        assertTrue(prefs.isNumberBlocked("+91 98765 43210"))
+        assertEquals(listOf("Busy right now", "Call you back"), prefs.getQuickDeclineResponses())
+        assertEquals("+91 90000 11111", prefs.userPhoneNumber)
+
+        val mixedConfigMap = mapOf<String, Any?>(
+            "trialDays" to "14",
+            "subscriptionPriceInr" to "399",
+            "allowCallRecording" to "false",
+            "hideSubscriptionUI" to 1
+        )
+        val parsedConfig = com.example.data.firebase.RealtimeDatabaseSync.parseAppConfigSnapshot(
+            map = mixedConfigMap,
+            fallback = com.example.data.firebase.AppConfig()
+        )
+        assertEquals(14L, parsedConfig.trialDays)
+        assertEquals(399L, parsedConfig.subscriptionPriceInr)
+        assertFalse(parsedConfig.allowCallRecording)
+        assertTrue(parsedConfig.hideSubscriptionUI)
+    }
+
+    @Test
+    fun `dialerPreferences applyAppConfig preserves user customized toggles while enforcing recording policy`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+
+        // Mark both toggles as explicitly customized by the user
+        prefs.autoCallRecording = false
+        prefs.markAutoRecordingCustomizedByUser()
+        prefs.dialpadTonesEnabled = false
+        prefs.markDialpadTonesCustomizedByUser()
+
+        // Admin enables global defaults while recording is allowed -> user's custom choices stay intact
+        prefs.applyAppConfig(
+            com.example.data.firebase.AppConfig(
+                allowCallRecording = true,
+                defaultAutoRecording = true,
+                dialpadTonesDefault = true
+            )
+        )
+        assertFalse(prefs.autoCallRecording)
+        assertFalse(prefs.dialpadTonesEnabled)
+
+        // Even if user turned auto-recording ON, disabling allowCallRecording globally turns it OFF
+        prefs.autoCallRecording = true
+        prefs.applyAppConfig(
+            com.example.data.firebase.AppConfig(
+                allowCallRecording = false,
+                defaultAutoRecording = true,
+                dialpadTonesDefault = true
+            )
+        )
+        assertFalse(prefs.autoCallRecording)
+        assertFalse(prefs.dialpadTonesEnabled)
+    }
+
+    @Test
+    fun `enhanced app logo resources, separate file manager folders, voip recording rules, and settings UI work`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+
+        // 1. Enhanced adaptive launcher icon assets and color match
+        val bgDrawable = androidx.core.content.ContextCompat.getDrawable(app, R.drawable.ic_launcher_background)
+        assertTrue(bgDrawable is android.graphics.drawable.GradientDrawable)
+        assertEquals(
+            android.graphics.Color.parseColor("#08132F"),
+            (bgDrawable as android.graphics.drawable.GradientDrawable).color?.defaultColor
+        )
+        assertTrue(androidx.core.content.ContextCompat.getDrawable(app, R.drawable.pulsedial_enhanced_icon_fg) != null)
+        assertTrue(androidx.core.content.ContextCompat.getDrawable(app, R.drawable.ic_launcher_foreground) != null)
+        assertTrue(androidx.core.content.ContextCompat.getDrawable(app, R.mipmap.ic_launcher) != null)
+        assertTrue(androidx.core.content.ContextCompat.getDrawable(app, R.mipmap.ic_launcher_round) != null)
+
+        // 2. VoIP package mapping & strictly separate File Manager folders
+        assertEquals(
+            com.example.recording.CallRecordingSource.WHATSAPP,
+            com.example.recording.CallRecordingSource.fromPackageName("com.whatsapp")
+        )
+        assertEquals(
+            com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS,
+            com.example.recording.CallRecordingSource.fromPackageName("com.whatsapp.w4b")
+        )
+        assertEquals(
+            com.example.recording.CallRecordingSource.GOOGLE_MEET,
+            com.example.recording.CallRecordingSource.fromPackageName("com.google.android.apps.meetings")
+        )
+        assertEquals(
+            com.example.recording.CallRecordingSource.GOOGLE_MEET,
+            com.example.recording.CallRecordingSource.fromPackageName("com.google.android.apps.tachyon")
+        )
+        assertEquals(
+            com.example.recording.CallRecordingSource.TELEGRAM,
+            com.example.recording.CallRecordingSource.fromPackageName("org.telegram.messenger")
+        )
+        assertEquals(null, com.example.recording.CallRecordingSource.fromPackageName("com.example.other"))
+
+        val paths = com.example.recording.CallRecordingSource.entries.map { it.relativePublicPath() }
+        assertEquals(5, paths.toSet().size)
+        assertEquals("Music/PulseDial/Cellular Call Recordings", com.example.recording.CallRecordingSource.CELLULAR.relativePublicPath())
+        assertEquals("Music/PulseDial/WhatsApp Call Recordings", com.example.recording.CallRecordingSource.WHATSAPP.relativePublicPath())
+        assertEquals("Music/PulseDial/WhatsApp Business Call Recordings", com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS.relativePublicPath())
+        assertEquals("Music/PulseDial/Meet Call Recordings", com.example.recording.CallRecordingSource.GOOGLE_MEET.relativePublicPath())
+        assertEquals("Music/PulseDial/Telegram Call Recordings", com.example.recording.CallRecordingSource.TELEGRAM.relativePublicPath())
+
+        assertEquals(
+            "+91_98765_43210_20261116_093000.mp3",
+            com.example.recording.CallRecorder.buildFileName(
+                "+91 98765 43210",
+                com.example.recording.CallRecordingSource.CELLULAR,
+                "20261116_093000"
+            )
+        )
+        assertEquals(
+            "WhatsApp_Business_+919876543210_20261116_093000.mp3",
+            com.example.recording.CallRecorder.buildFileName(
+                "+919876543210",
+                com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS,
+                "20261116_093000"
+            )
+        )
+        assertEquals(
+            "WhatsApp_Rahul_20261116_093000.mp3",
+            com.example.recording.CallRecorder.buildFileName(
+                "Rahul",
+                com.example.recording.CallRecordingSource.WHATSAPP,
+                "20261116_093000"
+            )
+        )
+        assertEquals(
+            "Meet_TeamSync_20261116_093000.mp3",
+            com.example.recording.CallRecorder.buildFileName(
+                "TeamSync",
+                com.example.recording.CallRecordingSource.GOOGLE_MEET,
+                "20261116_093000"
+            )
+        )
+
+        // 3. VoIP entitlement, per-app toggles, Cellular preemption & Admin kill-switch
+        prefs.recordWhatsappCalls = true
+        prefs.recordWhatsappBusinessCalls = false
+        prefs.recordMeetCalls = true
+        prefs.recordTelegramCalls = true
+
+        assertTrue(
+            com.example.recording.VoipCallRecorderManager.shouldRecordVoipSource(
+                prefs = prefs,
+                source = com.example.recording.CallRecordingSource.WHATSAPP,
+                subscriptionActive = true,
+                policyAllowed = true,
+                adminBlocked = false,
+                cellularCallActive = false
+            )
+        )
+        assertFalse(
+            com.example.recording.VoipCallRecorderManager.shouldRecordVoipSource(
+                prefs = prefs,
+                source = com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS,
+                subscriptionActive = true,
+                policyAllowed = true,
+                adminBlocked = false,
+                cellularCallActive = false
+            )
+        )
+        assertFalse(
+            com.example.recording.VoipCallRecorderManager.shouldRecordVoipSource(
+                prefs = prefs,
+                source = com.example.recording.CallRecordingSource.GOOGLE_MEET,
+                subscriptionActive = true,
+                policyAllowed = true,
+                adminBlocked = false,
+                cellularCallActive = true
+            )
+        )
+        assertFalse(
+            com.example.recording.VoipCallRecorderManager.shouldRecordVoipSource(
+                prefs = prefs,
+                source = com.example.recording.CallRecordingSource.TELEGRAM,
+                subscriptionActive = false,
+                policyAllowed = true,
+                adminBlocked = false,
+                cellularCallActive = false
+            )
+        )
+
+        // 4. RealtimeDatabaseSync round-trip & SettingsManager apply for all 4 VoIP flags
+        val voipUser = com.example.data.firebase.UserEntitlement(
+            id = "u_voip_1",
+            userId = "u_voip_1",
+            recordWhatsappCalls = false,
+            recordWhatsappBusinessCalls = true,
+            recordMeetCalls = false,
+            recordTelegramCalls = true
+        )
+        val rtdbMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbUserMap(voipUser)
+        val parsedVoip = com.example.data.firebase.RealtimeDatabaseSync.parseUserSnapshot("u_voip_1", rtdbMap, null)
+        assertFalse(parsedVoip.recordWhatsappCalls)
+        assertTrue(parsedVoip.recordWhatsappBusinessCalls)
+        assertFalse(parsedVoip.recordMeetCalls)
+        assertTrue(parsedVoip.recordTelegramCalls)
+
+        com.example.data.firebase.SettingsManager.applyRtdbUserEntitlement(parsedVoip, prefs)
+        assertFalse(prefs.recordWhatsappCalls)
+        assertTrue(prefs.recordWhatsappBusinessCalls)
+        assertFalse(prefs.recordMeetCalls)
+        assertTrue(prefs.recordTelegramCalls)
+
+        // 5. Settings UI renders all 4 VoIP switches & separate File Manager folder button
+        val settingsView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_settings, null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.card_voip_call_recording) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_whatsapp) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_whatsapp_business) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_meet) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_telegram) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.tv_voip_folders_guide) != null)
+        assertTrue(settingsView.findViewById<android.view.View>(R.id.btn_open_file_manager_recordings) != null)
+    }
+
+    @Test
+    fun `settingsFragment and subscriptionEnforcementService do not trigger infinite collector loop or ANR`() =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            val prefs = DialerPreferences(app)
+            prefs.resetSessionEntitlementsOnSignOut()
+            com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+
+            val nowMs = System.currentTimeMillis()
+            prefs.firstLaunchTime = nowMs
+            prefs.isPremiumUser = false
+
+            // Seed initial state
+            com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+                context = app,
+                subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_TRIAL,
+                isPremium = false,
+                isBlocked = false,
+                installDateMs = nowMs,
+                nowMs = nowMs
+            )
+
+            // Collect emissions while calling shouldRestrictUi / canStartCallRecording repeatedly at later timestamps
+            var emissions = 0
+            val collectorJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                com.example.billing.SubscriptionEnforcementService.state.collect {
+                    emissions++
+                }
+            }
+            val initialEmissions = emissions
+            repeat(25) { step ->
+                val checkNow = nowMs + (step + 1) * 50L
+                assertFalse(com.example.billing.SubscriptionEnforcementService.shouldRestrictUi(app, checkNow))
+                assertTrue(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(app, checkNow))
+            }
+            assertEquals("No redundant StateFlow emissions should occur when nothing materially changed", initialEmissions, emissions)
+
+            // A material change (e.g. upgrading to Pro) MUST immediately emit once
+            com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+                context = app,
+                subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+                isPremium = true,
+                nowMs = nowMs + 2000L
+            )
+            assertEquals(initialEmissions + 1, emissions)
+            collectorJob.cancel()
+
+            // Launch SettingsFragment inside an AppCompatActivity and pump main looper to verify zero freeze/loop
+            val activityController = org.robolectric.Robolectric.buildActivity(
+                androidx.appcompat.app.AppCompatActivity::class.java
+            )
+            val hostActivity = activityController.get()
+            hostActivity.setTheme(R.style.Theme_PulseDial)
+            val container = android.widget.FrameLayout(hostActivity).apply {
+                id = android.R.id.content
+            }
+            activityController.create()
+            hostActivity.setContentView(container)
+            activityController.start().resume()
+
+            val settingsFragment = com.example.ui.settings.SettingsFragment()
+            hostActivity.supportFragmentManager.beginTransaction()
+                .replace(android.R.id.content, settingsFragment)
+                .commitNow()
+
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            settingsFragment.refreshTrialUi()
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+            assertTrue(settingsFragment.isAdded)
+            assertTrue(settingsFragment.view != null)
+            assertTrue(settingsFragment.requireView().findViewById<android.view.View>(R.id.switch_record_whatsapp) != null)
+            assertTrue(settingsFragment.requireView().findViewById<android.view.View>(R.id.switch_vip_announcer) != null)
+
+            activityController.pause().stop().destroy()
+            com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+        }
+
+    @Test
+    fun `multi-party conference helpers enforce swap, merge, split, and continuous recording rules`() {
+        // 1. Hold / Swap decision matrix
+        assertEquals(
+            com.example.telecom.HoldSwapAction.HOLD,
+            com.example.telecom.CallManager.resolveHoldSwapAction(listOf(android.telecom.Call.STATE_ACTIVE))
+        )
+        assertEquals(
+            com.example.telecom.HoldSwapAction.UNHOLD,
+            com.example.telecom.CallManager.resolveHoldSwapAction(listOf(android.telecom.Call.STATE_HOLDING))
+        )
+        assertEquals(
+            com.example.telecom.HoldSwapAction.SWAP,
+            com.example.telecom.CallManager.resolveHoldSwapAction(
+                listOf(android.telecom.Call.STATE_ACTIVE, android.telecom.Call.STATE_HOLDING)
+            )
+        )
+
+        // 2. Merge visibility & capability checks
+        assertFalse(com.example.telecom.CallManager.shouldEnableMergeCalls(1, hasMergeCapability = false, hasConferenceableCalls = false))
+        assertTrue(com.example.telecom.CallManager.shouldEnableMergeCalls(2, hasMergeCapability = false, hasConferenceableCalls = false))
+        assertTrue(com.example.telecom.CallManager.shouldEnableMergeCalls(1, hasMergeCapability = true, hasConferenceableCalls = false))
+        assertTrue(com.example.telecom.CallManager.shouldEnableMergeCalls(1, hasMergeCapability = false, hasConferenceableCalls = true))
+
+        // 3. Split capability gate
+        assertTrue(
+            com.example.telecom.CallManager.canSplitParticipant(
+                android.telecom.Call.Details.CAPABILITY_SEPARATE_FROM_CONFERENCE
+            )
+        )
+        assertFalse(com.example.telecom.CallManager.canSplitParticipant(android.telecom.Call.Details.CAPABILITY_HOLD))
+
+        // 4. Seamless recording continuity across hold, dial 2nd caller, conference merge, and partial disconnect
+        assertTrue(
+            "Recording MUST continue while Call 1 is put on hold to dial Call 2",
+            com.example.telecom.CallManager.shouldKeepRecordingActive(
+                listOf(android.telecom.Call.STATE_HOLDING),
+                totalTrackedCalls = 1
+            )
+        )
+        assertTrue(
+            "Recording MUST continue while Call 1 is on hold and Call 2 is dialing",
+            com.example.telecom.CallManager.shouldKeepRecordingActive(
+                listOf(android.telecom.Call.STATE_HOLDING, android.telecom.Call.STATE_DIALING),
+                totalTrackedCalls = 2
+            )
+        )
+        assertTrue(
+            "Recording MUST continue if one participant disconnects while conference remains active",
+            com.example.telecom.CallManager.shouldKeepRecordingActive(
+                listOf(android.telecom.Call.STATE_DISCONNECTED, android.telecom.Call.STATE_ACTIVE),
+                totalTrackedCalls = 2
+            )
+        )
+        assertFalse(
+            "Recording MUST stop when ALL calls are disconnected or removed",
+            com.example.telecom.CallManager.shouldKeepRecordingActive(
+                listOf(android.telecom.Call.STATE_DISCONNECTED),
+                totalTrackedCalls = 1
+            )
+        )
+        assertFalse(
+            "Recording MUST stop when tracked calls list becomes empty",
+            com.example.telecom.CallManager.shouldKeepRecordingActive(emptyList(), totalTrackedCalls = 0)
+        )
+    }
+
+    @Test
+    fun `in-call conference XML layouts and participant item include all conference actions`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val themedContext = android.view.ContextThemeWrapper(context, R.style.Theme_PulseDial)
+        val inflater = android.view.LayoutInflater.from(themedContext)
+
+        val inCallView = inflater.inflate(R.layout.activity_in_call, null)
+        assertTrue(inCallView.findViewById<android.view.View>(R.id.card_secondary_call) != null)
+        assertTrue(inCallView.findViewById<android.view.View>(R.id.btn_manage_conference) != null)
+        assertTrue(inCallView.findViewById<android.view.View>(R.id.btn_add_call) != null)
+        assertTrue(inCallView.findViewById<android.view.View>(R.id.btn_hold_swap) != null)
+        assertTrue(inCallView.findViewById<android.view.View>(R.id.btn_merge_calls) != null)
+
+        val sheetView = inflater.inflate(R.layout.bottom_sheet_conference_participants, null)
+        assertTrue(sheetView.findViewById<android.view.View>(R.id.recycler_conference_participants) != null)
+        assertTrue(sheetView.findViewById<android.view.View>(R.id.tv_conference_sheet_title) != null)
+
+        val rowView = inflater.inflate(R.layout.item_conference_participant, null)
+        assertTrue(rowView.findViewById<android.view.View>(R.id.tv_participant_name) != null)
+        assertTrue(rowView.findViewById<android.view.View>(R.id.tv_participant_number) != null)
+        assertTrue(rowView.findViewById<android.view.View>(R.id.btn_split) != null)
+        assertTrue(rowView.findViewById<android.view.View>(R.id.btn_drop) != null)
+
+        val formattedTitle = context.getString(R.string.incall_conference_title, 3)
+        assertEquals("Conference Call (3 Participants)", formattedTitle)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `proximity sensor toggles speakerphone on and off during active multi-party calls`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val sensorManager = context.getSystemService(android.hardware.SensorManager::class.java)
+        val shadowSensorManager = org.robolectric.Shadows.shadowOf(sensorManager)
+        val proximitySensor = org.robolectric.shadows.ShadowSensor.newInstance(
+            android.hardware.Sensor.TYPE_PROXIMITY
+        )
+        shadowSensorManager.addSensor(proximitySensor)
+
+        // Pure range math check
+        assertTrue(com.example.telecom.ProximitySpeakerController.isNearEar(0.0f, 5.0f))
+        assertFalse(com.example.telecom.ProximitySpeakerController.isNearEar(5.0f, 5.0f))
+        assertTrue(com.example.telecom.ProximitySpeakerController.isNearEar(2.5f, 8.0f))
+        assertFalse(com.example.telecom.ProximitySpeakerController.isNearEar(6.0f, 8.0f))
+
+        // Active multi-party detection check
+        assertFalse(
+            com.example.telecom.CallManager.isActiveMultiPartyCall(
+                com.example.telecom.CallUiState(
+                    hasActiveCall = true,
+                    callState = android.telecom.Call.STATE_ACTIVE,
+                    topLevelCallCount = 1,
+                    isConference = false
+                )
+            )
+        )
+        assertTrue(
+            com.example.telecom.CallManager.isActiveMultiPartyCall(
+                com.example.telecom.CallUiState(
+                    hasActiveCall = true,
+                    callState = android.telecom.Call.STATE_ACTIVE,
+                    isConference = true,
+                    conferenceParticipantCount = 2
+                )
+            )
+        )
+        assertTrue(
+            com.example.telecom.CallManager.isActiveMultiPartyCall(
+                com.example.telecom.CallUiState(
+                    hasActiveCall = true,
+                    callState = android.telecom.Call.STATE_ACTIVE,
+                    topLevelCallCount = 2
+                )
+            )
+        )
+
+        val speakerEvents = mutableListOf<Boolean>()
+        val controller = com.example.telecom.ProximitySpeakerController(context) { speakerOn ->
+            speakerEvents.add(speakerOn)
+        }
+
+        // Single 1:1 call does NOT activate listener
+        controller.onCallUiStateChanged(
+            com.example.telecom.CallUiState(
+                hasActiveCall = true,
+                callState = android.telecom.Call.STATE_ACTIVE,
+                topLevelCallCount = 1
+            )
+        )
+        assertFalse(controller.isListening)
+
+        // Merged conference / multi-party call activates listener
+        controller.onCallUiStateChanged(
+            com.example.telecom.CallUiState(
+                hasActiveCall = true,
+                callState = android.telecom.Call.STATE_ACTIVE,
+                isConference = true,
+                conferenceParticipantCount = 3
+            )
+        )
+        assertTrue(controller.isListening)
+        assertTrue(shadowSensorManager.hasListener(controller))
+
+        // Moving device away from ear -> speakerphone ON
+        controller.handleProximityDistance(distanceCm = 5.0f, maxRangeCm = 5.0f)
+        // Duplicate far reading should not emit again
+        controller.handleProximityDistance(distanceCm = 5.0f, maxRangeCm = 5.0f)
+        // Moving device toward ear -> speakerphone OFF
+        controller.handleProximityDistance(distanceCm = 0.0f, maxRangeCm = 5.0f)
+        // Moving device away again -> speakerphone ON
+        controller.handleProximityDistance(distanceCm = 5.0f, maxRangeCm = 5.0f)
+
+        assertEquals(listOf(true, false, true), speakerEvents)
+
+        // Connected Bluetooth / wired headset is respected without switching to speaker/earpiece
+        controller.onAudioRouteChanged(android.telecom.CallAudioState.ROUTE_BLUETOOTH)
+        controller.handleProximityDistance(distanceCm = 0.0f, maxRangeCm = 5.0f)
+        assertEquals(3, speakerEvents.size)
+
+        // Ending multi-party call unregisters the proximity listener cleanly
+        controller.onCallUiStateChanged(com.example.telecom.CallUiState(hasActiveCall = false))
+        assertFalse(controller.isListening)
+        assertFalse(shadowSensorManager.hasListener(controller))
+        controller.release()
+    }
+
+    @Test
+    fun `per-app voip recording folders persist independently, target chosen directory directly, and bind in SettingsFragment`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+        prefs.resetSessionEntitlementsOnSignOut()
+        com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+        prefs.firstLaunchTime = System.currentTimeMillis()
+        prefs.isPremiumUser = true
+
+        // Clean slate
+        com.example.recording.CallRecordingSource.entries.forEach { prefs.clearCustomFolder(it) }
+        prefs.recordingFolderUri = null
+        prefs.recordingFolderName = null
+
+        // 1. Assign completely separate File Manager folders to each Other App
+        val waUri = "content://com.android.externalstorage.documents/tree/primary%3ADownloads%2FWA_Recs"
+        val wabUri = "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FBizWA_Recs"
+        val meetUri = "content://com.android.externalstorage.documents/tree/primary%3AMusic%2FMeetCalls"
+        val tgUri = "content://com.android.externalstorage.documents/tree/primary%3APodcasts%2FTGCalls"
+
+        prefs.setCustomFolder(com.example.recording.CallRecordingSource.WHATSAPP, waUri, "WA_Recs")
+        prefs.setCustomFolder(com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS, wabUri, "BizWA_Recs")
+        prefs.setCustomFolder(com.example.recording.CallRecordingSource.GOOGLE_MEET, meetUri, "MeetCalls")
+        prefs.setCustomFolder(com.example.recording.CallRecordingSource.TELEGRAM, tgUri, "TGCalls")
+
+        val waTarget = prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.WHATSAPP)
+        val wabTarget = prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS)
+        val meetTarget = prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.GOOGLE_MEET)
+        val tgTarget = prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.TELEGRAM)
+        val cellularTarget = prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.CELLULAR)
+
+        assertEquals(waUri, waTarget.treeUri)
+        assertEquals("WA_Recs", waTarget.displayName)
+        assertTrue(waTarget.isCustomPerSource)
+        assertFalse(waTarget.createSubfolder)
+
+        assertEquals(wabUri, wabTarget.treeUri)
+        assertEquals("BizWA_Recs", wabTarget.displayName)
+        assertTrue(wabTarget.isCustomPerSource)
+        assertFalse(wabTarget.createSubfolder)
+
+        assertEquals(meetUri, meetTarget.treeUri)
+        assertEquals("MeetCalls", meetTarget.displayName)
+        assertTrue(meetTarget.isCustomPerSource)
+        assertFalse(meetTarget.createSubfolder)
+
+        assertEquals(tgUri, tgTarget.treeUri)
+        assertEquals("TGCalls", tgTarget.displayName)
+        assertTrue(tgTarget.isCustomPerSource)
+        assertFalse(tgTarget.createSubfolder)
+
+        // Cellular remains unaffected on its own default path
+        assertEquals(null, cellularTarget.treeUri)
+        assertEquals("Music/PulseDial/Cellular Call Recordings", cellularTarget.displayName)
+        assertFalse(cellularTarget.isCustomPerSource)
+        assertTrue(cellularTarget.createSubfolder)
+
+        // 2. DocumentFile direct-save vs subfolder verification using local temp DocumentFile tree
+        val tempRootDir = java.io.File(app.cacheDir, "test_saf_root_${System.nanoTime()}").apply { mkdirs() }
+        try {
+            val rootDoc = androidx.documentfile.provider.DocumentFile.fromFile(tempRootDir)
+            val directTarget = com.example.recording.CallRecorder.resolveSafTargetDirectory(
+                rootDir = rootDoc,
+                source = com.example.recording.CallRecordingSource.WHATSAPP,
+                createSubfolder = waTarget.createSubfolder
+            )
+            assertEquals(tempRootDir.name, directTarget.name)
+
+            val subTarget = com.example.recording.CallRecorder.resolveSafTargetDirectory(
+                rootDir = rootDoc,
+                source = com.example.recording.CallRecordingSource.CELLULAR,
+                createSubfolder = cellularTarget.createSubfolder
+            )
+            assertEquals("Cellular Call Recordings", subTarget.name)
+        } finally {
+            tempRootDir.deleteRecursively()
+        }
+
+        // 3. Clearing one app reverts only that app without affecting the other 3
+        prefs.clearCustomFolder(com.example.recording.CallRecordingSource.GOOGLE_MEET)
+        val meetDefault = prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.GOOGLE_MEET)
+        assertEquals(null, meetDefault.treeUri)
+        assertEquals("Music/PulseDial/Meet Call Recordings", meetDefault.displayName)
+        assertFalse(meetDefault.isCustomPerSource)
+        assertEquals(waUri, prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.WHATSAPP).treeUri)
+
+        // 4. Render inside SettingsFragment and assert distinct per-app folder paths & reset visibility
+        val activityController = org.robolectric.Robolectric.buildActivity(
+            androidx.appcompat.app.AppCompatActivity::class.java
+        )
+        val hostActivity = activityController.get()
+        hostActivity.setTheme(R.style.Theme_PulseDial)
+        val container = android.widget.FrameLayout(hostActivity).apply { id = android.R.id.content }
+        activityController.create()
+        hostActivity.setContentView(container)
+        activityController.start().resume()
+
+        val settingsFragment = com.example.ui.settings.SettingsFragment()
+        hostActivity.supportFragmentManager.beginTransaction()
+            .replace(android.R.id.content, settingsFragment)
+            .commitNow()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        val view = settingsFragment.requireView()
+        val tvWa = view.findViewById<android.widget.TextView>(R.id.tv_whatsapp_folder_path)
+        val tvWab = view.findViewById<android.widget.TextView>(R.id.tv_whatsapp_business_folder_path)
+        val tvMeet = view.findViewById<android.widget.TextView>(R.id.tv_meet_folder_path)
+        val tvTg = view.findViewById<android.widget.TextView>(R.id.tv_telegram_folder_path)
+
+        val btnWa = view.findViewById<android.widget.Button>(R.id.btn_folder_whatsapp)
+        val btnResetWa = view.findViewById<android.view.View>(R.id.btn_reset_folder_whatsapp)
+        val btnMeet = view.findViewById<android.widget.Button>(R.id.btn_folder_meet)
+        val btnResetMeet = view.findViewById<android.view.View>(R.id.btn_reset_folder_meet)
+
+        assertTrue(tvWa.text.toString().contains("WA_Recs"))
+        assertTrue(tvWab.text.toString().contains("BizWA_Recs"))
+        assertTrue(tvMeet.text.toString().contains("Music/PulseDial/Meet Call Recordings"))
+        assertTrue(tvTg.text.toString().contains("TGCalls"))
+
+        assertEquals(app.getString(R.string.voip_folder_change_btn), btnWa.text.toString())
+        assertEquals(android.view.View.VISIBLE, btnResetWa.visibility)
+        assertEquals(app.getString(R.string.voip_folder_select_btn), btnMeet.text.toString())
+        assertEquals(android.view.View.GONE, btnResetMeet.visibility)
+
+        // Clicking reset for WhatsApp clears only WhatsApp's custom folder in UI
+        btnResetWa.performClick()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(null, prefs.getCustomFolderUri(com.example.recording.CallRecordingSource.WHATSAPP))
+        assertEquals(android.view.View.GONE, btnResetWa.visibility)
+        assertTrue(tvWa.text.toString().contains("Music/PulseDial/WhatsApp Call Recordings"))
+        assertTrue(tvTg.text.toString().contains("TGCalls"))
+
+        activityController.pause().stop().destroy()
+    }
+
+    @Test
+    fun `call history csv exporter formats RFC4180 csv, writes to MediaStore Documents, and wires HistoryFragment button`(): Unit =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            org.robolectric.Shadows.shadowOf(app).grantPermissions(
+                android.Manifest.permission.READ_CALL_LOG
+            )
+
+            // 1. Pure CSV generation & escaping check
+            val utcTz = java.util.TimeZone.getTimeZone("UTC")
+            val sampleCalls = listOf(
+                com.example.data.CallLogEntry(
+                    id = 101L,
+                    name = "Sharma, \"Alice\"",
+                    number = "+91 98765 43210",
+                    type = android.provider.CallLog.Calls.INCOMING_TYPE,
+                    timestampMillis = 1_700_000_000_000L,
+                    durationSeconds = 3910L
+                ),
+                com.example.data.CallLogEntry(
+                    id = 102L,
+                    name = null,
+                    number = "+91 91234 56789",
+                    type = android.provider.CallLog.Calls.MISSED_TYPE,
+                    timestampMillis = 1_700_000_060_000L,
+                    durationSeconds = 0L
+                ),
+                com.example.data.CallLogEntry(
+                    id = 103L,
+                    name = "Bob\nOffice",
+                    number = "02240001234",
+                    type = android.provider.CallLog.Calls.OUTGOING_TYPE,
+                    timestampMillis = 1_700_000_120_000L,
+                    durationSeconds = 135L
+                )
+            )
+            val csv = com.example.data.CallHistoryCsvExporter.buildCsvContent(sampleCalls, utcTz)
+            assertTrue(csv.startsWith("ID,Contact Name,Phone Number,Call Type,Date Time,Timestamp (ms),Duration (seconds),Duration (Formatted)\n"))
+            assertTrue(csv.contains("101,\"Sharma, \"\"Alice\"\"\",+91 98765 43210,Incoming,"))
+            assertTrue(csv.contains(",3910,1h 5m 10s\n"))
+            assertTrue(csv.contains("102,,+91 91234 56789,Missed,"))
+            assertTrue(csv.contains(",0,0s\n"))
+            assertTrue(csv.contains("103,\"Bob\nOffice\",02240001234,Outgoing,"))
+            assertTrue(csv.contains(",135,2m 15s\n"))
+
+            val exporter = com.example.data.CallHistoryCsvExporter(app)
+            assertFalse(exporter.needsLegacyWritePermission())
+
+            // Empty call list fails gracefully
+            val emptyResult = exporter.exportToDocuments(emptyList())
+            assertFalse(emptyResult.success)
+
+            // 2. MediaStore.Files Documents export + IS_PENDING lifecycle + CallLog provider for HistoryFragment
+            val exportedBackingFile = java.io.File(app.cacheDir, "test_exported_history_${System.nanoTime()}.csv")
+            exportedBackingFile.createNewFile()
+            var insertedRelativePath: String? = null
+            var insertedMimeType: String? = null
+            var updatedPendingState: Int? = null
+            val mediaItemUri = android.net.Uri.parse("content://${android.provider.MediaStore.AUTHORITY}/external_primary/file/777")
+
+            val fakeMediaStoreProvider = object : android.content.ContentProvider() {
+                override fun onCreate() = true
+                override fun getType(uri: android.net.Uri) = "text/csv"
+                override fun query(
+                    uri: android.net.Uri,
+                    projection: Array<out String>?,
+                    selection: String?,
+                    selectionArgs: Array<out String>?,
+                    sortOrder: String?
+                ) = null
+
+                override fun insert(uri: android.net.Uri, values: android.content.ContentValues?): android.net.Uri {
+                    insertedRelativePath = values?.getAsString(android.provider.MediaStore.MediaColumns.RELATIVE_PATH)
+                    insertedMimeType = values?.getAsString(android.provider.MediaStore.MediaColumns.MIME_TYPE)
+                    return mediaItemUri
+                }
+
+                override fun update(
+                    uri: android.net.Uri,
+                    values: android.content.ContentValues?,
+                    selection: String?,
+                    selectionArgs: Array<out String>?
+                ): Int {
+                    if (values?.containsKey(android.provider.MediaStore.MediaColumns.IS_PENDING) == true) {
+                        updatedPendingState = values.getAsInteger(android.provider.MediaStore.MediaColumns.IS_PENDING)
+                    }
+                    return 1
+                }
+
+                override fun delete(uri: android.net.Uri, selection: String?, selectionArgs: Array<out String>?) = 1
+
+                override fun openFile(uri: android.net.Uri, mode: String): android.os.ParcelFileDescriptor {
+                    return android.os.ParcelFileDescriptor.open(
+                        exportedBackingFile,
+                        android.os.ParcelFileDescriptor.MODE_READ_WRITE or android.os.ParcelFileDescriptor.MODE_TRUNCATE
+                    )
+                }
+            }
+            fakeMediaStoreProvider.attachInfo(
+                app,
+                android.content.pm.ProviderInfo().apply {
+                    authority = android.provider.MediaStore.AUTHORITY
+                }
+            )
+            org.robolectric.shadows.ShadowContentResolver.registerProviderInternal(
+                android.provider.MediaStore.AUTHORITY,
+                fakeMediaStoreProvider
+            )
+
+            val fakeCallLogProvider = object : android.content.ContentProvider() {
+                override fun onCreate() = true
+                override fun getType(uri: android.net.Uri) = null
+                override fun insert(uri: android.net.Uri, values: android.content.ContentValues?) = null
+                override fun update(uri: android.net.Uri, values: android.content.ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
+                override fun delete(uri: android.net.Uri, selection: String?, selectionArgs: Array<out String>?) = 0
+                override fun query(
+                    uri: android.net.Uri,
+                    projection: Array<out String>?,
+                    selection: String?,
+                    selectionArgs: Array<out String>?,
+                    sortOrder: String?
+                ): android.database.Cursor {
+                    val cols = arrayOf(
+                        android.provider.CallLog.Calls._ID,
+                        android.provider.CallLog.Calls.CACHED_NAME,
+                        android.provider.CallLog.Calls.NUMBER,
+                        android.provider.CallLog.Calls.TYPE,
+                        android.provider.CallLog.Calls.DATE,
+                        android.provider.CallLog.Calls.DURATION
+                    )
+                    return android.database.MatrixCursor(cols).apply {
+                        addRow(arrayOf<Any?>(1L, "Alice", "+91 98765 43210", android.provider.CallLog.Calls.INCOMING_TYPE, 1_700_000_000_000L, 45L))
+                        addRow(arrayOf<Any?>(2L, "Bob", "+91 91234 56789", android.provider.CallLog.Calls.OUTGOING_TYPE, 1_700_000_010_000L, 12L))
+                    }
+                }
+            }
+            org.robolectric.shadows.ShadowContentResolver.registerProviderInternal(
+                android.provider.CallLog.AUTHORITY,
+                fakeCallLogProvider
+            )
+
+            try {
+                val fixedNow = 1_700_000_000_000L
+                val result = exporter.exportToDocuments(sampleCalls, nowMs = fixedNow)
+                assertTrue(result.errorMessage ?: "Export failed", result.success)
+                assertEquals(3, result.exportedCount)
+                assertTrue(result.fileName.startsWith("PulseDial_CallHistory_"))
+                assertTrue(result.fileName.endsWith(".csv"))
+                assertEquals(android.os.Environment.DIRECTORY_DOCUMENTS, insertedRelativePath)
+                assertEquals("text/csv", insertedMimeType)
+                assertEquals(0, updatedPendingState)
+                assertEquals(mediaItemUri, result.fileUri)
+
+                val writtenCsv = exportedBackingFile.readText(java.nio.charset.StandardCharsets.UTF_8)
+                assertTrue(writtenCsv.contains("Sharma, \"\"Alice\"\""))
+                assertTrue(writtenCsv.contains("02240001234"))
+
+                // 3. HistoryFragment hosts btn_export_history_csv and exports on click
+                val activityController = org.robolectric.Robolectric.buildActivity(
+                    androidx.appcompat.app.AppCompatActivity::class.java
+                )
+                val hostActivity = activityController.get()
+                hostActivity.setTheme(R.style.Theme_PulseDial)
+                val container = android.widget.FrameLayout(hostActivity).apply { id = android.R.id.content }
+                activityController.create()
+                hostActivity.setContentView(container)
+                activityController.start().resume()
+
+                val historyFragment = com.example.ui.history.HistoryFragment()
+                hostActivity.supportFragmentManager.beginTransaction()
+                    .replace(android.R.id.content, historyFragment)
+                    .commitNow()
+
+                // Allow Dispatchers.IO reloadData coroutine to finish cleanly
+                Thread.sleep(150)
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+                val exportBtn = historyFragment.requireView().findViewById<android.view.View>(R.id.btn_export_history_csv)
+                assertTrue(exportBtn != null)
+                assertEquals(android.view.View.VISIBLE, historyFragment.requireView().findViewById<android.view.View>(R.id.layout_recent_calls_actions).visibility)
+
+                exportBtn.performClick()
+                Thread.sleep(150)
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+                val exportedFromUi = exportedBackingFile.readText(java.nio.charset.StandardCharsets.UTF_8)
+                assertTrue(exportedFromUi.contains("Alice"))
+                assertTrue(exportedFromUi.contains("+91 91234 56789"))
+
+                activityController.pause().stop().destroy()
+            } finally {
+                exportedBackingFile.delete()
+            }
+        }
+
+    @Test
+    fun `custom popup ad rtdb mapping, trigger logic, countdown dialog behavior, and admin controller layout work`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+
+        // 1. Verify RTDB /custom_popup_ad parsing & publish map (preserving atomic counters)
+        val rawSnapshot = mapOf(
+            "adId" to "ad_1700000999",
+            "isEnabled" to true,
+            "showToPremiumUsers" to false,
+            "triggerMode" to "AFTER_CALL_END",
+            "imageUrl" to "",
+            "title" to "Join PulseDial VIP Telegram",
+            "message" to "Get daily feature drops and instant support.",
+            "buttonText" to "Join Telegram",
+            "targetUrl" to "t.me/pulsedial_vip",
+            "countdownSeconds" to 3L,
+            "impressionsCount" to 145L,
+            "clicksCount" to 32L
+        )
+        val parsed = com.example.data.firebase.RealtimeDatabaseSync.parseCustomPopupAdSnapshot(rawSnapshot)
+        assertEquals("ad_1700000999", parsed.adId)
+        assertTrue(parsed.isEnabled)
+        assertFalse(parsed.showToPremiumUsers)
+        assertEquals(com.example.data.firebase.CustomPopupAd.TRIGGER_AFTER_CALL_END, parsed.triggerMode)
+        assertEquals("Join PulseDial VIP Telegram", parsed.title)
+        assertEquals("Join Telegram", parsed.buttonText)
+        assertEquals(3, parsed.countdownSeconds)
+        assertEquals(145L, parsed.impressionsCount)
+        assertEquals(32L, parsed.clicksCount)
+
+        val publishMap = com.example.data.firebase.RealtimeDatabaseSync.toRtdbCustomPopupAdPublishMap(parsed)
+        assertFalse(publishMap.containsKey("impressionsCount"))
+        assertFalse(publishMap.containsKey("clicksCount"))
+        assertEquals("ad_1700000999", publishMap["adId"])
+        assertEquals(3, publishMap["countdownSeconds"])
+
+        // 2. Verify Trigger Mode + showToPremiumUsers gating
+        assertFalse(parsed.shouldDisplayFor(com.example.data.firebase.CustomPopupAd.TRIGGER_ON_APP_OPEN, isPremiumUser = false))
+        assertTrue(parsed.shouldDisplayFor(com.example.data.firebase.CustomPopupAd.TRIGGER_AFTER_CALL_END, isPremiumUser = false))
+        assertFalse(parsed.shouldDisplayFor(com.example.data.firebase.CustomPopupAd.TRIGGER_AFTER_CALL_END, isPremiumUser = true))
+
+        val bothAd = parsed.copy(
+            triggerMode = com.example.data.firebase.CustomPopupAd.TRIGGER_BOTH,
+            showToPremiumUsers = true
+        )
+        assertTrue(bothAd.shouldDisplayFor(com.example.data.firebase.CustomPopupAd.TRIGGER_ON_APP_OPEN, isPremiumUser = true))
+        assertTrue(bothAd.shouldDisplayFor(com.example.data.firebase.CustomPopupAd.TRIGGER_AFTER_CALL_END, isPremiumUser = true))
+        assertFalse(bothAd.copy(isEnabled = false).shouldDisplayFor(com.example.data.firebase.CustomPopupAd.TRIGGER_ON_APP_OPEN, isPremiumUser = false))
+        assertEquals("https://t.me/pulsedial_vip", com.example.data.firebase.CustomPopupAd.normalizeTargetUrl(parsed.targetUrl))
+
+        // 3. Verify CustomAdPopupDialog UI, countdown lock -> unlock at 0s, placeholder, and CTA Intent
+        val controller = org.robolectric.Robolectric.buildActivity(androidx.appcompat.app.AppCompatActivity::class.java)
+        val activity = controller.get()
+        activity.setTheme(R.style.Theme_PulseDial)
+        val container = android.widget.FrameLayout(activity).apply { id = android.R.id.content }
+        controller.create()
+        activity.setContentView(container)
+        controller.start().resume()
+
+        val dialog = com.example.ui.ads.CustomAdPopupDialog.showIfNotAlreadyVisible(
+            activity.supportFragmentManager,
+            parsed
+        )
+        assertTrue(dialog != null)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        val rootView = dialog!!.requireView()
+        val closeBtn = rootView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_ad_close_badge)
+        val sponsoredTag = rootView.findViewById<android.widget.TextView>(R.id.tv_ad_sponsored_badge)
+        val placeholder = rootView.findViewById<android.view.View>(R.id.layout_ad_placeholder)
+        val ctaBtn = rootView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_ad_cta)
+        val titleTv = rootView.findViewById<android.widget.TextView>(R.id.tv_ad_title)
+
+        assertEquals(app.getString(R.string.custom_ad_sponsored_tag), sponsoredTag.text.toString())
+        assertEquals(android.view.View.VISIBLE, placeholder.visibility)
+        assertEquals("Join PulseDial VIP Telegram", titleTv.text.toString())
+        assertEquals("Join Telegram", ctaBtn.text.toString())
+        assertFalse(closeBtn.isEnabled)
+        assertFalse(dialog.isCancelable)
+        assertEquals(app.getString(R.string.custom_ad_wait_countdown, 3), closeBtn.text.toString())
+
+        val shadowMainLooper = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+        // Advance 1s -> "Wait 2s…"
+        shadowMainLooper.idleFor(java.time.Duration.ofMillis(1001))
+        assertEquals(app.getString(R.string.custom_ad_wait_countdown, 2), closeBtn.text.toString())
+        assertFalse(closeBtn.isEnabled)
+
+        // Advance 1s -> "Wait 1s…"
+        shadowMainLooper.idleFor(java.time.Duration.ofMillis(1001))
+        assertEquals(app.getString(R.string.custom_ad_wait_countdown, 1), closeBtn.text.toString())
+        assertFalse(closeBtn.isEnabled)
+
+        // Advance final 1s -> "✕ Close" unlocked
+        shadowMainLooper.idleFor(java.time.Duration.ofMillis(1001))
+        assertTrue(closeBtn.isEnabled)
+        assertTrue(dialog.isCancelable)
+        assertEquals(app.getString(R.string.custom_ad_close_label), closeBtn.text.toString())
+
+        // Clicking CTA fires ACTION_VIEW for normalized URL
+        ctaBtn.performClick()
+        val launched = org.robolectric.Shadows.shadowOf(activity).nextStartedActivity
+        assertEquals(android.content.Intent.ACTION_VIEW, launched.action)
+        assertEquals("https://t.me/pulsedial_vip", launched.data.toString())
+
+        controller.pause().stop().destroy()
+
+        // 4. Verify Admin Panel Manage Custom Popup Ads controller views in activity_admin_panel.xml
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val panelRoot = android.view.LayoutInflater.from(themedContext).inflate(R.layout.activity_admin_panel, null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.card_admin_custom_popup_ad) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.tv_popup_ad_impressions_badge) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.tv_popup_ad_clicks_badge) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.switch_popup_ad_enable) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.switch_popup_ad_show_premium) != null)
+        assertTrue(panelRoot.findViewById<android.widget.RadioGroup>(R.id.rg_popup_ad_trigger_mode) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_image_url) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_title) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_message) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_button_text) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_target_url) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.et_popup_ad_countdown) != null)
+        assertTrue(panelRoot.findViewById<android.view.View>(R.id.btn_publish_custom_popup_ad) != null)
+    }
 }
+
+
 

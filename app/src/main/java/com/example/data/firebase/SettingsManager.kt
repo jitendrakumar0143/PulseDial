@@ -91,6 +91,7 @@ class SettingsManager(
     }
 
     fun setAutoCallRecording(enabled: Boolean) {
+        prefs.markAutoRecordingCustomizedByUser()
         prefs.autoCallRecording = enabled
         pushFieldsAsync(mapOf("autoCallRecording" to enabled))
         activeUid()?.let { uid ->
@@ -130,6 +131,7 @@ class SettingsManager(
     }
 
     fun setDialpadTonesEnabled(enabled: Boolean) {
+        prefs.markDialpadTonesCustomizedByUser()
         prefs.dialpadTonesEnabled = enabled
         pushFieldsAsync(mapOf("dialpadTonesEnabled" to enabled))
         activeUid()?.let { uid ->
@@ -145,34 +147,62 @@ class SettingsManager(
 
     fun addBlockedNumber(number: String) {
         prefs.addBlockedNumber(number)
-        pushFieldsAsync(mapOf("blockedNumbers" to prefs.getBlockedNumbers().take(500)))
+        val blocked = prefs.getBlockedNumbers().take(500)
+        pushFieldsAsync(mapOf("blockedNumbers" to blocked))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "blockedNumbers" to blocked,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     fun removeBlockedNumber(number: String) {
         prefs.removeBlockedNumber(number)
-        pushFieldsAsync(mapOf("blockedNumbers" to prefs.getBlockedNumbers().take(500)))
+        val blocked = prefs.getBlockedNumbers().take(500)
+        pushFieldsAsync(mapOf("blockedNumbers" to blocked))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "blockedNumbers" to blocked,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     fun addQuickDeclineResponse(message: String) {
         prefs.addQuickDeclineResponse(message)
-        pushFieldsAsync(
-            mapOf(
-                "quickDeclineResponses" to prefs.getQuickDeclineResponses()
-                    .map { it.take(200) }
-                    .take(50)
+        val declines = prefs.getQuickDeclineResponses().map { it.take(200) }.take(50)
+        pushFieldsAsync(mapOf("quickDeclineResponses" to declines))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "quickDeclineResponses" to declines,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
             )
-        )
+        }
     }
 
     fun removeQuickDeclineResponse(message: String) {
         prefs.removeQuickDeclineResponse(message)
-        pushFieldsAsync(
-            mapOf(
-                "quickDeclineResponses" to prefs.getQuickDeclineResponses()
-                    .map { it.take(200) }
-                    .take(50)
+        val declines = prefs.getQuickDeclineResponses().map { it.take(200) }.take(50)
+        pushFieldsAsync(mapOf("quickDeclineResponses" to declines))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "quickDeclineResponses" to declines,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
             )
-        )
+        }
     }
 
     fun setAnnouncerEnabled(enabled: Boolean) {
@@ -284,6 +314,62 @@ class SettingsManager(
         }
     }
 
+    fun setRecordWhatsappCalls(enabled: Boolean) {
+        prefs.recordWhatsappCalls = enabled
+        pushFieldsAsync(mapOf("recordWhatsappCalls" to enabled))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "recordWhatsappCalls" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setRecordWhatsappBusinessCalls(enabled: Boolean) {
+        prefs.recordWhatsappBusinessCalls = enabled
+        pushFieldsAsync(mapOf("recordWhatsappBusinessCalls" to enabled))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "recordWhatsappBusinessCalls" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setRecordMeetCalls(enabled: Boolean) {
+        prefs.recordMeetCalls = enabled
+        pushFieldsAsync(mapOf("recordMeetCalls" to enabled))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "recordMeetCalls" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setRecordTelegramCalls(enabled: Boolean) {
+        prefs.recordTelegramCalls = enabled
+        pushFieldsAsync(mapOf("recordTelegramCalls" to enabled))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "recordTelegramCalls" to enabled,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     suspend fun syncAllLocalPreferencesToCloud(): Result<Unit> {
         val firestore = db
             ?: return Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
@@ -308,6 +394,10 @@ class SettingsManager(
             "followUpTrigger" to prefs.followUpTrigger,
             "completedCallTemplate" to prefs.completedCallTemplate,
             "missedCallTemplate" to prefs.missedCallTemplate,
+            "recordWhatsappCalls" to prefs.recordWhatsappCalls,
+            "recordWhatsappBusinessCalls" to prefs.recordWhatsappBusinessCalls,
+            "recordMeetCalls" to prefs.recordMeetCalls,
+            "recordTelegramCalls" to prefs.recordTelegramCalls,
             "updatedAt" to FieldValue.serverTimestamp()
         )
         RealtimeDatabaseSync.pushUserFields(
@@ -317,6 +407,8 @@ class SettingsManager(
                 "autoCallRecording" to prefs.autoCallRecording,
                 "themeMode" to themeStr,
                 "dialpadTonesEnabled" to prefs.dialpadTonesEnabled,
+                "blockedNumbers" to prefs.getBlockedNumbers().map { it.take(40) }.take(500),
+                "quickDeclineResponses" to prefs.getQuickDeclineResponses().map { it.take(200) }.take(50),
                 "announcerEnabled" to prefs.announcerEnabled,
                 "announcerHeadsetOnly" to prefs.announcerHeadsetOnly,
                 "unknownShieldMode" to prefs.unknownShieldMode,
@@ -325,9 +417,16 @@ class SettingsManager(
                 "followUpTrigger" to prefs.followUpTrigger,
                 "completedCallTemplate" to prefs.completedCallTemplate,
                 "missedCallTemplate" to prefs.missedCallTemplate,
+                "recordWhatsappCalls" to prefs.recordWhatsappCalls,
+                "recordWhatsappBusinessCalls" to prefs.recordWhatsappBusinessCalls,
+                "recordMeetCalls" to prefs.recordMeetCalls,
+                "recordTelegramCalls" to prefs.recordTelegramCalls,
                 "updatedAtMs" to System.currentTimeMillis()
             )
         )
+        if (runCatching { auth?.currentUser }.getOrNull() == null) {
+            return Result.success(Unit)
+        }
         val docRef = firestore.collection(DeviceTrialRepository.COLLECTION_USERS).document(uid)
         return try {
             docRef.update(payload).awaitTask()
@@ -342,7 +441,8 @@ class SettingsManager(
 
     private fun pushFieldsAsync(fields: Map<String, Any>) {
         val firestore = db ?: return
-        val uid = activeUid() ?: return
+        val firebaseUser = runCatching { auth?.currentUser }.getOrNull() ?: return
+        val uid = firebaseUser.uid.takeIf { it.isNotBlank() } ?: return
         val payload = fields + ("updatedAt" to FieldValue.serverTimestamp())
         ioScope.launch {
             runCatching {
@@ -439,6 +539,18 @@ class SettingsManager(
             if (snapshot.contains("missedCallTemplate")) {
                 prefs.missedCallTemplate = user.missedCallTemplate
             }
+            if (snapshot.contains("recordWhatsappCalls")) {
+                prefs.recordWhatsappCalls = user.recordWhatsappCalls
+            }
+            if (snapshot.contains("recordWhatsappBusinessCalls")) {
+                prefs.recordWhatsappBusinessCalls = user.recordWhatsappBusinessCalls
+            }
+            if (snapshot.contains("recordMeetCalls")) {
+                prefs.recordMeetCalls = user.recordMeetCalls
+            }
+            if (snapshot.contains("recordTelegramCalls")) {
+                prefs.recordTelegramCalls = user.recordTelegramCalls
+            }
         }
 
         /**
@@ -446,11 +558,18 @@ class SettingsManager(
          */
         fun applyRtdbUserEntitlement(
             user: UserEntitlement,
-            prefs: DialerPreferences
+            prefs: DialerPreferences,
+            hasBlockedNumbersField: Boolean = false
         ) {
             val allowed = prefs.allowCallRecordingConfig
             prefs.autoCallRecording = allowed && user.autoCallRecording
             prefs.dialpadTonesEnabled = user.dialpadTonesEnabled
+            if (hasBlockedNumbersField) {
+                prefs.setBlockedNumbers(user.blockedNumbers)
+            }
+            if (user.quickDeclineResponses.isNotEmpty()) {
+                prefs.setQuickDeclineResponses(user.quickDeclineResponses)
+            }
             prefs.announcerEnabled = user.announcerEnabled
             prefs.announcerHeadsetOnly = user.announcerHeadsetOnly
             prefs.unknownShieldMode = user.unknownShieldMode
@@ -459,6 +578,10 @@ class SettingsManager(
             prefs.followUpTrigger = user.followUpTrigger
             prefs.completedCallTemplate = user.completedCallTemplate
             prefs.missedCallTemplate = user.missedCallTemplate
+            prefs.recordWhatsappCalls = user.recordWhatsappCalls
+            prefs.recordWhatsappBusinessCalls = user.recordWhatsappBusinessCalls
+            prefs.recordMeetCalls = user.recordMeetCalls
+            prefs.recordTelegramCalls = user.recordTelegramCalls
             if (prefs.configuredForceThemeMode == AppConfig.THEME_USER) {
                 val desiredMode = if (user.themeMode == UserEntitlement.THEME_DARK) {
                     AppCompatDelegate.MODE_NIGHT_YES

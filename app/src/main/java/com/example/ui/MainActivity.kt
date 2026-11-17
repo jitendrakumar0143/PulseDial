@@ -33,6 +33,7 @@ import com.example.billing.SubscriptionManager
 import com.example.billing.UpiPaymentHelper
 import com.example.data.DialerPreferences
 import com.example.data.firebase.AdminRepository
+import com.example.data.firebase.CustomPopupAd
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.GoogleAuthHelper
 import com.example.data.firebase.LiveBroadcast
@@ -45,6 +46,7 @@ import com.example.databinding.DialogLiveBroadcastBinding
 import com.example.ui.account.AccountFragment
 import com.example.ui.admin.AdminPanelActivity
 import com.example.ui.admin.HiddenAdminTapDetector
+import com.example.ui.ads.CustomAdPopupDialog
 import com.example.ui.contacts.ContactsFragment
 import com.example.ui.custom.CustomAnnouncementFragment
 import com.example.ui.dialpad.DialpadBottomSheetFragment
@@ -56,6 +58,8 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -81,6 +85,7 @@ class MainActivity : AppCompatActivity() {
     private var activeBroadcastDialog: AlertDialog? = null
     private var activeBroadcastPopupId: String? = null
     private var bannerDismissedTextKey: String? = null
+    private var lastTriggeredAppOpenAdKey: String? = null
 
     private val authStateListener = FirebaseAuth.AuthStateListener { _ ->
         if (!isFinishing && !isDestroyed) {
@@ -129,9 +134,14 @@ class MainActivity : AppCompatActivity() {
                     emailOrPhone = accountName,
                     displayName = displayName
                 )
+                setAuthLoading(false, null)
                 lastRenderedAuthState = null
                 renderAuthState(true)
+            } else {
+                setAuthLoading(false, getString(R.string.auth_picker_cancelled))
             }
+        } else {
+            setAuthLoading(false, getString(R.string.auth_picker_cancelled))
         }
     }
 
@@ -167,6 +177,7 @@ class MainActivity : AppCompatActivity() {
             activeTabId = savedInstanceState.getInt(KEY_ACTIVE_TAB, R.id.nav_history)
             trialDialogShownThisSession = savedInstanceState.getBoolean(KEY_TRIAL_PROMPT_SHOWN, false)
             attemptedSilentSignIn = savedInstanceState.getBoolean(KEY_SILENT_SIGN_IN_ATTEMPTED, false)
+            lastTriggeredAppOpenAdKey = savedInstanceState.getString(KEY_LAST_APP_OPEN_AD_KEY)
         } else if (intent?.getBooleanExtra(EXTRA_OPEN_ACCOUNT_TAB, false) == true) {
             activeTabId = R.id.nav_account
         }
@@ -215,6 +226,7 @@ class MainActivity : AppCompatActivity() {
         outState.putInt(KEY_ACTIVE_TAB, activeTabId)
         outState.putBoolean(KEY_TRIAL_PROMPT_SHOWN, trialDialogShownThisSession)
         outState.putBoolean(KEY_SILENT_SIGN_IN_ATTEMPTED, attemptedSilentSignIn)
+        outState.putString(KEY_LAST_APP_OPEN_AD_KEY, lastTriggeredAppOpenAdKey)
     }
 
     private fun setupAuthGate() {
@@ -240,7 +252,12 @@ class MainActivity : AppCompatActivity() {
                     runCatching {
                         accountPickerLauncher.launch(GoogleAuthHelper.createChooseGoogleAccountIntent())
                     }.onFailure {
-                        Toast.makeText(this, "Please select a Google account", Toast.LENGTH_SHORT).show()
+                        setAuthLoading(false, getString(R.string.auth_no_google_account))
+                        runCatching {
+                            startActivity(Intent(android.provider.Settings.ACTION_ADD_ACCOUNT).apply {
+                                putExtra(android.provider.Settings.EXTRA_ACCOUNT_TYPES, arrayOf("com.google"))
+                            })
+                        }
                     }
                 }
             )
@@ -368,20 +385,23 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    com.example.billing.SubscriptionEnforcementService.state.collect { enfState ->
-                        if (!GoogleAuthHelper.isUserAuthenticated(this@MainActivity)) return@collect
-                        if (enfState.lastEvaluatedAtMs == 0L) return@collect
+                    com.example.billing.SubscriptionEnforcementService.state
+                        .map { it.copy(lastEvaluatedAtMs = 0L) }
+                        .distinctUntilChanged()
+                        .collect { enfState ->
+                            if (!GoogleAuthHelper.isUserAuthenticated(this@MainActivity)) return@collect
+                            if (enfState.uid == null && enfState.installDateMs == 0L) return@collect
 
-                        updateBlockedOverlayState()
-                        if (enfState.shouldRestrictUiToAccountTab || isAppLockedByTrialExpiry()) {
-                            (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
-                                as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
-                            enforcePaywallIfExpired()
-                        } else {
-                            updateFabVisibility(activeTabId)
+                            updateBlockedOverlayState()
+                            if (enfState.shouldRestrictUiToAccountTab || isAppLockedByTrialExpiry()) {
+                                (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
+                                    as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
+                                enforcePaywallIfExpired()
+                            } else {
+                                updateFabVisibility(activeTabId)
+                            }
+                            refreshCurrentFragment()
                         }
-                        refreshCurrentFragment()
-                    }
                 }
                 launch {
                     com.example.billing.SubscriptionEnforcementService.restrictionEvents.collect { event ->
@@ -411,6 +431,7 @@ class MainActivity : AppCompatActivity() {
                         updateBlockedOverlayState()
                         applyDynamicBottomNavigation(state.navigationTabs)
                         applyLiveBroadcastState(state.liveBroadcast)
+                        maybeShowCustomPopupAd(state.customPopupAd, CustomPopupAd.TRIGGER_ON_APP_OPEN)
 
                         if (isAppLockedByTrialExpiry()) {
                             (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
@@ -419,7 +440,6 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             updateFabVisibility(activeTabId)
                         }
-                        refreshCurrentFragment()
                     }
                 }
                 launch {
@@ -685,6 +705,9 @@ class MainActivity : AppCompatActivity() {
         RealtimeSyncManager.stop()
         activeBroadcastDialog?.dismiss()
         activeBroadcastDialog = null
+        (supportFragmentManager.findFragmentByTag(CustomAdPopupDialog.TAG) as? CustomAdPopupDialog)
+            ?.dismissAllowingStateLoss()
+        lastTriggeredAppOpenAdKey = null
         attemptedSilentSignIn = true
         trialDialogShownThisSession = false
         hiddenAdminTapDetector.onOtherTabSelected()
@@ -849,6 +872,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleIncomingIntent(intent: Intent?) {
         if (!GoogleAuthHelper.isUserAuthenticated(this)) return
+        if (intent?.getBooleanExtra(EXTRA_SHOW_AFTER_CALL_POPUP_AD, false) == true) {
+            intent.removeExtra(EXTRA_SHOW_AFTER_CALL_POPUP_AD)
+            val adBundle = intent.getBundleExtra(EXTRA_POPUP_AD_BUNDLE)
+            intent.removeExtra(EXTRA_POPUP_AD_BUNDLE)
+            val ad = if (adBundle != null) {
+                CustomPopupAd.fromBundle(adBundle)
+            } else {
+                RealtimeSyncManager.syncState.value.customPopupAd
+            }
+            maybeShowCustomPopupAd(ad, CustomPopupAd.TRIGGER_AFTER_CALL_END)
+        }
         if (intent?.getBooleanExtra(EXTRA_OPEN_ACCOUNT_TAB, false) == true || isAppLockedByTrialExpiry()) {
             navigateToAccountTab()
             return
@@ -858,6 +892,35 @@ class MainActivity : AppCompatActivity() {
             val number = intent.data?.schemeSpecificPart.orEmpty()
             openDialpadSheet(initialNumber = number)
         }
+    }
+
+    private fun resolveIsPremiumForAds(): Boolean {
+        return prefs.isPremiumUser || subscriptionManager.isPremiumActive()
+    }
+
+    private fun maybeShowCustomPopupAd(ad: CustomPopupAd, trigger: String) {
+        if (isFinishing || isDestroyed || !GoogleAuthHelper.isUserAuthenticated(this)) return
+        if (prefs.adminBlockedUser) return
+
+        val existing = supportFragmentManager.findFragmentByTag(CustomAdPopupDialog.TAG)
+            as? CustomAdPopupDialog
+        if (!ad.isEnabled) {
+            existing?.dismissAllowingStateLoss()
+            return
+        }
+
+        if (!ad.shouldDisplayFor(trigger, resolveIsPremiumForAds())) return
+
+        if (trigger == CustomPopupAd.TRIGGER_ON_APP_OPEN) {
+            val campaignKey = ad.effectiveCampaignKey()
+            if (campaignKey == lastTriggeredAppOpenAdKey) return
+            if (existing != null) return
+            lastTriggeredAppOpenAdKey = campaignKey
+        } else if (existing != null) {
+            return
+        }
+
+        CustomAdPopupDialog.showIfNotAlreadyVisible(supportFragmentManager, ad)
     }
 
     fun navigateToAccountTab() {
@@ -970,8 +1033,11 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_OPEN_ACCOUNT_TAB = "extra_open_account_tab"
+        const val EXTRA_SHOW_AFTER_CALL_POPUP_AD = "extra_show_after_call_popup_ad"
+        const val EXTRA_POPUP_AD_BUNDLE = "extra_popup_ad_bundle"
         private const val KEY_ACTIVE_TAB = "active_tab_id"
         private const val KEY_TRIAL_PROMPT_SHOWN = "trial_prompt_shown"
         private const val KEY_SILENT_SIGN_IN_ATTEMPTED = "silent_sign_in_attempted"
+        private const val KEY_LAST_APP_OPEN_AD_KEY = "last_app_open_ad_key"
     }
 }
