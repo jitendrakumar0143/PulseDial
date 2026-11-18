@@ -29,7 +29,8 @@ class AdminUsersAdapter(
     private val onManageClick: (UserEntitlement) -> Unit,
     private val onApproveUtrClick: (UserEntitlement) -> Unit = {},
     private val onRejectUtrClick: (UserEntitlement) -> Unit = {},
-    private val onReduceDaysClick: (UserEntitlement) -> Unit = {}
+    private val onReduceDaysClick: (UserEntitlement) -> Unit = {},
+    private val onDeleteClick: (UserEntitlement) -> Unit = {}
 ) : ListAdapter<UserEntitlement, AdminUsersAdapter.UserViewHolder>(DiffCallback) {
 
     var trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS
@@ -217,10 +218,19 @@ class AdminUsersAdapter(
             } else {
                 "—"
             }
+            val joinMs = item.trialStartedAt?.toDate()?.time
+                ?: item.createdAt?.toDate()?.time
+                ?: item.updatedAt?.toDate()?.time
+                ?: 0L
             val uidPreview = if (item.userId.length > 10) "${item.userId.take(10)}…" else item.userId
             binding.tvAdminUserMeta.text = buildString {
                 if (item.phoneNumber.isNotBlank()) {
                     append("Phone: ").append(item.phoneNumber).append(" • ")
+                }
+                if (joinMs > 0L) {
+                    val fmtJoin = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+                        .format(Date(joinMs))
+                    append("Joined: ").append(fmtJoin).append(" • ")
                 }
                 if (item.paymentRefId.isNotBlank()) {
                     append("UTR: ").append(item.paymentRefId).append(" • ")
@@ -296,6 +306,8 @@ class AdminUsersAdapter(
             binding.btnUserReduceDays.setOnClickListener { onReduceDaysClick(item) }
             binding.btnUserToggleBlock.setOnClickListener { onToggleBlockClick(item) }
             binding.btnUserManage.setOnClickListener { onManageClick(item) }
+            binding.btnUserDelete.visibility = if (isSuperAdmin) View.GONE else View.VISIBLE
+            binding.btnUserDelete.setOnClickListener { onDeleteClick(item) }
             binding.root.setOnClickListener { onManageClick(item) }
         }
     }

@@ -886,16 +886,16 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `history fragment layout shows recent calls only and hides recordings playlist from call app`() {
+    fun `history fragment layout shows recent calls only and removes recordings playlist from call app`() {
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
         val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
         val root = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_history, null)
 
         assertEquals(android.view.View.VISIBLE, root.findViewById<android.view.View>(R.id.recycler_history).visibility)
-        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.toggle_history_mode).visibility)
-        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.recycler_recordings).visibility)
-        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.card_recording_folder_banner).visibility)
-        assertEquals(android.view.View.GONE, root.findViewById<android.view.View>(R.id.card_mini_player).visibility)
+        assertEquals(0, app.resources.getIdentifier("toggle_history_mode", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("recycler_recordings", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("card_recording_folder_banner", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("card_mini_player", "id", app.packageName))
     }
 
     @Test
@@ -913,13 +913,13 @@ class ExampleRobolectricTest {
         assertTrue(perms.contains(android.Manifest.permission.FOREGROUND_SERVICE_PHONE_CALL))
         assertTrue(perms.contains(android.Manifest.permission.RECORD_AUDIO))
         assertTrue(perms.contains(android.Manifest.permission.POST_NOTIFICATIONS))
+        assertFalse(perms.contains(android.Manifest.permission.SYSTEM_ALERT_WINDOW))
+        assertFalse(perms.contains(android.Manifest.permission.SEND_SMS))
 
         val serviceMap = pkgInfo.services.orEmpty().associateBy { it.name }
         assertTrue(serviceMap.containsKey("com.example.telecom.CustomInCallService"))
         assertTrue(serviceMap.containsKey("com.example.recording.CallRecorderForegroundService"))
-        val accService = serviceMap["com.example.recording.CallRecordingAccessibilityService"]
-        assertTrue(accService != null)
-        assertEquals(android.Manifest.permission.BIND_ACCESSIBILITY_SERVICE, accService?.permission)
+        assertFalse(serviceMap.containsKey("com.example.recording.CallRecordingAccessibilityService"))
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val fgs = serviceMap["com.example.recording.CallRecorderForegroundService"]!!
@@ -1769,7 +1769,7 @@ class ExampleRobolectricTest {
         assertEquals("Music/PulseDial/Instagram Call Recordings", com.example.recording.CallRecordingSource.INSTAGRAM.relativePublicPath())
 
         assertEquals(
-            "+91_98765_43210_20261116_093000.mp3",
+            "+91_98765_43210_20261116_093000.m4a",
             com.example.recording.CallRecorder.buildFileName(
                 "+91 98765 43210",
                 com.example.recording.CallRecordingSource.CELLULAR,
@@ -1777,7 +1777,7 @@ class ExampleRobolectricTest {
             )
         )
         assertEquals(
-            "WhatsApp_Business_+919876543210_20261116_093000.mp3",
+            "WhatsApp_Business_+919876543210_20261116_093000.m4a",
             com.example.recording.CallRecorder.buildFileName(
                 "+919876543210",
                 com.example.recording.CallRecordingSource.WHATSAPP_BUSINESS,
@@ -1785,7 +1785,7 @@ class ExampleRobolectricTest {
             )
         )
         assertEquals(
-            "WhatsApp_Rahul_20261116_093000.mp3",
+            "WhatsApp_Rahul_20261116_093000.m4a",
             com.example.recording.CallRecorder.buildFileName(
                 "Rahul",
                 com.example.recording.CallRecordingSource.WHATSAPP,
@@ -1793,7 +1793,7 @@ class ExampleRobolectricTest {
             )
         )
         assertEquals(
-            "Meet_TeamSync_20261116_093000.mp3",
+            "Meet_TeamSync_20261116_093000.m4a",
             com.example.recording.CallRecorder.buildFileName(
                 "TeamSync",
                 com.example.recording.CallRecordingSource.GOOGLE_MEET,
@@ -1801,7 +1801,7 @@ class ExampleRobolectricTest {
             )
         )
         assertEquals(
-            "Instagram_Friend_20261116_093000.mp3",
+            "Instagram_Friend_20261116_093000.m4a",
             com.example.recording.CallRecorder.buildFileName(
                 "Friend",
                 com.example.recording.CallRecordingSource.INSTAGRAM,
@@ -1892,17 +1892,27 @@ class ExampleRobolectricTest {
         assertTrue(prefs.recordTelegramCalls)
         assertFalse(prefs.recordInstagramCalls)
 
-        // 5. Settings UI renders all 5 VoIP switches (incl. Instagram) & separate File Manager folder button
+        // 5. Settings UI renders all 5 VoIP switches cleanly + compact header Folders button (zero inline folder clutter)
         val settingsView = android.view.LayoutInflater.from(themedContext).inflate(R.layout.fragment_settings, null)
         assertTrue(settingsView.findViewById<android.view.View>(R.id.card_voip_call_recording) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_whatsapp) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_whatsapp_business) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_meet) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_telegram) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.switch_record_instagram) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.btn_folder_instagram) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.tv_voip_folders_guide) != null)
-        assertTrue(settingsView.findViewById<android.view.View>(R.id.btn_open_file_manager_recordings) != null)
+        val swWa = settingsView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_record_whatsapp)
+        val swWab = settingsView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_record_whatsapp_business)
+        val swMeet = settingsView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_record_meet)
+        val swTg = settingsView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_record_telegram)
+        val swIg = settingsView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_record_instagram)
+        val btnManageFolders = settingsView.findViewById<android.view.View>(R.id.btn_manage_voip_folders)
+        assertEquals("WhatsApp", swWa.text.toString())
+        assertEquals("WhatsApp Business", swWab.text.toString())
+        assertEquals("Google Meet", swMeet.text.toString())
+        assertEquals("Telegram", swTg.text.toString())
+        assertEquals("Instagram", swIg.text.toString())
+        assertEquals(android.view.View.VISIBLE, btnManageFolders.visibility)
+        assertEquals(0, app.resources.getIdentifier("tv_voip_card_subtitle", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("tv_whatsapp_folder_path", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("layout_folder_whatsapp", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("layout_folder_instagram", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("tv_voip_folders_guide", "id", app.packageName))
+        assertEquals(0, app.resources.getIdentifier("btn_open_file_manager_recordings", "id", app.packageName))
     }
 
     @Test
@@ -2261,7 +2271,7 @@ class ExampleRobolectricTest {
         assertFalse(meetDefault.isCustomPerSource)
         assertEquals(waUri, prefs.resolveFolderTarget(com.example.recording.CallRecordingSource.WHATSAPP).treeUri)
 
-        // 4. Render inside SettingsFragment and assert distinct per-app folder paths & reset visibility
+        // 4. Render inside SettingsFragment and open Per-App Folders dialog from compact Folders button
         val activityController = org.robolectric.Robolectric.buildActivity(
             androidx.appcompat.app.AppCompatActivity::class.java
         )
@@ -2279,33 +2289,22 @@ class ExampleRobolectricTest {
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
 
         val view = settingsFragment.requireView()
-        val tvWa = view.findViewById<android.widget.TextView>(R.id.tv_whatsapp_folder_path)
-        val tvWab = view.findViewById<android.widget.TextView>(R.id.tv_whatsapp_business_folder_path)
-        val tvMeet = view.findViewById<android.widget.TextView>(R.id.tv_meet_folder_path)
-        val tvTg = view.findViewById<android.widget.TextView>(R.id.tv_telegram_folder_path)
-
-        val btnWa = view.findViewById<android.widget.Button>(R.id.btn_folder_whatsapp)
-        val btnResetWa = view.findViewById<android.view.View>(R.id.btn_reset_folder_whatsapp)
-        val btnMeet = view.findViewById<android.widget.Button>(R.id.btn_folder_meet)
-        val btnResetMeet = view.findViewById<android.view.View>(R.id.btn_reset_folder_meet)
-
-        assertTrue(tvWa.text.toString().contains("WA_Recs"))
-        assertTrue(tvWab.text.toString().contains("BizWA_Recs"))
-        assertTrue(tvMeet.text.toString().contains("Music/PulseDial/Meet Call Recordings"))
-        assertTrue(tvTg.text.toString().contains("TGCalls"))
-
-        assertEquals(app.getString(R.string.voip_folder_change_btn), btnWa.text.toString())
-        assertEquals(android.view.View.VISIBLE, btnResetWa.visibility)
-        assertEquals(app.getString(R.string.voip_folder_select_btn), btnMeet.text.toString())
-        assertEquals(android.view.View.GONE, btnResetMeet.visibility)
-
-        // Clicking reset for WhatsApp clears only WhatsApp's custom folder in UI
-        btnResetWa.performClick()
+        val btnManageFolders = view.findViewById<android.widget.Button>(R.id.btn_manage_voip_folders)
+        assertTrue(btnManageFolders.isEnabled)
+        btnManageFolders.performClick()
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-        assertEquals(null, prefs.getCustomFolderUri(com.example.recording.CallRecordingSource.WHATSAPP))
-        assertEquals(android.view.View.GONE, btnResetWa.visibility)
-        assertTrue(tvWa.text.toString().contains("Music/PulseDial/WhatsApp Call Recordings"))
-        assertTrue(tvTg.text.toString().contains("TGCalls"))
+
+        val latestDialog = org.robolectric.shadows.ShadowAlertDialog.getLatestDialog()
+            as androidx.appcompat.app.AlertDialog
+        assertTrue(latestDialog.isShowing)
+        val listView = latestDialog.listView
+        val adapter = listView.adapter
+        val itemTexts = (0 until adapter.count).map { adapter.getItem(it).toString() }
+        assertTrue(itemTexts.any { it.contains("WhatsApp") && it.contains("WA_Recs") })
+        assertTrue(itemTexts.any { it.contains("WhatsApp Business") && it.contains("BizWA_Recs") })
+        assertTrue(itemTexts.any { it.contains("Google Meet") && it.contains("Music/PulseDial/Meet Call Recordings") })
+        assertTrue(itemTexts.any { it.contains("Telegram") && it.contains("TGCalls") })
+        latestDialog.dismiss()
 
         activityController.pause().stop().destroy()
     }
@@ -3162,8 +3161,468 @@ class ExampleRobolectricTest {
 
         val userItemRoot = inflater.inflate(R.layout.item_admin_user, null)
         assertTrue(userItemRoot.findViewById<android.view.View>(R.id.btn_user_reduce_days) != null)
+        assertTrue(userItemRoot.findViewById<android.view.View>(R.id.btn_user_delete) != null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.btn_admin_add_user) != null)
+    }
+
+    @Test
+    fun `admin can add user button and delete user button with super admin delete protection work`() =
+        kotlinx.coroutines.runBlocking {
+            val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+            val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+
+            val regularUser = com.example.data.firebase.UserEntitlement(
+                id = "u_regular",
+                userId = "u_regular",
+                displayName = "Regular Member",
+                email = "regular@example.com"
+            )
+            val superAdminUser = com.example.data.firebase.UserEntitlement(
+                id = "u_super",
+                userId = "u_super",
+                displayName = "Pushpendra",
+                email = "0143pushpendra@gmail.com",
+                isAdmin = true
+            )
+
+            var deletedUid: String? = null
+            val adapter = com.example.ui.admin.AdminUsersAdapter(
+                onToggleProClick = {},
+                onRenewMonthClick = {},
+                onExtendTrialClick = {},
+                onToggleBlockClick = {},
+                onManageClick = {},
+                onDeleteClick = { deletedUid = it.userId }
+            )
+            adapter.submitList(listOf(regularUser, superAdminUser))
+
+            val parent = android.widget.FrameLayout(themedContext)
+            val regularHolder = adapter.onCreateViewHolder(parent, 0)
+            adapter.onBindViewHolder(regularHolder, 0)
+            val regularDeleteBtn = regularHolder.itemView.findViewById<android.view.View>(R.id.btn_user_delete)
+            assertEquals(android.view.View.VISIBLE, regularDeleteBtn.visibility)
+            regularDeleteBtn.performClick()
+            assertEquals("u_regular", deletedUid)
+
+            val superHolder = adapter.onCreateViewHolder(parent, 0)
+            adapter.onBindViewHolder(superHolder, 1)
+            val superDeleteBtn = superHolder.itemView.findViewById<android.view.View>(R.id.btn_user_delete)
+            assertEquals(android.view.View.GONE, superDeleteBtn.visibility)
+
+            // Verify RTDB-only AdminRepository createUserByAdmin and deleteUserByAdmin Super Admin guard
+            if (com.google.firebase.FirebaseApp.getApps(app).isEmpty()) {
+                val defaultInit = com.google.firebase.FirebaseApp.initializeApp(app)
+                if (defaultInit == null) {
+                    com.google.firebase.FirebaseApp.initializeApp(
+                        app,
+                        com.google.firebase.FirebaseOptions.Builder()
+                            .setApplicationId("1:113923036774:android:0000000000000000")
+                            .setProjectId("gen-lang-client-0353534085")
+                            .setApiKey("test-api-key")
+                            .setDatabaseUrl("https://gen-lang-client-0353534085-default-rtdb.firebaseio.com")
+                            .build()
+                    )
+                }
+            }
+            val mockAuth = com.google.firebase.auth.FirebaseAuth.getInstance()
+            val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance(
+                app.getString(R.string.firestore_database_id)
+            )
+            val adminRepo = com.example.data.firebase.AdminRepository(
+                db = firestore,
+                auth = mockAuth,
+                fallbackUidProvider = { "admin_session_uid" }
+            )
+            val created = adminRepo.createUserByAdmin(
+                displayName = "Created In Admin",
+                email = "created@example.com",
+                phoneNumber = "+919988776655",
+                isPremium = true,
+                subscriptionDays = 30L,
+                bonusTrialDays = 0L,
+                autoCallRecording = true,
+                hideSubscriptionUI = false,
+                adminNote = "Manual member"
+            ).getOrThrow()
+            assertEquals("Created In Admin", created.displayName)
+            assertEquals("created@example.com", created.email)
+            assertTrue(created.isPremiumUser)
+            assertEquals(com.example.data.firebase.UserEntitlement.STATUS_ACTIVE, created.subscriptionStatus)
+
+            val superDeleteRes = adminRepo.deleteUserByAdmin(
+                user = superAdminUser,
+                actingAdminEmail = "jitendrakumar888126@gmail.com"
+            )
+            assertTrue(superDeleteRes.isFailure)
+
+            val regDeleteRes = adminRepo.deleteUserByAdmin(
+                user = created,
+                actingAdminEmail = "jitendrakumar888126@gmail.com"
+            )
+            assertTrue(regDeleteRes.isSuccess)
+        }
+
+    @Test
+    fun `manifest drops broad audio read permissions and registers Play-Protect-safe VoIP notification listener`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val pm = app.packageManager
+        val pkgInfo = pm.getPackageInfo(
+            app.packageName,
+            android.content.pm.PackageManager.GET_PERMISSIONS or
+                android.content.pm.PackageManager.GET_SERVICES or
+                android.content.pm.PackageManager.GET_RECEIVERS
+        )
+        val perms = pkgInfo.requestedPermissions?.toSet().orEmpty()
+        assertFalse(perms.contains(android.Manifest.permission.READ_MEDIA_AUDIO))
+        assertFalse(perms.contains(android.Manifest.permission.READ_EXTERNAL_STORAGE))
+
+        val serviceNames = pkgInfo.services.orEmpty().map { it.name }.toSet()
+        assertTrue(serviceNames.contains("com.example.recording.VoipCallNotificationListener"))
+
+        val receiverNames = pkgInfo.receivers.orEmpty().map { it.name }.toSet()
+        assertTrue(receiverNames.contains("com.example.telecom.CallNotificationActionReceiver"))
+    }
+
+    @Test
+    fun `voip notification listener detects call notifications and ignores regular chat messages`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+
+        val categoryCallNotif = android.app.Notification.Builder(app, com.example.PulseDialApp.CHANNEL_INCOMING_CALLS)
+            .setSmallIcon(R.drawable.ic_call)
+            .setCategory(android.app.Notification.CATEGORY_CALL)
+            .setContentTitle("Rahul")
+            .setContentText("Incoming voice call")
+            .build()
+        assertTrue(com.example.recording.VoipCallNotificationListener.isCallNotification(categoryCallNotif))
+
+        val ongoingCallNotif = android.app.Notification.Builder(app, com.example.PulseDialApp.CHANNEL_ONGOING_CALLS)
+            .setSmallIcon(R.drawable.ic_call)
+            .setOngoing(true)
+            .setContentTitle("WhatsApp")
+            .setContentText("Ongoing voice call • 01:12")
+            .build()
+        assertTrue(com.example.recording.VoipCallNotificationListener.isCallNotification(ongoingCallNotif))
+
+        val regularChatNotif = android.app.Notification.Builder(app, com.example.PulseDialApp.CHANNEL_INCOMING_CALLS)
+            .setSmallIcon(R.drawable.ic_message)
+            .setCategory(android.app.Notification.CATEGORY_MESSAGE)
+            .setContentTitle("Amit")
+            .setContentText("Hey, free now?")
+            .build()
+        assertFalse(com.example.recording.VoipCallNotificationListener.isCallNotification(regularChatNotif))
+    }
+
+    @Test
+    fun `crash logger captures non-fatal diagnostics and clears cleanly`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        com.example.data.PulseDialCrashLogger.clearLastCrash(app)
+        assertEquals(null, com.example.data.PulseDialCrashLogger.getLastCrashSummary(app))
+
+        com.example.data.PulseDialCrashLogger.logNonFatal(
+            app,
+            "AudioRoute",
+            IllegalStateException("Test diagnostic")
+        )
+        val captured = com.example.data.PulseDialCrashLogger.getLastCrashSummary(app)
+        assertTrue(!captured.isNullOrBlank())
+        assertTrue(captured!!.contains("AudioRoute"))
+        assertTrue(captured.contains("Test diagnostic"))
+
+        com.example.data.PulseDialCrashLogger.clearLastCrash(app)
+        assertEquals(null, com.example.data.PulseDialCrashLogger.getLastCrashSummary(app))
+    }
+
+    @Test
+    fun `callManager updates bluetooth audio route and supported mask accurately`() {
+        val btPlusSpeakerMask = android.telecom.CallAudioState.ROUTE_BLUETOOTH or
+            android.telecom.CallAudioState.ROUTE_EARPIECE or
+            android.telecom.CallAudioState.ROUTE_SPEAKER
+
+        com.example.telecom.CallManager.updateAudioState(
+            isMuted = false,
+            isSpeakerOn = false,
+            audioRoute = android.telecom.CallAudioState.ROUTE_BLUETOOTH,
+            supportedAudioRoutes = btPlusSpeakerMask
+        )
+        val state = com.example.telecom.CallManager.uiState.value
+        assertEquals(android.telecom.CallAudioState.ROUTE_BLUETOOTH, state.audioRoute)
+        assertEquals(btPlusSpeakerMask, state.supportedAudioRoutes)
+        assertFalse(state.isSpeakerOn)
+    }
+
+    @Test
+    fun `mergeEntitlementSources preserves active admin subscription against stale trial snapshot`() {
+        val nowMs = System.currentTimeMillis()
+        val futureExpiry = com.google.firebase.Timestamp(java.util.Date(nowMs + 30L * DialerPreferences.ONE_DAY_MILLIS))
+
+        // Firestore has a stale trial snapshot (even with a newer client clock timestamp)
+        val staleFirestoreTrial = com.example.data.firebase.UserEntitlement(
+            id = "u_sync_1",
+            userId = "u_sync_1",
+            email = "subscriber@example.com",
+            isPremiumUser = false,
+            subscriptionStatus = "trial",
+            subscriptionExpiresAt = null,
+            updatedAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 5_000L))
+        )
+
+        // RTDB has an active Admin-granted subscription
+        val rtdbAdminGrant = com.example.data.firebase.UserEntitlement(
+            id = "u_sync_1",
+            userId = "u_sync_1",
+            email = "subscriber@example.com",
+            isPremiumUser = true,
+            subscriptionStatus = "active",
+            subscriptionExpiresAt = futureExpiry,
+            updatedAt = com.google.firebase.Timestamp(java.util.Date(nowMs))
+        )
+
+        val merged = com.example.data.firebase.DeviceTrialRepository.mergeEntitlementSources(
+            firestoreUser = staleFirestoreTrial,
+            rtdbUser = rtdbAdminGrant,
+            nowMs = nowMs
+        )!!
+        assertTrue(merged.isPremiumUser)
+        assertEquals("active", merged.subscriptionStatus)
+        assertEquals(futureExpiry.toDate().time, merged.subscriptionExpiresAt?.toDate()?.time)
+
+        // Also test when Admin explicitly revokes subscription (newer timestamp with status="revoked")
+        val rtdbAdminRevoke = rtdbAdminGrant.copy(
+            isPremiumUser = false,
+            subscriptionStatus = "revoked",
+            subscriptionExpiresAt = null,
+            updatedAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 20_000L))
+        )
+        val mergedAfterRevoke = com.example.data.firebase.DeviceTrialRepository.mergeEntitlementSources(
+            firestoreUser = rtdbAdminGrant,
+            rtdbUser = rtdbAdminRevoke,
+            nowMs = nowMs
+        )!!
+        assertFalse(mergedAfterRevoke.isPremiumUser)
+        assertEquals("revoked", mergedAfterRevoke.subscriptionStatus)
+    }
+
+    @Test
+    fun `admin filterUsers filters accurately by join date and expiry date presets and custom range`() {
+        val nowMs = System.currentTimeMillis()
+        val oneDay = DialerPreferences.ONE_DAY_MILLIS
+
+        val userToday = com.example.data.firebase.UserEntitlement(
+            id = "u_today",
+            userId = "u_today",
+            displayName = "Today User",
+            email = "today@example.com",
+            createdAt = com.google.firebase.Timestamp(java.util.Date(nowMs - 1_000L)),
+            subscriptionExpiresAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 2L * oneDay))
+        )
+        val user5DaysAgo = com.example.data.firebase.UserEntitlement(
+            id = "u_5d",
+            userId = "u_5d",
+            displayName = "Five Days User",
+            email = "fivedays@example.com",
+            createdAt = com.google.firebase.Timestamp(java.util.Date(nowMs - 5L * oneDay)),
+            subscriptionExpiresAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 15L * oneDay))
+        )
+        val user20DaysAgo = com.example.data.firebase.UserEntitlement(
+            id = "u_20d",
+            userId = "u_20d",
+            displayName = "Twenty Days User",
+            email = "twentydays@example.com",
+            createdAt = com.google.firebase.Timestamp(java.util.Date(nowMs - 20L * oneDay)),
+            subscriptionExpiresAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 45L * oneDay))
+        )
+        val user60DaysAgo = com.example.data.firebase.UserEntitlement(
+            id = "u_60d",
+            userId = "u_60d",
+            displayName = "Old User",
+            email = "old@example.com",
+            createdAt = com.google.firebase.Timestamp(java.util.Date(nowMs - 60L * oneDay)),
+            subscriptionExpiresAt = com.google.firebase.Timestamp(java.util.Date(nowMs + 60L * oneDay))
+        )
+
+        val users = listOf(userToday, user5DaysAgo, user20DaysAgo, user60DaysAgo)
+
+        val todayFiltered = com.example.data.firebase.AdminRepository.filterUsers(
+            users = users,
+            filter = com.example.data.firebase.AdminUserFilter.ALL,
+            query = "",
+            trialDaysConfig = 7,
+            nowMs = nowMs,
+            dateFilter = com.example.data.firebase.AdminUserDateFilter.TODAY,
+            dateField = com.example.data.firebase.AdminUserDateField.JOIN_DATE
+        )
+        assertEquals(listOf("u_today"), todayFiltered.map { it.userId })
+
+        val last7DaysFiltered = com.example.data.firebase.AdminRepository.filterUsers(
+            users = users,
+            filter = com.example.data.firebase.AdminUserFilter.ALL,
+            query = "",
+            trialDaysConfig = 7,
+            nowMs = nowMs,
+            dateFilter = com.example.data.firebase.AdminUserDateFilter.LAST_7_DAYS,
+            dateField = com.example.data.firebase.AdminUserDateField.JOIN_DATE
+        )
+        assertEquals(listOf("u_today", "u_5d"), last7DaysFiltered.map { it.userId })
+
+        val last30DaysFiltered = com.example.data.firebase.AdminRepository.filterUsers(
+            users = users,
+            filter = com.example.data.firebase.AdminUserFilter.ALL,
+            query = "",
+            trialDaysConfig = 7,
+            nowMs = nowMs,
+            dateFilter = com.example.data.firebase.AdminUserDateFilter.LAST_30_DAYS,
+            dateField = com.example.data.firebase.AdminUserDateField.JOIN_DATE
+        )
+        assertEquals(listOf("u_today", "u_5d", "u_20d"), last30DaysFiltered.map { it.userId })
+
+        val customRangeFiltered = com.example.data.firebase.AdminRepository.filterUsers(
+            users = users,
+            filter = com.example.data.firebase.AdminUserFilter.ALL,
+            query = "",
+            trialDaysConfig = 7,
+            nowMs = nowMs,
+            dateFilter = com.example.data.firebase.AdminUserDateFilter.CUSTOM_RANGE,
+            dateField = com.example.data.firebase.AdminUserDateField.EXPIRY_DATE,
+            customStartMs = nowMs + 10L * oneDay,
+            customEndMs = nowMs + 50L * oneDay
+        )
+        assertEquals(listOf("u_5d", "u_20d"), customRangeFiltered.map { it.userId })
+    }
+
+    @Test
+    fun `material3 0 to 9 numeric keypad dock and admin date and live image popup views inflate cleanly`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedContext = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val inflater = android.view.LayoutInflater.from(themedContext)
+
+        // 1. History tab keeps inline keypad dock hidden (View.GONE) so only Search & Recent Calls show
+        val historyRoot = inflater.inflate(R.layout.fragment_history, null)
+        val homeKeypadDock = historyRoot.findViewById<android.view.View>(R.id.card_home_keypad_dock)
+        val toggleHomeKeypad = historyRoot.findViewById<android.view.View>(R.id.btn_toggle_home_keypad)
+        assertTrue(homeKeypadDock != null)
+        assertEquals(android.view.View.GONE, homeKeypadDock.visibility)
+        assertEquals(android.view.View.GONE, toggleHomeKeypad.visibility)
+
+        // 2. Bottom sheet M3 0-9 numeric keypad in bottom_sheet_dialpad.xml with compact hint & VIP badge
+        val dialpadSheet = inflater.inflate(R.layout.bottom_sheet_dialpad, null)
+        assertTrue(dialpadSheet.findViewById<android.view.View>(R.id.card_dialpad_display) != null)
+        assertTrue(dialpadSheet.findViewById<android.view.View>(R.id.tv_dialpad_vip_badge) != null)
+        assertTrue(dialpadSheet.findViewById<android.view.View>(R.id.btn_key_0) != null)
+        assertTrue(dialpadSheet.findViewById<android.view.View>(R.id.btn_key_9) != null)
+
+        // 2b. MainActivity VIP 3D accent strip & crown badge for Premium subscribers
+        val mainRoot = inflater.inflate(R.layout.activity_main, null)
+        assertTrue(mainRoot.findViewById<android.view.View>(R.id.view_vip_3d_top_accent_bar) != null)
+        assertTrue(mainRoot.findViewById<android.view.View>(R.id.tv_vip_pro_header_badge) != null)
+
+        // 3. Admin Panel date filter & live image popup controls
+        val adminRoot = inflater.inflate(R.layout.activity_admin_panel, null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.chip_group_user_date_filter) != null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.chip_date_field_toggle) != null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.tv_admin_user_date_summary) != null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.btn_popup_ad_send_live_now) != null)
+        assertTrue(adminRoot.findViewById<android.view.View>(R.id.btn_broadcast_preview) != null)
+
+        // 4. Live Broadcast Popup clickable image wrapper & link badge
+        val broadcastDialog = inflater.inflate(R.layout.dialog_live_broadcast, null)
+        assertTrue(broadcastDialog.findViewById<android.view.View>(R.id.card_popup_image_wrapper) != null)
+        assertTrue(broadcastDialog.findViewById<android.view.View>(R.id.tv_popup_image_link_badge) != null)
+
+        // 5. Settings Theme Studio card (System Default / Light / Dark + Dynamic Colors + 8 3D Mix & Premium Themes)
+        val settingsRoot = inflater.inflate(R.layout.fragment_settings, null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.card_theme_studio) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.chip_theme_mode_system) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.chip_theme_mode_light) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.chip_theme_mode_dark) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.switch_dynamic_colors) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.chip_group_theme_palettes) != null)
+        assertTrue(settingsRoot.findViewById<android.view.View>(R.id.btn_open_theme_gallery) != null)
+
+        assertEquals(
+            com.example.data.firebase.UserEntitlement.THEME_SYSTEM,
+            com.example.data.firebase.SettingsManager.themeModeToString(
+                androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+            )
+        )
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM,
+            com.example.data.firebase.SettingsManager.stringToThemeMode("system")
+        )
+        assertEquals(3, com.example.ui.theme.AppThemePalette.premium3DMixThemes().size)
+        assertEquals(4, com.example.ui.theme.AppThemePalette.entries.size)
+        val cyber = com.example.ui.theme.AppThemePalette.fromId("cyber_neon_3d")
+        assertTrue(cyber.is3DMix)
+        assertTrue(cyber.isPremiumTheme)
+        assertTrue(cyber.create3DGradientDrawable(24f) != null)
+        assertTrue(cyber.createFullApp3DBackgroundDrawable() != null)
+
+        // 6. Verify the 3 Full-App 3D Mix-Color Themes are strictly gated to active Premium subscribers
+        val prefs = DialerPreferences(app)
+        prefs.adminBlockedUser = false
+        prefs.isPremiumUser = false
+        prefs.subscriptionExpiresAtMs = 0L
+        prefs.selectedThemePaletteId = "cyber_neon_3d"
+        assertFalse(com.example.ui.theme.ThemeStudioManager.isUserEntitledToPremiumThemes(prefs))
+        assertFalse(com.example.ui.theme.ThemeStudioManager.isFullApp3DMixThemeActive(prefs))
+        assertEquals(
+            com.example.ui.theme.AppThemePalette.EMERALD_PULSE,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectivePalette(prefs)
+        )
+
+        prefs.isPremiumUser = true
+        prefs.subscriptionExpiresAtMs = System.currentTimeMillis() + DialerPreferences.ONE_MONTH_MILLIS
+        assertTrue(com.example.ui.theme.ThemeStudioManager.isUserEntitledToPremiumThemes(prefs))
+        assertTrue(com.example.ui.theme.ThemeStudioManager.isFullApp3DMixThemeActive(prefs))
+        assertEquals(
+            com.example.ui.theme.AppThemePalette.CYBER_NEON_3D,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectivePalette(prefs)
+        )
+        com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(settingsRoot, prefs)
+        assertEquals(
+            cyber.cardBgColorInt(),
+            settingsRoot.findViewById<com.google.android.material.card.MaterialCardView>(R.id.card_theme_studio).cardBackgroundColor.defaultColor
+        )
+
+        // 7. Verify login is strictly restricted to the Google email currently signed in on the mobile device
+        val accountManager = android.accounts.AccountManager.get(app)
+        val shadowAccountManager = org.robolectric.Shadows.shadowOf(accountManager)
+        val deviceAccount = android.accounts.Account("mobile.owner@gmail.com", com.example.data.firebase.GoogleAuthHelper.GOOGLE_ACCOUNT_TYPE)
+        shadowAccountManager.addAccount(deviceAccount)
+
+        assertEquals(
+            listOf("mobile.owner@gmail.com"),
+            com.example.data.firebase.GoogleAuthHelper.getDeviceSignedInGoogleEmails(app)
+        )
+        assertTrue(com.example.data.firebase.GoogleAuthHelper.isEmailSignedInOnDevice(app, "Mobile.Owner@gmail.com"))
+        assertFalse(com.example.data.firebase.GoogleAuthHelper.isEmailSignedInOnDevice(app, "other.person@gmail.com"))
+
+        // Attempting to log in with a non-device email fails
+        val nonDeviceAttempt = runCatching {
+            com.example.data.firebase.GoogleAuthHelper.completeFallbackLogin(
+                context = app,
+                emailOrPhone = "other.person@gmail.com"
+            )
+        }
+        assertTrue(nonDeviceAttempt.isFailure)
+
+        // Logging in with the device's signed-in email succeeds
+        val deviceLoginEntitlement = com.example.data.firebase.GoogleAuthHelper.completeFallbackLogin(
+            context = app,
+            emailOrPhone = "mobile.owner@gmail.com"
+        )
+        assertEquals("mobile.owner@gmail.com", deviceLoginEntitlement.email)
+        assertTrue(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
+
+        // If prefs.userEmail is tampered with to an email not signed in on the device, isUserAuthenticated returns false
+        prefs.userEmail = "spoofed@gmail.com"
+        assertFalse(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
+
+        shadowAccountManager.removeAllAccounts()
     }
 }
+
+
+
 
 
 

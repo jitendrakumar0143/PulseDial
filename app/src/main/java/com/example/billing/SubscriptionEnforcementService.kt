@@ -291,6 +291,11 @@ object SubscriptionEnforcementService {
         }
         if (subscriptionExpiresAtMs != null) {
             liveExpiresAtMs = subscriptionExpiresAtMs
+        } else if ((isPremium == true || cleanIncomingStatus == UserEntitlement.STATUS_ACTIVE) &&
+            liveExpiresAtMs in 1L..nowMs
+        ) {
+            // Clear stale expired timestamp from a previous cycle while awaiting the new expiry node
+            liveExpiresAtMs = 0L
         }
         if (bonusTrialDays != null) {
             liveBonusTrialDays = bonusTrialDays.coerceAtLeast(0)

@@ -1,22 +1,26 @@
 package com.example.telecom
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Person
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
-import android.telephony.SmsManager
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.PulseDialApp
 import com.example.R
@@ -28,7 +32,6 @@ import com.example.data.firebase.CustomPopupAd
 import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.data.firebase.UserEntitlement
-import com.example.recording.CallRecordingAccessibilityService
 import com.example.ui.MainActivity
 import com.example.ui.incall.InCallActivity
 import kotlinx.coroutines.CoroutineScope
@@ -46,7 +49,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Default Dialer InCallService paired with CallRecordingAccessibilityService and CallRecorder.
+ * Default Dialer InCallService paired with CallRecorder.
  *
  * Supports:
  * 1. Multi-Party Call & Conference State Tracking (`CopyOnWriteArrayList<Call>` + `StateFlow<List<Call>>`).
@@ -279,7 +282,6 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         rtdbCustomPopupAdCleanup = null
         proximitySpeakerController?.release()
         proximitySpeakerController = null
-        CallerIdPopupOverlay.dismiss()
         stopCallAnnouncer()
         restoreRingerIfMutedByShield()
         runCatching {
@@ -372,11 +374,6 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             allCalls = snapshot,
             resolver = ::resolveIdentityForCall
         )
-        CallerIdPopupOverlay.showOrUpdate(
-            context = applicationContext,
-            info = instantInfo,
-            isIncoming = (initialState == Call.STATE_RINGING)
-        )
         refreshCallNotificationFromCurrentCalls()
 
         // Async Contacts & CallLog enrichment off Main Thread so ANR never occurs
@@ -396,11 +393,6 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
                 identitySource = enriched.sourceLabel
             )
             broadcastTrackedCalls()
-            CallerIdPopupOverlay.showOrUpdate(
-                context = applicationContext,
-                info = enriched,
-                isIncoming = (getCompatState(call) == Call.STATE_RINGING || currentMeta.wasIncomingRinging)
-            )
             refreshCallNotificationFromCurrentCalls()
 
             if (getCompatState(call) == Call.STATE_RINGING &&
@@ -462,7 +454,6 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         }
 
         if (snapshot.isEmpty()) {
-            CallerIdPopupOverlay.dismiss()
             cancelCallNotification()
             if (!CallManager.isSimSwitchInProgress()) {
                 maybeDispatchAfterCallPopupAd()
@@ -484,13 +475,23 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         if (!ad.shouldDisplayFor(CustomPopupAd.TRIGGER_AFTER_CALL_END, isPremium)) return
 
         afterCallAdDispatchedForCurrentSession = true
-        val adIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(MainActivity.EXTRA_SHOW_AFTER_CALL_POPUP_AD, true)
-            putExtra(MainActivity.EXTRA_POPUP_AD_BUNDLE, ad.toBundle())
+        if (isInteractiveForegroundApp()) {
+            val adIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(MainActivity.EXTRA_SHOW_AFTER_CALL_POPUP_AD, true)
+                putExtra(MainActivity.EXTRA_POPUP_AD_BUNDLE, ad.toBundle())
+            }
+            val started = runCatching {
+                startActivity(adIntent)
+                true
+            }.getOrDefault(false)
+            if (!started) {
+                prefs.pendingAfterCallAdTimestampMs = System.currentTimeMillis()
+            }
+        } else {
+            // Queue cleanly for next resume instead of hitting Android 10-16 BAL block
+            prefs.pendingAfterCallAdTimestampMs = System.currentTimeMillis()
         }
-        runCatching { startActivity(adIntent) }
-            .onFailure { e -> Log.w(TAG, "Failed to launch post-call popup ad: ${e.message}") }
     }
 
     @Deprecated("Deprecated in Java")
@@ -500,7 +501,12 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         audioState ?: return
         proximitySpeakerController?.onAudioRouteChanged(audioState.route)
         val isSpeaker = (audioState.route and CallAudioState.ROUTE_SPEAKER) != 0
-        CallManager.updateAudioState(audioState.isMuted, isSpeaker)
+        CallManager.updateAudioState(
+            isMuted = audioState.isMuted,
+            isSpeakerOn = isSpeaker,
+            audioRoute = audioState.route,
+            supportedAudioRoutes = audioState.supportedRouteMask
+        )
     }
 
     private fun broadcastTrackedCalls() {
@@ -721,17 +727,22 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         if (messageTemplate.isEmpty()) return
 
         var deliveredAny = false
+        val waIntent = if (whatsappEnabled) buildWhatsappFollowUpIntent(rawNumber, messageTemplate) else null
+        val smsIntent = if (smsEnabled) buildSmsFollowUpIntent(rawNumber, messageTemplate) else null
 
-        if (smsEnabled) {
-            if (sendBackgroundFollowUpSms(rawNumber, messageTemplate)) {
+        if (isInteractiveForegroundApp()) {
+            if (smsIntent != null && runCatching { startActivity(smsIntent); true }.getOrDefault(false)) {
+                deliveredAny = true
+            }
+            if (waIntent != null && runCatching { startActivity(waIntent); true }.getOrDefault(false)) {
                 deliveredAny = true
             }
         }
 
-        if (whatsappEnabled) {
-            if (launchWhatsappFollowUpIntent(rawNumber, messageTemplate)) {
-                deliveredAny = true
-            }
+        // Always post a BAL-safe actionable notification when screen is locked or backgrounded
+        if (!deliveredAny && (waIntent != null || smsIntent != null)) {
+            postFollowUpActionNotification(rawNumber, waIntent, smsIntent)
+            deliveredAny = true
         }
 
         if (deliveredAny) {
@@ -739,45 +750,91 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun sendBackgroundFollowUpSms(phoneNumber: String, message: String): Boolean {
-        val hasSmsPermission = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.SEND_SMS
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!hasSmsPermission) return false
-
-        return runCatching {
-            val smsManager: SmsManager = getSystemService(SmsManager::class.java)
-                ?: @Suppress("DEPRECATION") SmsManager.getDefault()
-            val parts = smsManager.divideMessage(message)
-            if (parts != null && parts.size > 1) {
-                smsManager.sendMultipartTextMessage(phoneNumber, null, parts, null, null)
-            } else {
-                smsManager.sendTextMessage(phoneNumber, null, message, null, null)
-            }
-            true
-        }.onFailure { e ->
-            Log.w(TAG, "Auto SMS follow-up failed: ${e.message}")
-        }.getOrDefault(false)
+    private fun isInteractiveForegroundApp(): Boolean {
+        val powerOk = runCatching {
+            getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        }.getOrDefault(true)
+        if (!powerOk) return false
+        val importance = runCatching {
+            val info = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(info)
+            info.importance
+        }.getOrDefault(ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+        return importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 
-    private fun launchWhatsappFollowUpIntent(phoneNumber: String, message: String): Boolean {
+    private fun buildSmsFollowUpIntent(phoneNumber: String, message: String): Intent? {
+        val cleanNumber = phoneNumber.trim()
+        if (cleanNumber.isEmpty() || message.isBlank()) return null
+        return Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(cleanNumber)}")).apply {
+            putExtra("sms_body", message)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+    }
+
+    private fun buildWhatsappFollowUpIntent(phoneNumber: String, message: String): Intent? {
         val cleanNumber = formatWhatsappFollowUpPhone(phoneNumber)
-        if (cleanNumber.isEmpty()) return false
+        if (cleanNumber.isEmpty() || message.isBlank()) return null
         val uri = Uri.parse(
             "https://api.whatsapp.com/send?phone=$cleanNumber&text=${Uri.encode(message)}"
         )
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+        return Intent(Intent.ACTION_VIEW, uri).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        return runCatching {
-            CallRecordingAccessibilityService.notifyPendingWhatsappAutoSend()
-            startActivity(intent)
-            true
-        }.onFailure { e ->
-            CallRecordingAccessibilityService.clearPendingWhatsappAutoSend()
-            Log.w(TAG, "Auto WhatsApp follow-up launch failed: ${e.message}")
-        }.getOrDefault(false)
+    }
+
+    private fun postFollowUpActionNotification(
+        phoneNumber: String,
+        waIntent: Intent?,
+        smsIntent: Intent?
+    ) {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val primaryIntent = waIntent ?: smsIntent ?: return
+        val primaryPending = PendingIntent.getActivity(
+            this,
+            3001,
+            primaryIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(this, PulseDialApp.CHANNEL_FOLLOW_UP)
+            .setSmallIcon(R.drawable.ic_message)
+            .setContentTitle(getString(R.string.followup_notification_title, phoneNumber))
+            .setContentText(getString(R.string.followup_notification_body))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(primaryPending)
+
+        if (waIntent != null) {
+            val waPending = PendingIntent.getActivity(
+                this,
+                3002,
+                waIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                R.drawable.ic_message,
+                getString(R.string.followup_action_whatsapp),
+                waPending
+            )
+        }
+        if (smsIntent != null) {
+            val smsPending = PendingIntent.getActivity(
+                this,
+                3003,
+                smsIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                R.drawable.ic_quick_reply,
+                getString(R.string.followup_action_sms),
+                smsPending
+            )
+        }
+
+        runCatching {
+            manager.notify(FOLLOW_UP_NOTIFICATION_ID, builder.build())
+        }
     }
 
     private fun isEarlyOrActiveRecordingState(state: Int): Boolean {
@@ -815,6 +872,31 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             PulseDialApp.CHANNEL_ONGOING_CALLS
         }
 
+        val answerPendingIntent = PendingIntent.getBroadcast(
+            this,
+            1002,
+            Intent(this, CallNotificationActionReceiver::class.java).apply {
+                action = CallNotificationActionReceiver.ACTION_ANSWER_CALL
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val declinePendingIntent = PendingIntent.getBroadcast(
+            this,
+            1003,
+            Intent(this, CallNotificationActionReceiver::class.java).apply {
+                action = CallNotificationActionReceiver.ACTION_DECLINE_CALL
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val hangUpPendingIntent = PendingIntent.getBroadcast(
+            this,
+            1004,
+            Intent(this, CallNotificationActionReceiver::class.java).apply {
+                action = CallNotificationActionReceiver.ACTION_HANG_UP_CALL
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, channelId)
         } else {
@@ -822,11 +904,34 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             Notification.Builder(this)
         }
 
+        val cleanSubtitle = if (number.isNotBlank()) number else getString(R.string.incall_unknown_caller)
         builder.setSmallIcon(R.drawable.ic_call)
             .setContentTitle(name)
-            .setContentText(if (number.isNotBlank()) number else getString(R.string.incall_unknown_caller))
+            .setContentText(cleanSubtitle)
             .setOngoing(true)
+            .setCategory(Notification.CATEGORY_CALL)
             .setContentIntent(pendingIntent)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val callerPerson = Person.Builder()
+                .setName(name.ifBlank { cleanSubtitle })
+                .setIcon(Icon.createWithResource(this, R.drawable.ic_call))
+                .setImportant(true)
+                .build()
+            val callStyle = if (isRinging) {
+                Notification.CallStyle.forIncomingCall(
+                    callerPerson,
+                    declinePendingIntent,
+                    answerPendingIntent
+                )
+            } else {
+                Notification.CallStyle.forOngoingCall(
+                    callerPerson,
+                    hangUpPendingIntent
+                )
+            }
+            builder.setStyle(callStyle)
+        }
 
         if (isRinging) {
             builder.setFullScreenIntent(pendingIntent, true)
@@ -854,6 +959,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
     companion object {
         private const val TAG = "CustomInCallService"
         private const val CALL_NOTIFICATION_ID = 4401
+        private const val FOLLOW_UP_NOTIFICATION_ID = 4403
         private const val ANNOUNCER_REPEAT_PAUSE_MS = 2_000L
         const val USAGE_NOTIFICATION_RING = AudioAttributes.USAGE_NOTIFICATION_RINGTONE
 

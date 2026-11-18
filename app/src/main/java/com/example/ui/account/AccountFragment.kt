@@ -27,6 +27,7 @@ import com.example.billing.SubscriptionManager
 import com.example.billing.UpiPaymentHelper
 import com.example.billing.UpiTxnStatus
 import com.example.data.DialerPreferences
+import com.example.data.PulseDialCrashLogger
 import com.example.data.SimNumberHelper
 import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.DeviceTrialRepository
@@ -120,9 +121,6 @@ class AccountFragment : Fragment() {
         paymentRepository = PaymentRepository(ctx)
         billingManager.startConnection()
 
-        // Admin panel is hidden and opened by tapping the Account tab 12 times
-        binding.cardAdminPanel.visibility = View.GONE
-
         bindProfile()
         syncCloudTrialStatus()
 
@@ -175,6 +173,10 @@ class AccountFragment : Fragment() {
 
         binding.btnWhatsappSupport.setOnClickListener {
             openWhatsAppSupport()
+        }
+
+        binding.btnViewCrashLog.setOnClickListener {
+            showCrashDiagnosticsDialog()
         }
 
         observeStateFlows()
@@ -831,6 +833,26 @@ class AccountFragment : Fragment() {
             }
             .setNegativeButton(R.string.dialog_close, null)
             .show()
+    }
+
+    private fun showCrashDiagnosticsDialog() {
+        val ctx = requireContext()
+        val report = PulseDialCrashLogger.getLastCrashSummary(ctx)?.takeIf { it.isNotBlank() }
+        val message = report ?: getString(R.string.crash_diag_empty)
+        val builder = MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.crash_diag_title)
+            .setMessage(message)
+            .setPositiveButton(R.string.dialog_close, null)
+        if (report != null) {
+            builder.setNeutralButton(R.string.crash_diag_copy) { _, _ ->
+                copyToClipboard(report)
+                Toast.makeText(ctx, R.string.crash_diag_copy, Toast.LENGTH_SHORT).show()
+            }
+            builder.setNegativeButton(R.string.crash_diag_clear) { _, _ ->
+                PulseDialCrashLogger.clearLastCrash(ctx)
+            }
+        }
+        builder.show()
     }
 
     companion object {

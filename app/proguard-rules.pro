@@ -1,21 +1,26 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ProGuard / R8 Rules for PulseDial
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep Firebase POJOs & RTDB/Firestore serialized model classes
+-keepclassmembers class com.example.data.firebase.** {
+    *;
+}
+-keep class com.example.data.firebase.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Keep Google Play Billing & Credential Manager classes
+-keep class com.android.billingclient.api.** { *; }
+-dontwarn com.android.billingclient.api.**
+-keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep Firebase classes & annotations
+-keepattributes Signature,InnerClasses,EnclosingMethod
+-keepattributes *Annotation*
+-keepclassmembers class * {
+    @com.google.firebase.database.PropertyName *;
+    @com.google.firebase.firestore.PropertyName *;
+    @com.google.firebase.firestore.ServerTimestamp *;
+}
+
+# Preserve line numbers for Crash Logger diagnostics
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

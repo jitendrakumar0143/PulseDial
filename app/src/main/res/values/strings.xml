@@ -151,17 +151,15 @@
     <string name="incall_conference_drop">Drop</string>
     <string name="incall_split_unsupported">Carrier does not support splitting this participant</string>
     <string name="incall_merge_unavailable">Place or hold a second call before merging</string>
-    <string name="accessibility_service_label">PulseDial Call Audio Helper</string>
-    <string name="accessibility_service_description">Enables PulseDial to capture clear two-way cellular call audio plus WhatsApp, WhatsApp Business, Google Meet, Telegram, and Instagram call audio on Android 10–16+ without reading personal messages.</string>
     <string name="accessibility_prompt_title">Enable Clear Call Recording</string>
-    <string name="accessibility_prompt_message">Android 10–16+ requires enabling \"%1$s\" in Accessibility Settings so Cellular, WhatsApp, WhatsApp Business, Meet, Telegram, and Instagram calls record clearly into separate File Manager folders.</string>
-    <string name="accessibility_prompt_open">Open Accessibility</string>
+    <string name="accessibility_prompt_message">Set \"%1$s\" as your Default Dialer so Cellular, WhatsApp, WhatsApp Business, Meet, Telegram, and Instagram calls record clearly into separate File Manager folders.</string>
+    <string name="accessibility_prompt_open">Set Default Dialer</string>
 
     <!-- Minimalist Settings Tab (Strictly 6 Essential Options) -->
     <string name="settings_title">Settings</string>
     <string name="settings_subtitle">Minimalist dialer preferences</string>
     <string name="setting_auto_record_title">Auto Call Recording</string>
-    <string name="setting_auto_record_desc">Automatically record calls from the first ring (.mp3)</string>
+    <string name="setting_auto_record_desc">Automatically record calls from the first ring (.m4a)</string>
     <string name="setting_folder_title">Recording Storage Folder</string>
     <string name="setting_folder_default">Saves in separate File Manager folders: Music/PulseDial/… (Tap to choose folder)</string>
     <string name="setting_folder_selected">Folder: %1$s (separate subfolders per app)</string>
@@ -169,8 +167,14 @@
     <string name="setting_blocked_title">Blocked Numbers</string>
     <string name="setting_blocked_desc_count">%1$d blocked numbers</string>
     <string name="setting_theme_title">Display Theme</string>
+    <string name="setting_theme_system_default">System Default</string>
     <string name="setting_theme_light">Light Mode</string>
     <string name="setting_theme_dark">Dark Mode</string>
+    <string name="setting_theme_dynamic_title">Material You Dynamic Colors</string>
+    <string name="setting_theme_dynamic_desc">Adapt app colors dynamically from device wallpaper (Android 12+)</string>
+    <string name="setting_theme_studio_title">3D Mix &amp; Premium Theme Studio</string>
+    <string name="setting_theme_studio_subtitle">Switch between System Default, Light &amp; Dark Mode, Dynamic Colors, and High-Quality 3D Mix Themes</string>
+    <string name="setting_theme_applied_toast">Theme applied: %1$s</string>
     <string name="setting_sounds_title">Sounds &amp; Vibration</string>
     <string name="setting_sounds_desc">Dialpad tones and touch feedback</string>
     <string name="setting_quick_decline_title">Quick Decline Responses</string>
@@ -401,16 +405,18 @@
 
     <!-- Google Sign-In Gate -->
     <string name="auth_gate_title">Welcome to PulseDial</string>
-    <string name="auth_gate_subtitle">New users enjoy 7 days completely free, then ₹299/month. Sign in with your Google Account to verify your device and activate your trial.</string>
+    <string name="auth_gate_subtitle">New users enjoy 7 days completely free, then ₹299/month. Sign in with the Google Account currently logged in on this mobile device to activate your trial.</string>
     <string name="auth_gate_trial_badge">7-Day Free Trial • One Per Device</string>
-    <string name="auth_gate_btn_google">Sign in with Google</string>
+    <string name="auth_gate_btn_google">Sign in with Device Google Account</string>
+    <string name="auth_gate_btn_google_with_email">Continue as %1$s</string>
     <string name="auth_gate_or_divider">OR INSTANT DEVICE LOGIN</string>
     <string name="auth_gate_fallback_hint">Email or 10-Digit Mobile Number</string>
     <string name="auth_gate_btn_fallback">Continue with Email / Mobile</string>
     <string name="auth_gate_fallback_invalid">Please enter a valid Email address or 10-digit Mobile Number</string>
     <string name="auth_gate_verifying">Verifying device trial status…</string>
-    <string name="auth_no_google_account">No Google account available on this device. Please add a Google account and try again.</string>
-    <string name="auth_picker_cancelled">Please choose your Google account to continue.</string>
+    <string name="auth_no_google_account">No Google account is currently signed in on this mobile device. Please use the Google account logged into your phone.</string>
+    <string name="auth_picker_cancelled">Please select the Google account currently logged in on your mobile device to continue.</string>
+    <string name="auth_only_device_email_allowed">Login restricted: You can only sign in with the Google email currently logged in on this mobile device.</string>
 
     <!-- Full-Screen Account Blocked Overlay & Live Real-Time Controls -->
     <string name="blocked_overlay_title">Account Blocked by Admin</string>
@@ -422,9 +428,9 @@
     <string name="admin_switch_premium_access">Premium Access</string>
     <string name="admin_pending_utr_banner">PENDING UTR APPROVAL • Phone: %1$s • UTR: %2$s</string>
     <string name="admin_user_status_pending_utr">Pending UTR</string>
-    <string name="setting_accessibility_title">Accessibility Service Status</string>
-    <string name="setting_accessibility_enabled">Active • Two-way call audio capture enabled</string>
-    <string name="setting_accessibility_disabled">Inactive • Tap to enable in Accessibility Settings</string>
+    <string name="setting_accessibility_title">Call Audio &amp; Default Dialer</string>
+    <string name="setting_accessibility_enabled">Active • Default Dialer enabled for call recording</string>
+    <string name="setting_accessibility_disabled">Inactive • Tap to set PulseDial as Default Dialer</string>
 
     <!-- VIP Smart Call Announcer & Unknown Shield + VIP Business Auto Follow-Up -->
     <string name="vip_announcer_card_title">VIP Smart Call Announcer &amp; Unknown Shield</string>
@@ -464,15 +470,15 @@
     <!-- VoIP & App Call Recording (Saved strictly in separate File Manager folders) -->
     <string name="voip_recording_card_title">App &amp; VoIP Call Recording</string>
     <string name="voip_recording_card_subtitle">Choose a separate File Manager folder for each app (saved directly in your chosen folder, hidden from call app)</string>
-    <string name="voip_record_whatsapp_title">WhatsApp Call Recording</string>
+    <string name="voip_record_whatsapp_title">WhatsApp</string>
     <string name="voip_record_whatsapp_desc">Default folder: Music/PulseDial/WhatsApp Call Recordings</string>
-    <string name="voip_record_whatsapp_business_title">WhatsApp Business Call Recording</string>
+    <string name="voip_record_whatsapp_business_title">WhatsApp Business</string>
     <string name="voip_record_whatsapp_business_desc">Default folder: Music/PulseDial/WhatsApp Business Call Recordings</string>
-    <string name="voip_record_meet_title">Google Meet Recording</string>
+    <string name="voip_record_meet_title">Google Meet</string>
     <string name="voip_record_meet_desc">Default folder: Music/PulseDial/Meet Call Recordings</string>
-    <string name="voip_record_telegram_title">Telegram Call Recording</string>
+    <string name="voip_record_telegram_title">Telegram</string>
     <string name="voip_record_telegram_desc">Default folder: Music/PulseDial/Telegram Call Recordings</string>
-    <string name="voip_record_instagram_title">Instagram Call Recording</string>
+    <string name="voip_record_instagram_title">Instagram</string>
     <string name="voip_record_instagram_desc">Default folder: Music/PulseDial/Instagram Call Recordings</string>
     <string name="voip_folder_select_btn">Select Folder</string>
     <string name="voip_folder_change_btn">Change Folder</string>
@@ -605,4 +611,48 @@
     <string name="admin_days_adjusted_toast">Updated %1$s by %2$s (%3$s)</string>
     <string name="admin_manage_access_days_section">New &amp; Old User Days (+ Add / - Reduce)</string>
     <string name="admin_manage_access_days_hint">Works for Pro subscribers, Old/Expired accounts, and New/Trial users without violating rules.</string>
+
+    <!-- Admin Panel: Add User & Delete User -->
+    <string name="admin_add_user_btn">+ Add User</string>
+    <string name="admin_add_user_title">Add New User</string>
+    <string name="admin_add_user_uid_hint">Custom User ID (optional, auto-generated if empty)</string>
+    <string name="admin_add_user_email_hint">Email Address</string>
+    <string name="admin_add_user_activate_pro">Activate Pro Subscription Immediately</string>
+    <string name="admin_add_user_sub_days_hint">Pro Subscription Days (default 30)</string>
+    <string name="admin_add_user_bonus_days_hint">Bonus Free Trial Days (default 0)</string>
+    <string name="admin_add_user_create_btn">Add User</string>
+    <string name="admin_add_user_success">Added user %1$s</string>
+    <string name="admin_delete_user_btn">Delete</string>
+    <string name="admin_delete_user_title">Delete User?</string>
+    <string name="admin_delete_user_message">Permanently remove %1$s (%2$s) from PulseDial Firestore &amp; Realtime Database? This cannot be undone.</string>
+    <string name="admin_delete_user_confirm">Delete User</string>
+    <string name="admin_delete_user_success">Deleted user %1$s</string>
+    <string name="admin_delete_super_admin_blocked">Super Admin account cannot be deleted.</string>
+
+    <!-- Play-Protect-Safe VoIP Detection & Clean Per-App Folders Dialog -->
+    <string name="voip_notification_listener_label">PulseDial VoIP Call Detector</string>
+    <string name="voip_manage_folders_btn">Folders</string>
+    <string name="voip_folders_dialog_title">Per-App Recording Folders</string>
+    <string name="voip_folders_reset_item">Reset %1$s to Default</string>
+    <string name="voip_notification_access_title">Enable Exact App Call Detection</string>
+    <string name="voip_notification_access_message">Allow PulseDial Notification Access so WhatsApp, WhatsApp Business, Meet, Telegram, and Instagram calls are detected accurately and saved in each app\'s own folder (Play-Protect safe).</string>
+    <string name="voip_notification_access_enable">Open Notification Access</string>
+
+    <!-- In-Call Bluetooth / Audio Route Switcher -->
+    <string name="incall_audio_bluetooth">Bluetooth</string>
+    <string name="incall_audio_headset">Headset</string>
+    <string name="incall_audio_earpiece">Phone Earpiece</string>
+    <string name="incall_audio_chooser_title">Choose Call Audio Output</string>
+
+    <!-- BAL-Safe Post-Call Follow-Up Notifications -->
+    <string name="followup_notification_title">Follow up with %1$s</string>
+    <string name="followup_notification_body">Tap below to send your saved WhatsApp or SMS message.</string>
+    <string name="followup_action_whatsapp">WhatsApp</string>
+    <string name="followup_action_sms">SMS</string>
+
+    <!-- Crash Diagnostics -->
+    <string name="crash_diag_title">Last App Diagnostic Log</string>
+    <string name="crash_diag_empty">No recent crashes captured. App health is clean.</string>
+    <string name="crash_diag_clear">Clear Log</string>
+    <string name="crash_diag_copy">Copy Log</string>
 </resources>

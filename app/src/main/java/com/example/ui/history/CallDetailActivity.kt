@@ -68,6 +68,7 @@ class CallDetailActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.example.ui.theme.ThemeStudioManager.applyActivityTheme(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         binding = ActivityCallDetailBinding.inflate(layoutInflater)
@@ -93,6 +94,7 @@ class CallDetailActivity : AppCompatActivity() {
         setupToolbar()
         setupRecycler()
         setupActions()
+        com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(binding.root, prefs)
         loadDetailsAndHistory()
         observeRealtimeLock()
     }

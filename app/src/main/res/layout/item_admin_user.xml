@@ -202,6 +202,19 @@
                     android:layout_height="48dp"
                     android:layout_marginStart="4dp"
                     android:text="@string/admin_manage_user" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_user_delete"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:contentDescription="@string/admin_delete_user_confirm"
+                    android:text="@string/admin_delete_user_btn"
+                    android:textColor="@color/md_theme_error"
+                    app:icon="@drawable/ic_delete"
+                    app:iconTint="@color/md_theme_error"
+                    app:strokeColor="@color/md_theme_error" />
             </LinearLayout>
         </HorizontalScrollView>
     </LinearLayout>

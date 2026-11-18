@@ -35,11 +35,14 @@ import com.example.data.firebase.UserEntitlement
 import com.example.databinding.DialogListEditorBinding
 import com.example.databinding.FragmentSettingsBinding
 import com.example.databinding.ItemSimpleRowBinding
-import com.example.recording.CallRecordingAccessibilityService
 import com.example.recording.CallRecordingSource
+import com.example.recording.VoipCallNotificationListener
+import com.example.telecom.DialerHelper
 import com.example.telecom.DualSimManager
 import com.example.ui.MainActivity
-import com.google.android.material.button.MaterialButton
+import com.example.ui.theme.AppThemePalette
+import com.example.ui.theme.ThemeStudioManager
+import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -63,11 +66,16 @@ class SettingsFragment : Fragment() {
     private lateinit var settingsAdapter: DynamicSettingsAdapter
     private var isBindingVipControls: Boolean = false
     private var isBindingVoipControls: Boolean = false
+    private var isBindingThemeControls: Boolean = false
+    private val paletteChipIds = LinkedHashMap<AppThemePalette, Int>()
     private var pendingVoipAction: (() -> Unit)? = null
     private var pendingFolderSource: CallRecordingSource? = null
     @Volatile
     private var cachedAccessibilityEnabled: Boolean = false
+    @Volatile
+    private var cachedAvailableSims: List<com.example.telecom.SimCardInfo> = emptyList()
     private var lastBoundRowsSignature: String? = null
+    private var activeSettingsDialog: androidx.appcompat.app.AlertDialog? = null
 
     private val voipAudioPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -83,34 +91,14 @@ class SettingsFragment : Fragment() {
         if (recordGranted) {
             action?.invoke()
             bindVoipCardState()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                !CallRecordingAccessibilityService.isServiceEnabled(requireContext())
-            ) {
-                showAccessibilityEnablePrompt()
+            if (!VoipCallNotificationListener.isNotificationAccessGranted(requireContext())) {
+                showVoipNotificationAccessPrompt()
             }
         } else {
             bindVoipCardState()
             Toast.makeText(
                 requireContext(),
                 R.string.voip_mic_permission_required,
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-    }
-
-    private val sendSmsPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (_binding == null) return@registerForActivityResult
-        if (granted) {
-            settingsManager.setAutoSmsFollowUp(true)
-            bindVipCardsState()
-        } else {
-            settingsManager.setAutoSmsFollowUp(false)
-            bindVipCardsState()
-            Toast.makeText(
-                requireContext(),
-                "SMS permission is required for background Auto SMS Follow-Up",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -203,10 +191,12 @@ class SettingsFragment : Fragment() {
 
         setupRecyclerView()
         setupDefaultSimCard()
+        setupThemeStudioCard()
         setupVoipRecordingCardListeners()
         setupVipCardsListeners()
         bindCurrentValues(force = true)
         refreshAccessibilityStatusAsync()
+        refreshAvailableSimsAsync()
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -239,6 +229,7 @@ class SettingsFragment : Fragment() {
         if (_binding != null && isAdded) {
             bindCurrentValues()
             refreshAccessibilityStatusAsync()
+            refreshAvailableSimsAsync()
         }
     }
 
@@ -252,13 +243,30 @@ class SettingsFragment : Fragment() {
         val ctx = context?.applicationContext ?: return
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             val enabled = runCatching {
-                CallRecordingAccessibilityService.isServiceEnabled(ctx)
+                DialerHelper.isDefaultDialer(ctx)
             }.getOrDefault(false)
             if (enabled != cachedAccessibilityEnabled) {
                 cachedAccessibilityEnabled = enabled
                 withContext(Dispatchers.Main) {
                     if (_binding != null && isAdded) {
                         bindCurrentValues(force = true)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun refreshAvailableSimsAsync() {
+        val ctx = context?.applicationContext ?: return
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            val sims = runCatching {
+                DualSimManager.getAvailableSims(ctx)
+            }.getOrDefault(emptyList())
+            if (sims != cachedAvailableSims) {
+                cachedAvailableSims = sims
+                withContext(Dispatchers.Main) {
+                    if (_binding != null && isAdded) {
+                        bindDefaultSimCard()
                     }
                 }
             }
@@ -313,10 +321,8 @@ class SettingsFragment : Fragment() {
         }
 
         persistChange(true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            !CallRecordingAccessibilityService.isServiceEnabled(ctx)
-        ) {
-            showAccessibilityEnablePrompt()
+        if (!VoipCallNotificationListener.isNotificationAccessGranted(ctx)) {
+            showVoipNotificationAccessPrompt()
         }
     }
 
@@ -342,50 +348,9 @@ class SettingsFragment : Fragment() {
             handleVoipToggleChange(isChecked) { settingsManager.setRecordInstagramCalls(it) }
         }
 
-        binding.btnFolderWhatsapp.setOnClickListener {
+        binding.btnManageVoipFolders.setOnClickListener {
             if (!isVipEntitled()) return@setOnClickListener
-            launchFolderPickerForSource(CallRecordingSource.WHATSAPP)
-        }
-        binding.btnFolderWhatsappBusiness.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            launchFolderPickerForSource(CallRecordingSource.WHATSAPP_BUSINESS)
-        }
-        binding.btnFolderMeet.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            launchFolderPickerForSource(CallRecordingSource.GOOGLE_MEET)
-        }
-        binding.btnFolderTelegram.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            launchFolderPickerForSource(CallRecordingSource.TELEGRAM)
-        }
-        binding.btnFolderInstagram.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            launchFolderPickerForSource(CallRecordingSource.INSTAGRAM)
-        }
-
-        binding.btnResetFolderWhatsapp.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            resetFolderForSource(CallRecordingSource.WHATSAPP)
-        }
-        binding.btnResetFolderWhatsappBusiness.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            resetFolderForSource(CallRecordingSource.WHATSAPP_BUSINESS)
-        }
-        binding.btnResetFolderMeet.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            resetFolderForSource(CallRecordingSource.GOOGLE_MEET)
-        }
-        binding.btnResetFolderTelegram.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            resetFolderForSource(CallRecordingSource.TELEGRAM)
-        }
-        binding.btnResetFolderInstagram.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
-            resetFolderForSource(CallRecordingSource.INSTAGRAM)
-        }
-
-        binding.btnOpenFileManagerRecordings.setOnClickListener {
-            openFileManagerRecordings()
+            showVoipFoldersDialog()
         }
     }
 
@@ -421,81 +386,72 @@ class SettingsFragment : Fragment() {
                 applyFrozenState(switchView, allowed)
             }
 
-            listOf(
-                binding.btnFolderWhatsapp,
-                binding.btnFolderWhatsappBusiness,
-                binding.btnFolderMeet,
-                binding.btnFolderTelegram,
-                binding.btnFolderInstagram,
-                binding.btnResetFolderWhatsapp,
-                binding.btnResetFolderWhatsappBusiness,
-                binding.btnResetFolderMeet,
-                binding.btnResetFolderTelegram,
-                binding.btnResetFolderInstagram
-            ).forEach { btn ->
-                applyFrozenState(btn, allowed)
-            }
-
-            bindPerAppFolderRow(
-                source = CallRecordingSource.WHATSAPP,
-                pathView = binding.tvWhatsappFolderPath,
-                selectButton = binding.btnFolderWhatsapp,
-                resetButton = binding.btnResetFolderWhatsapp
-            )
-            bindPerAppFolderRow(
-                source = CallRecordingSource.WHATSAPP_BUSINESS,
-                pathView = binding.tvWhatsappBusinessFolderPath,
-                selectButton = binding.btnFolderWhatsappBusiness,
-                resetButton = binding.btnResetFolderWhatsappBusiness
-            )
-            bindPerAppFolderRow(
-                source = CallRecordingSource.GOOGLE_MEET,
-                pathView = binding.tvMeetFolderPath,
-                selectButton = binding.btnFolderMeet,
-                resetButton = binding.btnResetFolderMeet
-            )
-            bindPerAppFolderRow(
-                source = CallRecordingSource.TELEGRAM,
-                pathView = binding.tvTelegramFolderPath,
-                selectButton = binding.btnFolderTelegram,
-                resetButton = binding.btnResetFolderTelegram
-            )
-            bindPerAppFolderRow(
-                source = CallRecordingSource.INSTAGRAM,
-                pathView = binding.tvInstagramFolderPath,
-                selectButton = binding.btnFolderInstagram,
-                resetButton = binding.btnResetFolderInstagram
-            )
+            applyFrozenState(binding.btnManageVoipFolders, allowed)
         } finally {
             isBindingVoipControls = false
         }
     }
 
-    private fun bindPerAppFolderRow(
-        source: CallRecordingSource,
-        pathView: TextView,
-        selectButton: MaterialButton,
-        resetButton: MaterialButton
-    ) {
-        val target = prefs.resolveFolderTarget(source)
-        if (target.isCustomPerSource) {
-            pathView.text = getString(R.string.voip_folder_custom_path, target.displayName)
-            pathView.setTextColor(ContextCompat.getColor(requireContext(), R.color.md_theme_primary))
-            selectButton.text = getString(R.string.voip_folder_change_btn)
-            resetButton.visibility = View.VISIBLE
-        } else {
-            val isSharedGlobal = !target.treeUri.isNullOrBlank()
-            pathView.text = if (isSharedGlobal) {
+    fun showVoipFoldersDialog() {
+        val ctx = context ?: return
+        val sources = CallRecordingSource.entries
+        val labels = sources.map { source ->
+            val target = prefs.resolveFolderTarget(source)
+            val status = if (target.isCustomPerSource) {
+                getString(R.string.voip_folder_custom_path, target.displayName)
+            } else if (!target.treeUri.isNullOrBlank()) {
                 getString(R.string.voip_folder_global_path, target.displayName)
             } else {
-                getString(R.string.voip_folder_default_path, target.displayName)
+                target.displayName
             }
-            pathView.setTextColor(
-                ContextCompat.getColor(requireContext(), R.color.md_theme_onSurfaceVariant)
-            )
-            selectButton.text = getString(R.string.voip_folder_select_btn)
-            resetButton.visibility = View.GONE
-        }
+            "${source.displayLabel} — $status"
+        }.toTypedArray()
+
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.voip_folders_dialog_title)
+            .setItems(labels) { _, which ->
+                val chosen = sources.getOrNull(which) ?: return@setItems
+                val target = prefs.resolveFolderTarget(chosen)
+                if (target.isCustomPerSource) {
+                    MaterialAlertDialogBuilder(ctx)
+                        .setTitle(chosen.displayLabel)
+                        .setItems(
+                            arrayOf(
+                                getString(R.string.voip_folder_change_btn),
+                                getString(R.string.voip_folders_reset_item, chosen.displayLabel)
+                            )
+                        ) { _, actionIndex ->
+                            if (actionIndex == 0) {
+                                launchFolderPickerForSource(chosen)
+                            } else {
+                                resetFolderForSource(chosen)
+                            }
+                        }
+                        .setNegativeButton(R.string.dialog_close, null)
+                        .show()
+                } else {
+                    launchFolderPickerForSource(chosen)
+                }
+            }
+            .setNeutralButton(R.string.voip_open_file_manager_btn) { _, _ ->
+                openFileManagerRecordings()
+            }
+            .setPositiveButton(R.string.dialog_close, null)
+            .show()
+    }
+
+    private fun showVoipNotificationAccessPrompt() {
+        val ctx = context ?: return
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.voip_notification_access_title)
+            .setMessage(R.string.voip_notification_access_message)
+            .setPositiveButton(R.string.voip_notification_access_enable) { _, _ ->
+                runCatching {
+                    startActivity(VoipCallNotificationListener.createNotificationAccessSettingsIntent())
+                }
+            }
+            .setNegativeButton(R.string.trial_expired_dialog_later, null)
+            .show()
     }
 
     private fun openFileManagerRecordings() {
@@ -588,19 +544,7 @@ class SettingsFragment : Fragment() {
                 bindVipCardsState()
                 return@setOnCheckedChangeListener
             }
-            if (isChecked) {
-                val hasPerm = ContextCompat.checkSelfPermission(
-                    requireContext(),
-                    Manifest.permission.SEND_SMS
-                ) == PackageManager.PERMISSION_GRANTED
-                if (hasPerm) {
-                    settingsManager.setAutoSmsFollowUp(true)
-                } else {
-                    sendSmsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
-                }
-            } else {
-                settingsManager.setAutoSmsFollowUp(false)
-            }
+            settingsManager.setAutoSmsFollowUp(isChecked)
         }
 
         binding.switchVipAutoWhatsapp.setOnCheckedChangeListener { _, isChecked ->
@@ -744,8 +688,7 @@ class SettingsFragment : Fragment() {
 
     private fun bindDefaultSimCard() {
         if (_binding == null || !isAdded) return
-        val ctx = requireContext()
-        val sims = DualSimManager.getAvailableSims(ctx)
+        val sims = cachedAvailableSims
         val summary = when {
             sims.isEmpty() -> getString(R.string.setting_default_sim_no_sim)
             sims.size == 1 -> getString(R.string.setting_default_sim_single, sims.first().fullDescription())
@@ -807,12 +750,211 @@ class SettingsFragment : Fragment() {
             .show()
     }
 
+    private fun setupThemeStudioCard() {
+        val ctx = requireContext()
+        binding.chipGroupThemePalettes.removeAllViews()
+        paletteChipIds.clear()
+
+        val hasPremiumThemes = ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
+        AppThemePalette.premium3DMixThemes().forEach { palette ->
+            val isLocked = !hasPremiumThemes
+            val chip = Chip(ctx).apply {
+                id = View.generateViewId()
+                text = if (isLocked) {
+                    "🔒 ${palette.title} (PRO)"
+                } else {
+                    "👑 ${palette.title}"
+                }
+                isCheckable = true
+                isClickable = true
+                chipStrokeWidth = 2f
+                chipStrokeColor = android.content.res.ColorStateList.valueOf(palette.cardStrokeColorInt())
+            }
+            paletteChipIds[palette] = chip.id
+            binding.chipGroupThemePalettes.addView(chip)
+        }
+
+        binding.chipGroupThemeMode.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (isBindingThemeControls) return@setOnCheckedStateChangeListener
+            val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
+            val desiredMode = when (checkedId) {
+                R.id.chip_theme_mode_system -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                R.id.chip_theme_mode_dark -> AppCompatDelegate.MODE_NIGHT_YES
+                else -> AppCompatDelegate.MODE_NIGHT_NO
+            }
+            if (prefs.displayThemeMode != desiredMode) {
+                settingsManager.setThemeMode(desiredMode)
+                bindThemeStudioCard()
+                bindCurrentValues(force = true)
+            }
+        }
+
+        binding.switchDynamicColors.setOnCheckedChangeListener { _, isChecked ->
+            if (isBindingThemeControls) return@setOnCheckedChangeListener
+            if (prefs.useDynamicColors != isChecked) {
+                settingsManager.setUseDynamicColors(isChecked)
+                bindThemeStudioCard()
+                bindCurrentValues(force = true)
+                view?.post {
+                    if (isAdded && activity?.isFinishing == false) {
+                        activity?.recreate()
+                    }
+                }
+            }
+        }
+
+        binding.chipGroupThemePalettes.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (isBindingThemeControls) return@setOnCheckedStateChangeListener
+            val checkedId = checkedIds.firstOrNull()
+            if (checkedId == null) {
+                applySelectedThemePalette(AppThemePalette.EMERALD_PULSE)
+                return@setOnCheckedStateChangeListener
+            }
+            val chosen = paletteChipIds.entries.firstOrNull { it.value == checkedId }?.key ?: return@setOnCheckedStateChangeListener
+            applySelectedThemePalette(chosen)
+        }
+
+        binding.btnOpenThemeGallery.setOnClickListener {
+            showThemePickerDialog()
+        }
+        binding.bannerTheme3dPreview.setOnClickListener {
+            showThemePickerDialog()
+        }
+    }
+
+    private fun showPremiumThemeLockedPrompt(lockedPalette: AppThemePalette) {
+        val ctx = context ?: return
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle("👑 Full-App 3D Mix-Color Theme (Pro Only)")
+            .setMessage(
+                "\"${lockedPalette.title}\" is one of the 3 exclusive Full-App 3D Mix-Color Themes (transforming the full app background, 3D glass cards, dialer keypad, and all text colors).\n\nOnly active Premium subscribers can use the 3 Full-App 3D Mix-Color Themes. Upgrade to PulseDial Pro in the Account tab to unlock!"
+            )
+            .setPositiveButton("Upgrade to Pro 👑") { _, _ ->
+                (activity as? MainActivity)?.navigateToAccountTab()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
+    }
+
+    private fun applySelectedThemePalette(palette: AppThemePalette) {
+        if (palette.isPremiumTheme && !ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)) {
+            bindThemeStudioCard()
+            showPremiumThemeLockedPrompt(palette)
+            return
+        }
+        val changed = prefs.selectedThemePaletteId != palette.id
+        settingsManager.setThemePalette(palette.id)
+        if (palette.is3DMix && prefs.useDynamicColors) {
+            settingsManager.setUseDynamicColors(false)
+        }
+        bindThemeStudioCard()
+        bindCurrentValues(force = true)
+        (activity as? MainActivity)?.refreshPremiumMainChrome()
+        if (_binding != null) {
+            ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(binding.root, prefs)
+        }
+        Toast.makeText(
+            requireContext(),
+            getString(R.string.setting_theme_applied_toast, palette.title),
+            Toast.LENGTH_SHORT
+        ).show()
+        if (changed) {
+            view?.post {
+                if (isAdded && activity?.isFinishing == false) {
+                    activity?.recreate()
+                }
+            }
+        }
+    }
+
+    private fun bindThemeStudioCard() {
+        if (_binding == null || !isAdded) return
+        isBindingThemeControls = true
+        try {
+            val ctx = requireContext()
+            val hasPremiumThemes = ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
+            val palette = ThemeStudioManager.resolveEffectivePalette(prefs)
+            val density = resources.displayMetrics.density
+            binding.bannerTheme3dPreview.background = if (palette.is3DMix) {
+                palette.createFullApp3DBackgroundDrawable(cornerRadiusPx = 18f * density)
+            } else {
+                palette.create3DGradientDrawable(
+                    cornerRadiusPx = 18f * density,
+                    strokeColorInt = android.graphics.Color.argb(110, 255, 255, 255),
+                    strokeWidthPx = (1.5f * density).toInt().coerceAtLeast(1)
+                )
+            }
+            binding.tvActiveThemePaletteName.text = if (hasPremiumThemes && palette.isPremiumTheme) {
+                "👑 ${palette.title}"
+            } else {
+                "${palette.title} (3 Pro 3D Themes Available)"
+            }
+            binding.tvActiveThemePaletteName.setTextColor(
+                if (palette.is3DMix) palette.textPrimaryColorInt() else android.graphics.Color.WHITE
+            )
+            binding.tvActiveThemePaletteSubtitle.text =
+                "${ThemeStudioManager.resolveThemeModeLabel(ctx, prefs.displayThemeMode)} • ${palette.subtitle}"
+            binding.tvActiveThemePaletteSubtitle.setTextColor(
+                if (palette.is3DMix) palette.textSecondaryColorInt() else android.graphics.Color.parseColor("#F1F5F9")
+            )
+            binding.tvActiveThemeBadge.text = when {
+                hasPremiumThemes && palette.is3DMix -> "👑 ${palette.badgeText}"
+                prefs.useDynamicColors -> "DYNAMIC"
+                else -> "🔒 3 PRO 3D THEMES"
+            }
+            binding.tvActiveThemeBadge.setTextColor(palette.primaryColorInt())
+            binding.cardThemeStudio.strokeColor = if (palette.is3DMix) palette.cardStrokeColorInt() else palette.primaryColorInt()
+            binding.cardThemeStudio.strokeWidth = if (hasPremiumThemes && palette.is3DMix) {
+                (2f * density).toInt().coerceAtLeast(2)
+            } else {
+                (1f * density).toInt().coerceAtLeast(1)
+            }
+
+            paletteChipIds.forEach { (pal, chipId) ->
+                val chipView = binding.chipGroupThemePalettes.findViewById<Chip>(chipId)
+                if (chipView != null) {
+                    val isLocked = !hasPremiumThemes
+                    chipView.text = if (isLocked) {
+                        "🔒 ${pal.title} (PRO)"
+                    } else {
+                        "👑 ${pal.title}"
+                    }
+                }
+            }
+
+            val modeChipId = when (prefs.displayThemeMode) {
+                AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM -> R.id.chip_theme_mode_system
+                AppCompatDelegate.MODE_NIGHT_YES -> R.id.chip_theme_mode_dark
+                else -> R.id.chip_theme_mode_light
+            }
+            if (binding.chipGroupThemeMode.checkedChipId != modeChipId) {
+                binding.chipGroupThemeMode.check(modeChipId)
+            }
+
+            if (binding.switchDynamicColors.isChecked != prefs.useDynamicColors) {
+                binding.switchDynamicColors.isChecked = prefs.useDynamicColors
+            }
+
+            val targetChipId = paletteChipIds[palette]
+            if (targetChipId != null) {
+                if (binding.chipGroupThemePalettes.checkedChipId != targetChipId) {
+                    binding.chipGroupThemePalettes.check(targetChipId)
+                }
+            } else {
+                binding.chipGroupThemePalettes.clearCheck()
+            }
+        } finally {
+            isBindingThemeControls = false
+        }
+    }
+
     private fun bindCurrentValues(
         items: List<DynamicSettingItem> = RealtimeSyncManager.syncState.value.settingsItems,
         force: Boolean = false
     ) {
         if (_binding == null || !isAdded) return
         bindDefaultSimCard()
+        bindThemeStudioCard()
         bindVoipCardState()
         bindVipCardsState()
 
@@ -898,10 +1040,7 @@ class SettingsFragment : Fragment() {
                 Triple(desc, false, !item.lockedByAdmin)
             }
             DynamicSettingItem.KEY_DISPLAY_THEME -> {
-                val isDark = prefs.displayThemeMode == AppCompatDelegate.MODE_NIGHT_YES
-                val desc = getString(
-                    if (isDark) R.string.setting_theme_dark else R.string.setting_theme_light
-                )
+                val desc = ThemeStudioManager.buildThemeSummary(requireContext(), prefs)
                 Triple(desc, false, !item.lockedByAdmin)
             }
             DynamicSettingItem.KEY_SOUNDS_VIBRATION -> {
@@ -950,7 +1089,7 @@ class SettingsFragment : Fragment() {
                     settingsManager.setAutoCallRecording(isChecked)
                     if (isChecked &&
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                        !CallRecordingAccessibilityService.isServiceEnabled(requireContext())
+                        !DialerHelper.isDefaultDialer(requireContext())
                     ) {
                         showAccessibilityEnablePrompt()
                     }
@@ -991,11 +1130,7 @@ class SettingsFragment : Fragment() {
                 launchFolderPickerForSource(null)
             }
             DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
-                runCatching {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }.onFailure {
-                    showAccessibilityEnablePrompt()
-                }
+                openDefaultDialerOrAudioSettings()
             }
             DynamicSettingItem.KEY_BLOCKED_NUMBERS -> {
                 showListEditorDialog(
@@ -1043,26 +1178,213 @@ class SettingsFragment : Fragment() {
     }
 
     private fun showThemePickerDialog() {
-        val options = arrayOf(
-            getString(R.string.setting_theme_light),
-            getString(R.string.setting_theme_dark)
-        )
-        val checkedIndex = if (prefs.displayThemeMode == AppCompatDelegate.MODE_NIGHT_YES) 1 else 0
+        val ctx = requireContext()
+        val density = resources.displayMetrics.density
+        val pad = (16 * density).toInt()
 
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.setting_theme_title)
-            .setSingleChoiceItems(options, checkedIndex) { dialog, which ->
-                val mode = if (which == 1) {
-                    AppCompatDelegate.MODE_NIGHT_YES
-                } else {
-                    AppCompatDelegate.MODE_NIGHT_NO
-                }
-                settingsManager.setThemeMode(mode)
-                bindCurrentValues()
-                dialog.dismiss()
+        val scrollView = android.widget.ScrollView(ctx)
+        val container = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, (8 * density).toInt(), pad, pad)
+        }
+        scrollView.addView(container)
+
+        val dialog = MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.setting_theme_studio_title)
+            .setView(scrollView)
+            .setPositiveButton(R.string.dialog_close, null)
+            .create()
+
+        // 1. Color Scheme Mode Section (System Default / Light Mode / Dark Mode)
+        val modeHeader = TextView(ctx).apply {
+            text = getString(R.string.setting_theme_title)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textSize = 14f
+            setPadding(0, 0, 0, (6 * density).toInt())
+        }
+        container.addView(modeHeader)
+
+        val modeGroup = android.widget.RadioGroup(ctx).apply {
+            orientation = android.widget.RadioGroup.VERTICAL
+        }
+        val rbSystem = android.widget.RadioButton(ctx).apply {
+            id = View.generateViewId()
+            text = getString(R.string.setting_theme_system_default)
+        }
+        val rbLight = android.widget.RadioButton(ctx).apply {
+            id = View.generateViewId()
+            text = getString(R.string.setting_theme_light)
+        }
+        val rbDark = android.widget.RadioButton(ctx).apply {
+            id = View.generateViewId()
+            text = getString(R.string.setting_theme_dark)
+        }
+        modeGroup.addView(rbSystem)
+        modeGroup.addView(rbLight)
+        modeGroup.addView(rbDark)
+
+        when (prefs.displayThemeMode) {
+            AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM -> modeGroup.check(rbSystem.id)
+            AppCompatDelegate.MODE_NIGHT_YES -> modeGroup.check(rbDark.id)
+            else -> modeGroup.check(rbLight.id)
+        }
+
+        modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            val mode = when (checkedId) {
+                rbSystem.id -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                rbDark.id -> AppCompatDelegate.MODE_NIGHT_YES
+                else -> AppCompatDelegate.MODE_NIGHT_NO
             }
-            .setNegativeButton(R.string.dialog_close, null)
-            .show()
+            runCatching { dialog.dismiss() }
+            settingsManager.setThemeMode(mode)
+            bindThemeStudioCard()
+            bindCurrentValues(force = true)
+        }
+        container.addView(modeGroup)
+
+        // 2. Dynamic Colors Toggle
+        val dynamicSwitch = com.google.android.material.materialswitch.MaterialSwitch(ctx).apply {
+            text = getString(R.string.setting_theme_dynamic_title)
+            isChecked = prefs.useDynamicColors
+            minHeight = (48 * density).toInt()
+            setOnCheckedChangeListener { _, isChecked ->
+                runCatching { dialog.dismiss() }
+                settingsManager.setUseDynamicColors(isChecked)
+                bindThemeStudioCard()
+                bindCurrentValues(force = true)
+            }
+        }
+        container.addView(dynamicSwitch)
+
+        // 3. 3 Exclusive Full-App 3D Mix-Color Premium Themes (Only for Premium Subscribers)
+        val hasPremiumThemes = ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
+        val paletteHeader = TextView(ctx).apply {
+            text = if (hasPremiumThemes) {
+                "👑 3 Full-App 3D Mix-Color Themes (Unlocked)"
+            } else {
+                "🔒 3 Full-App 3D Mix-Color Themes (Pro Exclusive)"
+            }
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textSize = 14f
+            setPadding(0, (12 * density).toInt(), 0, (8 * density).toInt())
+        }
+        container.addView(paletteHeader)
+
+        val currentPalette = ThemeStudioManager.resolveEffectivePalette(prefs)
+        AppThemePalette.premium3DMixThemes().forEach { palette ->
+            val isSelected = palette == currentPalette
+            val isLocked = !hasPremiumThemes
+            val card = android.widget.LinearLayout(ctx).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                val cardPad = (14 * density).toInt()
+                setPadding(cardPad, cardPad, cardPad, cardPad)
+                background = palette.createFullApp3DBackgroundDrawable(
+                    cornerRadiusPx = 16f * density
+                )
+                alpha = if (isLocked) 0.85f else 1f
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = (10 * density).toInt()
+                }
+                isClickable = true
+                isFocusable = true
+            }
+
+            val textCol = android.widget.LinearLayout(ctx).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    0,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            }
+            val titleView = TextView(ctx).apply {
+                text = when {
+                    isSelected -> "✓ 👑 ${palette.title}"
+                    isLocked -> "🔒 ${palette.title}"
+                    else -> "👑 ${palette.title}"
+                }
+                setTextColor(palette.textPrimaryColorInt())
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 15f
+            }
+            val subView = TextView(ctx).apply {
+                text = if (isLocked) {
+                    "${palette.subtitle} • Only Premium Users"
+                } else {
+                    "${palette.subtitle} • Full-App 3D Background + Text"
+                }
+                setTextColor(palette.textSecondaryColorInt())
+                textSize = 12f
+            }
+            textCol.addView(titleView)
+            textCol.addView(subView)
+
+            val badgeView = TextView(ctx).apply {
+                text = if (isLocked) "🔒 PRO ONLY" else palette.badgeText
+                setTextColor(palette.textPrimaryColorInt())
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 11f
+                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+            }
+
+            card.addView(textCol)
+            card.addView(badgeView)
+            card.setOnClickListener {
+                runCatching { dialog.dismiss() }
+                applySelectedThemePalette(palette)
+            }
+            container.addView(card)
+        }
+
+        if (hasPremiumThemes && currentPalette.is3DMix) {
+            val resetBtn = com.google.android.material.button.MaterialButton(ctx).apply {
+                text = "Reset to Standard Surface"
+                setOnClickListener {
+                    runCatching { dialog.dismiss() }
+                    applySelectedThemePalette(AppThemePalette.EMERALD_PULSE)
+                }
+            }
+            container.addView(resetBtn)
+        }
+
+        runCatching { activeSettingsDialog?.dismiss() }
+        dialog.setOnDismissListener {
+            if (activeSettingsDialog === dialog) {
+                activeSettingsDialog = null
+            }
+        }
+        activeSettingsDialog = dialog
+        dialog.show()
+    }
+
+    private fun openDefaultDialerOrAudioSettings() {
+        val ctx = requireContext()
+        if (!DialerHelper.isDefaultDialer(ctx)) {
+            runCatching {
+                startActivity(
+                    Intent(android.telecom.TelecomManager.ACTION_CHANGE_DEFAULT_DIALER).apply {
+                        putExtra(
+                            android.telecom.TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME,
+                            ctx.packageName
+                        )
+                    }
+                )
+            }.onFailure {
+                showAccessibilityEnablePrompt()
+            }
+        } else {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", ctx.packageName, null)
+                    }
+                )
+            }
+        }
     }
 
     private fun showAccessibilityEnablePrompt() {
@@ -1071,13 +1393,11 @@ class SettingsFragment : Fragment() {
             .setMessage(
                 getString(
                     R.string.accessibility_prompt_message,
-                    getString(R.string.accessibility_service_label)
+                    getString(R.string.app_name)
                 )
             )
             .setPositiveButton(R.string.accessibility_prompt_open) { _, _ ->
-                runCatching {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
+                openDefaultDialerOrAudioSettings()
             }
             .setNegativeButton(R.string.trial_expired_dialog_later, null)
             .show()
@@ -1128,6 +1448,8 @@ class SettingsFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        runCatching { activeSettingsDialog?.dismiss() }
+        activeSettingsDialog = null
         lastBoundRowsSignature = null
         super.onDestroyView()
         _binding = null

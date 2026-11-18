@@ -73,8 +73,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: DialerPreferences
     private lateinit var subscriptionManager: SubscriptionManager
     private lateinit var credentialManager: CredentialManager
-    private lateinit var paymentRepository: PaymentRepository
-    private lateinit var adminRepository: AdminRepository
 
     private val hiddenAdminTapDetector = HiddenAdminTapDetector()
 
@@ -88,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private val menuIdToTabConfig = linkedMapOf<Int, NavigationTabItem>()
     private var activeBroadcastDialog: AlertDialog? = null
     private var activeBroadcastPopupId: String? = null
+    private var activeTrialExpiredDialog: AlertDialog? = null
     private var bannerDismissedTextKey: String? = null
     private var lastTriggeredAppOpenAdKey: String? = null
 
@@ -96,6 +95,17 @@ class MainActivity : AppCompatActivity() {
             val signedIn = GoogleAuthHelper.isUserAuthenticated(this)
             if (lastRenderedAuthState != signedIn) {
                 renderAuthState(signedIn)
+            }
+            val pendingAdTs = prefs.pendingAfterCallAdTimestampMs
+            if (signedIn && pendingAdTs > 0L) {
+                prefs.pendingAfterCallAdTimestampMs = 0L
+                val isFresh = (System.currentTimeMillis() - pendingAdTs) <= 10L * 60L * 1000L
+                if (isFresh) {
+                    maybeShowCustomPopupAd(
+                        RealtimeSyncManager.syncState.value.customPopupAd,
+                        com.example.data.firebase.CustomPopupAd.TRIGGER_AFTER_CALL_END
+                    )
+                }
             }
         }
     }
@@ -118,9 +128,6 @@ class MainActivity : AppCompatActivity() {
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
-                add(Manifest.permission.READ_MEDIA_AUDIO)
-            } else {
-                add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
         }.toTypedArray()
 
@@ -128,8 +135,10 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            val accountName = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
-            if (!accountName.isNullOrBlank()) {
+            val accountName = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)?.trim().orEmpty()
+            val accountType = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_TYPE)?.trim()
+            val isGoogleType = accountType.isNullOrBlank() || accountType == GoogleAuthHelper.GOOGLE_ACCOUNT_TYPE
+            if (accountName.isNotBlank() && isGoogleType && GoogleAuthHelper.isEmailSignedInOnDevice(this, accountName)) {
                 val displayName = accountName.substringBefore("@")
                     .replace(".", " ")
                     .replace("_", " ")
@@ -139,14 +148,21 @@ class MainActivity : AppCompatActivity() {
                     .joinToString(" ") { part ->
                         part.replaceFirstChar { ch -> ch.uppercase() }
                     }
-                GoogleAuthHelper.completeFallbackLogin(
-                    context = this,
-                    emailOrPhone = accountName,
-                    displayName = displayName
-                )
-                setAuthLoading(false, null)
-                lastRenderedAuthState = null
-                renderAuthState(true)
+                runCatching {
+                    GoogleAuthHelper.completeFallbackLogin(
+                        context = this,
+                        emailOrPhone = accountName,
+                        displayName = displayName
+                    )
+                }.onSuccess {
+                    setAuthLoading(false, null)
+                    lastRenderedAuthState = null
+                    renderAuthState(true)
+                }.onFailure {
+                    setAuthLoading(false, getString(R.string.auth_only_device_email_allowed))
+                }
+            } else if (accountName.isNotBlank()) {
+                setAuthLoading(false, getString(R.string.auth_only_device_email_allowed))
             } else {
                 setAuthLoading(false, getString(R.string.auth_picker_cancelled))
             }
@@ -159,6 +175,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         triggerSimAutoFillInBackground()
+        refreshAuthGateDeviceAccountButton()
         refreshCurrentFragment()
     }
 
@@ -169,6 +186,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.example.ui.theme.ThemeStudioManager.applyActivityTheme(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -178,8 +196,6 @@ class MainActivity : AppCompatActivity() {
         subscriptionManager = SubscriptionManager(this)
         subscriptionManager.ensureFirstLaunchTracked()
         credentialManager = CredentialManager.create(this)
-        paymentRepository = PaymentRepository(this)
-        adminRepository = AdminRepository(this)
 
         applyEdgeToEdgeInsets()
         setupAuthGate()
@@ -193,14 +209,52 @@ class MainActivity : AppCompatActivity() {
             activeTabId = R.id.nav_account
         }
 
+        supportFragmentManager.registerFragmentLifecycleCallbacks(
+            object : androidx.fragment.app.FragmentManager.FragmentLifecycleCallbacks() {
+                override fun onFragmentViewCreated(
+                    fm: androidx.fragment.app.FragmentManager,
+                    f: Fragment,
+                    v: View,
+                    savedInstanceState: Bundle?
+                ) {
+                    com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(v, prefs)
+                }
+
+                override fun onFragmentResumed(
+                    fm: androidx.fragment.app.FragmentManager,
+                    f: Fragment
+                ) {
+                    com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(f.view, prefs)
+                }
+            },
+            true
+        )
+
         setupBottomNavigation()
         setupDialpadFab()
+        refreshPremiumMainChrome()
         com.example.billing.SubscriptionEnforcementService.init(this)
         RealtimeSyncManager.init(this)
         observeRealtimeSync()
         renderAuthState(GoogleAuthHelper.isUserAuthenticated(this))
         handleIncomingIntent(intent)
         runSecurityIntegrityCheckInBackground()
+    }
+
+    fun refreshPremiumMainChrome() {
+        com.example.ui.theme.ThemeStudioManager.applyPremiumMainActivityChrome(
+            context = this,
+            prefs = prefs,
+            vipAccentBar = binding.viewVip3dTopAccentBar,
+            vipBadgeView = binding.tvVipProHeaderBadge,
+            fabDialpad = binding.fabDialpad,
+            bottomNav = binding.bottomNavigation,
+            mainRoot = binding.mainRoot,
+            appBarLayout = binding.appBarLayout,
+            topAppBar = binding.topAppBar
+        )
+        val currentFragView = supportFragmentManager.findFragmentById(R.id.nav_host_container)?.view
+        com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(currentFragView, prefs)
     }
 
     override fun onStart() {
@@ -210,11 +264,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (GoogleAuthHelper.isUserAuthenticated(this)) {
+        refreshPremiumMainChrome()
+        refreshAuthGateDeviceAccountButton()
+        val isAuthenticated = GoogleAuthHelper.isUserAuthenticated(this)
+        if (isAuthenticated) {
             RealtimeSyncManager.refreshFromCloudNow()
             triggerSimAutoFillInBackground()
             runSecurityIntegrityCheckInBackground()
             enforcePaywallIfExpired()
+        } else if (lastRenderedAuthState == true) {
+            renderAuthState(false)
         }
     }
 
@@ -254,8 +313,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        activeBroadcastDialog?.dismiss()
+        runCatching { activeBroadcastDialog?.dismiss() }
         activeBroadcastDialog = null
+        runCatching { activeTrialExpiredDialog?.dismiss() }
+        activeTrialExpiredDialog = null
         super.onDestroy()
     }
 
@@ -273,7 +334,18 @@ class MainActivity : AppCompatActivity() {
         outState.putString(KEY_LAST_APP_OPEN_AD_KEY, lastTriggeredAppOpenAdKey)
     }
 
+    private fun refreshAuthGateDeviceAccountButton() {
+        if (!::binding.isInitialized) return
+        val deviceEmails = GoogleAuthHelper.getDeviceSignedInGoogleEmails(this)
+        binding.btnGoogleSignIn.text = if (deviceEmails.size == 1) {
+            getString(R.string.auth_gate_btn_google_with_email, deviceEmails.first())
+        } else {
+            getString(R.string.auth_gate_btn_google)
+        }
+    }
+
     private fun setupAuthGate() {
+        refreshAuthGateDeviceAccountButton()
         binding.btnGoogleSignIn.setOnClickListener {
             setAuthLoading(true, null)
             GoogleAuthHelper.onGoogleSignInClicked(
@@ -293,14 +365,26 @@ class MainActivity : AppCompatActivity() {
                 },
                 onFallbackRequired = { _ ->
                     setAuthLoading(false, null)
-                    runCatching {
-                        accountPickerLauncher.launch(GoogleAuthHelper.createChooseGoogleAccountIntent())
-                    }.onFailure {
-                        setAuthLoading(false, getString(R.string.auth_no_google_account))
+                    val deviceEmails = GoogleAuthHelper.getDeviceSignedInGoogleEmails(this)
+                    if (deviceEmails.size == 1) {
+                        val singleDeviceEmail = deviceEmails.first()
                         runCatching {
-                            startActivity(Intent(android.provider.Settings.ACTION_ADD_ACCOUNT).apply {
-                                putExtra(android.provider.Settings.EXTRA_ACCOUNT_TYPES, arrayOf("com.google"))
-                            })
+                            GoogleAuthHelper.completeFallbackLogin(
+                                context = this,
+                                emailOrPhone = singleDeviceEmail
+                            )
+                        }.onSuccess {
+                            setAuthLoading(false, null)
+                            lastRenderedAuthState = null
+                            renderAuthState(true)
+                        }.onFailure {
+                            setAuthLoading(false, getString(R.string.auth_only_device_email_allowed))
+                        }
+                    } else {
+                        runCatching {
+                            accountPickerLauncher.launch(GoogleAuthHelper.createChooseGoogleAccountIntent(this))
+                        }.onFailure {
+                            setAuthLoading(false, getString(R.string.auth_no_google_account))
                         }
                     }
                 }
@@ -361,8 +445,10 @@ class MainActivity : AppCompatActivity() {
             lastSyncedUid = null
             com.example.billing.SubscriptionEnforcementService.stopMonitoring()
             RealtimeSyncManager.stop()
-            activeBroadcastDialog?.dismiss()
+            runCatching { activeBroadcastDialog?.dismiss() }
             activeBroadcastDialog = null
+            runCatching { activeTrialExpiredDialog?.dismiss() }
+            activeTrialExpiredDialog = null
             binding.blockedOverlayContainer.visibility = View.GONE
             binding.cardLiveBannerAd.visibility = View.GONE
             binding.authGateContainer.visibility = View.VISIBLE
@@ -374,6 +460,7 @@ class MainActivity : AppCompatActivity() {
                 binding.fabDialpad.visibility = View.GONE
             }
             binding.topAppBar.title = getString(R.string.app_name)
+            refreshAuthGateDeviceAccountButton()
 
             if (!attemptedSilentSignIn) {
                 attemptedSilentSignIn = true
@@ -446,6 +533,7 @@ class MainActivity : AppCompatActivity() {
                             lastObservedUiRestrictionKey = restrictionKey
 
                             updateBlockedOverlayState()
+                            refreshPremiumMainChrome()
                             if (isAppLockedByTrialExpiry()) {
                                 (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
                                     as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
@@ -462,16 +550,20 @@ class MainActivity : AppCompatActivity() {
                     com.example.billing.SubscriptionEnforcementService.restrictionEvents.collect { event ->
                         when (event) {
                             is com.example.billing.SubscriptionRestrictionEvent.TrialExpiredRedirectToPayment -> {
+                                refreshPremiumMainChrome()
                                 refreshCurrentFragment()
                             }
                             is com.example.billing.SubscriptionRestrictionEvent.RecordingRestricted -> {
+                                refreshPremiumMainChrome()
                                 refreshCurrentFragment()
                             }
                             com.example.billing.SubscriptionRestrictionEvent.AccountBlockedByAdmin -> {
                                 updateBlockedOverlayState()
+                                refreshPremiumMainChrome()
                             }
                             com.example.billing.SubscriptionRestrictionEvent.SubscriptionUnlocked -> {
                                 updateBlockedOverlayState()
+                                refreshPremiumMainChrome()
                                 updateFabVisibility(activeTabId)
                                 refreshCurrentFragment()
                             }
@@ -484,6 +576,7 @@ class MainActivity : AppCompatActivity() {
                         if (state.version == 0L) return@collect
 
                         updateBlockedOverlayState()
+                        refreshPremiumMainChrome()
                         applyDynamicBottomNavigation(state.navigationTabs)
                         applyLiveBroadcastState(state.liveBroadcast)
                         maybeShowCustomPopupAd(state.customPopupAd, CustomPopupAd.TRIGGER_ON_APP_OPEN)
@@ -694,17 +787,32 @@ class MainActivity : AppCompatActivity() {
         activeBroadcastDialog?.dismiss()
 
         val dialogBinding = DialogLiveBroadcastBinding.inflate(layoutInflater)
-        dialogBinding.tvPopupTitle.text = broadcast.title.ifBlank { getString(R.string.custom_tab_default_title) }
-        dialogBinding.tvPopupMessage.text = broadcast.message
+        val hasImage = broadcast.imageUrl.isNotBlank()
+        val hasAction = broadcast.actionUrl.isNotBlank()
 
-        if (broadcast.imageUrl.isNotBlank()) {
-            dialogBinding.cardPopupImageWrapper.visibility = View.VISIBLE
-            dialogBinding.ivPopupImage.load(broadcast.imageUrl) { crossfade(true) }
+        if (broadcast.title.isBlank() && hasImage) {
+            dialogBinding.tvPopupTitle.visibility = View.GONE
         } else {
-            dialogBinding.cardPopupImageWrapper.visibility = View.GONE
+            dialogBinding.tvPopupTitle.visibility = View.VISIBLE
+            dialogBinding.tvPopupTitle.text = broadcast.title.ifBlank { getString(R.string.custom_tab_default_title) }
         }
 
-        val hasAction = broadcast.actionUrl.isNotBlank()
+        if (broadcast.message.isBlank()) {
+            dialogBinding.tvPopupMessage.visibility = View.GONE
+        } else {
+            dialogBinding.tvPopupMessage.visibility = View.VISIBLE
+            dialogBinding.tvPopupMessage.text = broadcast.message
+        }
+
+        if (hasImage) {
+            dialogBinding.cardPopupImageWrapper.visibility = View.VISIBLE
+            dialogBinding.ivPopupImage.load(broadcast.imageUrl) { crossfade(true) }
+            dialogBinding.tvPopupImageLinkBadge.visibility = if (hasAction) View.VISIBLE else View.GONE
+        } else {
+            dialogBinding.cardPopupImageWrapper.visibility = View.GONE
+            dialogBinding.tvPopupImageLinkBadge.visibility = View.GONE
+        }
+
         dialogBinding.btnPopupAction.visibility = if (hasAction || !broadcast.isCancelable) View.VISIBLE else View.GONE
         dialogBinding.btnPopupAction.text = broadcast.buttonText.ifBlank { getString(R.string.custom_tab_open_link) }
         dialogBinding.btnPopupClose.visibility = if (broadcast.isCancelable) View.VISIBLE else View.GONE
@@ -714,11 +822,7 @@ class MainActivity : AppCompatActivity() {
             .setCancelable(broadcast.isCancelable)
             .create()
 
-        dialogBinding.btnPopupClose.setOnClickListener {
-            prefs.markPopupDismissed(popupId)
-            dialog.dismiss()
-        }
-        dialogBinding.btnPopupAction.setOnClickListener {
+        val handleOpenLink: () -> Unit = {
             if (hasAction) {
                 openSafeExternalUrl(broadcast.actionUrl)
             }
@@ -726,6 +830,19 @@ class MainActivity : AppCompatActivity() {
                 prefs.markPopupDismissed(popupId)
                 dialog.dismiss()
             }
+        }
+
+        if (hasImage && hasAction) {
+            dialogBinding.cardPopupImageWrapper.setOnClickListener { handleOpenLink() }
+            dialogBinding.ivPopupImage.setOnClickListener { handleOpenLink() }
+        }
+
+        dialogBinding.btnPopupClose.setOnClickListener {
+            prefs.markPopupDismissed(popupId)
+            dialog.dismiss()
+        }
+        dialogBinding.btnPopupAction.setOnClickListener {
+            handleOpenLink()
         }
         dialog.setOnDismissListener {
             if (activeBroadcastDialog == dialog) {
@@ -1007,6 +1124,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun showTrialExpiredDialog(isDeviceReused: Boolean = prefs.trialBlockedByDevice) {
+        if (isFinishing || isDestroyed) return
+        runCatching { activeTrialExpiredDialog?.dismiss() }
+        activeTrialExpiredDialog = null
+
         val deviceTag = prefs.shortDeviceTag.ifBlank {
             DeviceIdentityProvider.formatShortDeviceTag(DeviceIdentityProvider.getDeviceHash(this))
         }
@@ -1028,14 +1149,21 @@ class MainActivity : AppCompatActivity() {
             else -> getString(R.string.trial_expired_dialog_message)
         }
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(titleRes)
             .setMessage(message)
             .setCancelable(false)
             .setPositiveButton(R.string.trial_expired_dialog_upgrade) { _, _ ->
                 navigateToAccountTab()
             }
-            .show()
+            .create()
+        dialog.setOnDismissListener {
+            if (activeTrialExpiredDialog === dialog) {
+                activeTrialExpiredDialog = null
+            }
+        }
+        activeTrialExpiredDialog = dialog
+        dialog.show()
     }
 
     fun openDialpadSheet(initialNumber: String = "") {

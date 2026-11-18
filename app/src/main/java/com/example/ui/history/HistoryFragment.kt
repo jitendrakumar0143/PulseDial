@@ -41,6 +41,8 @@ class HistoryFragment : Fragment() {
 
     private var skipNextResumeReload = false
     private var allRecentCalls: List<CallLogEntry> = emptyList()
+    private var homeDialInput: String = ""
+    private var isHomeKeypadExpanded: Boolean = false
 
     private val writeCallLogPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -100,12 +102,6 @@ class HistoryFragment : Fragment() {
         binding.recyclerHistory.layoutManager = LinearLayoutManager(ctx)
         binding.recyclerHistory.adapter = callLogAdapter
 
-        // Recordings are strictly stored in separate File Manager folders — never displayed in app
-        binding.toggleHistoryMode.visibility = View.GONE
-        binding.cardRecordingFolderBanner.visibility = View.GONE
-        binding.recyclerRecordings.visibility = View.GONE
-        binding.cardMiniPlayer.visibility = View.GONE
-
         binding.btnSetDefaultDialer.setOnClickListener {
             (activity as? MainActivity)?.requestDefaultDialerRole()
         }
@@ -117,6 +113,8 @@ class HistoryFragment : Fragment() {
             applyCallLogFilter(text?.toString().orEmpty())
         }
 
+        setupHomeNumericKeypad()
+
         binding.btnExportHistoryCsv.setOnClickListener {
             startCallHistoryCsvExport()
         }
@@ -127,6 +125,101 @@ class HistoryFragment : Fragment() {
 
         skipNextResumeReload = true
         reloadData()
+    }
+
+    private fun setupHomeNumericKeypad() {
+        val keyViews = listOf(
+            binding.btnHomeKey1 to '1',
+            binding.btnHomeKey2 to '2',
+            binding.btnHomeKey3 to '3',
+            binding.btnHomeKey4 to '4',
+            binding.btnHomeKey5 to '5',
+            binding.btnHomeKey6 to '6',
+            binding.btnHomeKey7 to '7',
+            binding.btnHomeKey8 to '8',
+            binding.btnHomeKey9 to '9',
+            binding.btnHomeKeyStar to '*',
+            binding.btnHomeKey0 to '0',
+            binding.btnHomeKeyHash to '#'
+        )
+        keyViews.forEach { (view, ch) ->
+            view.setOnClickListener { v ->
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                homeDialInput += ch
+                updateHomeKeypadDisplay()
+            }
+        }
+        binding.btnHomeKey0.setOnLongClickListener { v ->
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            homeDialInput += '+'
+            updateHomeKeypadDisplay()
+            true
+        }
+        binding.btnHomeKeyStar.setOnLongClickListener { v ->
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            homeDialInput += ','
+            updateHomeKeypadDisplay()
+            true
+        }
+        binding.btnHomeKeyHash.setOnLongClickListener { v ->
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            homeDialInput += ';'
+            updateHomeKeypadDisplay()
+            true
+        }
+        binding.btnHomeDialBackspace.setOnClickListener {
+            if (homeDialInput.isNotEmpty()) {
+                homeDialInput = homeDialInput.dropLast(1)
+                updateHomeKeypadDisplay()
+            }
+        }
+        binding.btnHomeDialBackspace.setOnLongClickListener {
+            homeDialInput = ""
+            updateHomeKeypadDisplay()
+            true
+        }
+        binding.btnHomeDialCall.setOnClickListener {
+            val number = homeDialInput.trim()
+            if (number.isNotEmpty()) {
+                DialerHelper.initiateCall(activity ?: requireContext(), number)
+            } else {
+                val lastNumber = allRecentCalls.firstOrNull()?.number
+                if (!lastNumber.isNullOrBlank()) {
+                    homeDialInput = lastNumber
+                    updateHomeKeypadDisplay()
+                } else {
+                    Toast.makeText(requireContext(), R.string.dialpad_redial_empty, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        binding.btnHomeSaveContact.setOnClickListener {
+            val number = homeDialInput.trim()
+            if (number.isNotEmpty()) {
+                com.example.ui.common.SaveContactHelper.showSaveNumberDialog(
+                    context = requireContext(),
+                    lifecycleOwner = viewLifecycleOwner,
+                    initialNumber = number,
+                    onSaved = { reloadData() }
+                )
+            }
+        }
+        binding.btnToggleHomeKeypad.visibility = View.GONE
+        binding.cardHomeKeypadDock.visibility = View.GONE
+        binding.btnToggleHomeKeypad.setOnClickListener {
+            isHomeKeypadExpanded = !isHomeKeypadExpanded
+            binding.cardHomeKeypadDock.visibility =
+                if (isHomeKeypadExpanded) View.VISIBLE else View.GONE
+        }
+        updateHomeKeypadDisplay()
+    }
+
+    private fun updateHomeKeypadDisplay() {
+        if (_binding == null) return
+        binding.etHomeDialInput.setText(homeDialInput)
+        val hasThreeDigits = homeDialInput.count { it.isDigit() } >= 3
+        binding.btnHomeSaveContact.visibility = if (hasThreeDigits) View.VISIBLE else View.GONE
+        val searchQuery = binding.etHistorySearch.text?.toString().orEmpty()
+        applyCallLogFilter(searchQuery.ifBlank { homeDialInput })
     }
 
     override fun onResume() {
@@ -159,9 +252,6 @@ class HistoryFragment : Fragment() {
             if (_binding == null) return@launch
             binding.tilHistorySearch.visibility = View.VISIBLE
             binding.recyclerHistory.visibility = View.VISIBLE
-            binding.cardRecordingFolderBanner.visibility = View.GONE
-            binding.recyclerRecordings.visibility = View.GONE
-            binding.cardMiniPlayer.visibility = View.GONE
             applyCallLogFilter(binding.etHistorySearch.text?.toString().orEmpty())
         }
     }

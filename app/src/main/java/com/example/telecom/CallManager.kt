@@ -54,6 +54,8 @@ data class CallUiState(
     val callState: Int = Call.STATE_NEW,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
+    val audioRoute: Int = CallAudioState.ROUTE_EARPIECE,
+    val supportedAudioRoutes: Int = CallAudioState.ROUTE_EARPIECE or CallAudioState.ROUTE_SPEAKER,
     val isRecording: Boolean = false,
     val connectTimeMillis: Long = 0L,
     val lastSavedRecordingName: String? = null,
@@ -468,9 +470,19 @@ object CallManager {
         }
     }
 
-    fun updateAudioState(isMuted: Boolean, isSpeakerOn: Boolean) {
+    fun updateAudioState(
+        isMuted: Boolean,
+        isSpeakerOn: Boolean,
+        audioRoute: Int = if (isSpeakerOn) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE,
+        supportedAudioRoutes: Int = CallAudioState.ROUTE_EARPIECE or CallAudioState.ROUTE_SPEAKER
+    ) {
         _uiState.update {
-            it.copy(isMuted = isMuted, isSpeakerOn = isSpeakerOn)
+            it.copy(
+                isMuted = isMuted,
+                isSpeakerOn = isSpeakerOn,
+                audioRoute = audioRoute,
+                supportedAudioRoutes = supportedAudioRoutes
+            )
         }
     }
 
@@ -605,10 +617,20 @@ object CallManager {
 
     @Suppress("DEPRECATION")
     fun setSpeakerEnabled(enabled: Boolean) {
-        val service = serviceRef?.get() ?: return
         val route = if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE
+        setAudioRoute(route)
+    }
+
+    @Suppress("DEPRECATION")
+    fun setAudioRoute(route: Int) {
+        val service = serviceRef?.get() ?: return
         service.setAudioRoute(route)
-        _uiState.update { it.copy(isSpeakerOn = enabled) }
+        _uiState.update {
+            it.copy(
+                audioRoute = route,
+                isSpeakerOn = (route and CallAudioState.ROUTE_SPEAKER) != 0
+            )
+        }
     }
 
     fun playDtmfTone(digit: Char) {

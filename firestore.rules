@@ -331,39 +331,65 @@ service cloud.firestore {
 
       allow create: if isSignedIn() &&
                        isValidId(userId) &&
-                       request.auth.uid == userId &&
-                       incoming().userId == request.auth.uid &&
-                       isValidDeviceHash(incoming().deviceHash) &&
-                       incoming().isPremiumUser == false &&
-                       (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus == 'trial') &&
-                       incoming().subscriptionProductId == '' &&
-                       incoming().purchaseToken == '' &&
-                       (!('isBlocked' in incoming()) || incoming().isBlocked == false) &&
-                       (!('isAdmin' in incoming()) || incoming().isAdmin == false) &&
-                       (!('adminGrantedBy' in incoming()) || incoming().adminGrantedBy == '') &&
-                       (!('bonusTrialDays' in incoming()) || incoming().bonusTrialDays == 0) &&
-                       (!('adminNote' in incoming()) || incoming().adminNote == '') &&
-                       (!('hideSubscriptionUI' in incoming()) || incoming().hideSubscriptionUI == false) &&
-                       incoming().keys().hasAll([
-                         'userId', 'displayName', 'email', 'deviceHash',
-                         'trialStartedAt', 'isPremiumUser', 'subscriptionProductId',
-                         'purchaseToken', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'displayName', 'email', 'phoneNumber', 'deviceHash',
-                         'trialStartedAt', 'isPremiumUser', 'subscriptionStatus',
-                         'subscriptionProductId', 'purchaseToken', 'paymentRefId', 'isBlocked',
-                         'bonusTrialDays', 'adminNote', 'hideSubscriptionUI',
-                         'autoCallRecording', 'themeMode', 'dialpadTonesEnabled',
-                         'blockedNumbers', 'quickDeclineResponses',
-                         'announcerEnabled', 'announcerHeadsetOnly', 'unknownShieldMode',
-                         'autoSmsFollowUp', 'autoWhatsappFollowUp', 'followUpTrigger',
-                         'completedCallTemplate', 'missedCallTemplate',
-                         'recordWhatsappCalls', 'recordWhatsappBusinessCalls',
-                         'recordMeetCalls', 'recordTelegramCalls', 'recordInstagramCalls',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidUserEntitlement(incoming());
+                       isValidUserEntitlement(incoming()) && (
+                         (
+                           request.auth.uid == userId &&
+                           incoming().userId == request.auth.uid &&
+                           isValidDeviceHash(incoming().deviceHash) &&
+                           incoming().isPremiumUser == false &&
+                           (!('subscriptionStatus' in incoming()) || incoming().subscriptionStatus == 'trial') &&
+                           incoming().subscriptionProductId == '' &&
+                           incoming().purchaseToken == '' &&
+                           (!('isBlocked' in incoming()) || incoming().isBlocked == false) &&
+                           (!('isAdmin' in incoming()) || incoming().isAdmin == false) &&
+                           (!('adminGrantedBy' in incoming()) || incoming().adminGrantedBy == '') &&
+                           (!('bonusTrialDays' in incoming()) || incoming().bonusTrialDays == 0) &&
+                           (!('adminNote' in incoming()) || incoming().adminNote == '') &&
+                           (!('hideSubscriptionUI' in incoming()) || incoming().hideSubscriptionUI == false) &&
+                           incoming().keys().hasAll([
+                             'userId', 'displayName', 'email', 'deviceHash',
+                             'trialStartedAt', 'isPremiumUser', 'subscriptionProductId',
+                             'purchaseToken', 'createdAt', 'updatedAt'
+                           ]) &&
+                           incoming().keys().hasOnly([
+                             'userId', 'displayName', 'email', 'phoneNumber', 'deviceHash',
+                             'trialStartedAt', 'isPremiumUser', 'subscriptionStatus',
+                             'subscriptionProductId', 'purchaseToken', 'paymentRefId', 'isBlocked',
+                             'bonusTrialDays', 'adminNote', 'hideSubscriptionUI',
+                             'autoCallRecording', 'themeMode', 'dialpadTonesEnabled',
+                             'blockedNumbers', 'quickDeclineResponses',
+                             'announcerEnabled', 'announcerHeadsetOnly', 'unknownShieldMode',
+                             'autoSmsFollowUp', 'autoWhatsappFollowUp', 'followUpTrigger',
+                             'completedCallTemplate', 'missedCallTemplate',
+                             'recordWhatsappCalls', 'recordWhatsappBusinessCalls',
+                             'recordMeetCalls', 'recordTelegramCalls', 'recordInstagramCalls',
+                             'createdAt', 'updatedAt'
+                           ])
+                         ) || (
+                           isAdmin() &&
+                           incoming().userId == userId &&
+                           (
+                             isSuperAdmin() ||
+                             (
+                               incoming().get('isAdmin', false) == false &&
+                               incoming().get('adminGrantedBy', '') == ''
+                             )
+                           ) &&
+                           incoming().keys().hasAll([
+                             'userId', 'displayName', 'email', 'deviceHash',
+                             'trialStartedAt', 'isPremiumUser', 'subscriptionProductId',
+                             'purchaseToken', 'createdAt', 'updatedAt'
+                           ]) &&
+                           incoming().keys().hasOnly([
+                             'userId', 'displayName', 'email', 'phoneNumber', 'deviceHash',
+                             'trialStartedAt', 'isPremiumUser', 'subscriptionStatus',
+                             'subscriptionProductId', 'purchaseToken', 'paymentRefId',
+                             'subscriptionExpiresAt', 'isBlocked', 'isAdmin', 'adminGrantedBy',
+                             'bonusTrialDays', 'adminNote', 'hideSubscriptionUI',
+                             'autoCallRecording', 'createdAt', 'updatedAt'
+                           ])
+                         )
+                       );
 
       allow update: if isSignedIn() &&
                        isValidId(userId) &&
@@ -410,7 +436,17 @@ service cloud.firestore {
                          )
                        );
 
-      allow delete: if false;
+      allow delete: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isAdmin() &&
+                       !(existing().email.lower() in [
+                         '0143pushpendra@gmail.com',
+                         'jitendrakumar888126@gmail.com'
+                       ]) &&
+                       (
+                         isSuperAdmin() ||
+                         existing().get('isAdmin', false) != true
+                       );
     }
 
     // One-time approved UTR registry: strictly create-once by verified admin, immutable thereafter.

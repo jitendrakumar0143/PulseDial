@@ -373,6 +373,45 @@ class AdminRepositoryRuleTest : FirestoreEmulatorTestBase() {
         )
     }
 
+    @Test
+    fun adminCanCreateAndDeleteRegularUserInFirestore() = runBlocking {
+        val adminRepo = AdminRepository(firestore, auth)
+        signInTestUser("Jitendrakumar888126@gmail.com")
+        verifyCurrentUserEmailInEmulator()
+
+        val created = withTimeout(TIMEOUT_MS) {
+            adminRepo.createUserByAdmin(
+                displayName = "Added By Admin",
+                email = "added_${UUID.randomUUID()}@example.com",
+                phoneNumber = "+919876543211",
+                isPremium = true,
+                subscriptionDays = 30L,
+                bonusTrialDays = 0L,
+                autoCallRecording = true,
+                hideSubscriptionUI = false,
+                adminNote = "Emulator Admin Add Test",
+                actingAdminEmail = "Jitendrakumar888126@gmail.com"
+            ).getOrThrow()
+        }
+
+        val usersAfterAdd = withTimeout(TIMEOUT_MS) {
+            adminRepo.observeAllUsers().first { list -> list.any { it.userId == created.userId } }
+        }
+        assertTrue(usersAfterAdd.any { it.userId == created.userId && it.isPremiumUser })
+
+        withTimeout(TIMEOUT_MS) {
+            adminRepo.deleteUserByAdmin(
+                user = created,
+                actingAdminEmail = "Jitendrakumar888126@gmail.com"
+            ).getOrThrow()
+        }
+
+        val usersAfterDelete = withTimeout(TIMEOUT_MS) {
+            adminRepo.observeAllUsers().first { list -> list.none { it.userId == created.userId } }
+        }
+        assertFalse(usersAfterDelete.any { it.userId == created.userId })
+    }
+
     private companion object {
         const val TIMEOUT_MS = 8000L
     }

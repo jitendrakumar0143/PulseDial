@@ -31,10 +31,13 @@ import com.example.data.DialerPreferences
 import com.example.data.firebase.AdminPaymentFilter
 import com.example.data.firebase.AdminRepository
 import com.example.data.firebase.AdminSubscriberFilter
+import com.example.data.firebase.AdminUserDateField
+import com.example.data.firebase.AdminUserDateFilter
 import com.example.data.firebase.AdminUserFilter
 import com.example.data.firebase.AppConfig
 import com.example.data.firebase.CustomPopupAd
 import com.example.data.firebase.DeviceIdentityProvider
+import com.example.data.firebase.DeviceTrialRepository
 import com.example.data.firebase.DynamicSettingItem
 import com.example.data.firebase.GoogleAuthHelper
 import com.example.data.firebase.LiveBroadcast
@@ -43,9 +46,11 @@ import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.PaymentRequest
 import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.UserEntitlement
+import coil.load
 import com.example.databinding.ActivityAdminPanelBinding
 import com.example.ui.account.PaymentRequestsAdapter
 import androidx.core.content.ContextCompat
+import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.tabs.TabLayout
@@ -89,6 +94,10 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private var currentUserFilter: AdminUserFilter = AdminUserFilter.ALL
     private var currentUserQuery: String = ""
+    private var currentUserDateFilter: AdminUserDateFilter = AdminUserDateFilter.ALL_TIME
+    private var currentUserDateField: AdminUserDateField = AdminUserDateField.JOIN_DATE
+    private var customDateStartMs: Long = 0L
+    private var customDateEndMs: Long = Long.MAX_VALUE
 
     private var currentSubscriberFilter: AdminSubscriberFilter = AdminSubscriberFilter.EXPIRING_SOON
     private var currentSubscriberQuery: String = ""
@@ -107,6 +116,7 @@ class AdminPanelActivity : AppCompatActivity() {
     private var approvedUtrKeys: Set<String> = emptySet()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.example.ui.theme.ThemeStudioManager.applyActivityTheme(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         binding = ActivityAdminPanelBinding.inflate(layoutInflater)
@@ -409,15 +419,7 @@ class AdminPanelActivity : AppCompatActivity() {
         for (uid in allIds) {
             val fsUser = firestoreUsersById[uid]
             val rtdbUser = rtdbUsersById[uid]
-            val winner = when {
-                fsUser == null -> rtdbUser
-                rtdbUser == null -> fsUser
-                else -> {
-                    val fsMs = fsUser.updatedAt?.toDate()?.time ?: 0L
-                    val rtdbMs = rtdbUser.updatedAt?.toDate()?.time ?: 0L
-                    if (rtdbMs >= fsMs) rtdbUser else fsUser
-                }
-            }
+            val winner = DeviceTrialRepository.mergeEntitlementSources(fsUser, rtdbUser)
             if (winner != null) {
                 mergedById[uid] = winner
             }
@@ -605,10 +607,13 @@ class AdminPanelActivity : AppCompatActivity() {
             onManageClick = { user -> showManageUserDialog(user) },
             onApproveUtrClick = { user -> approveUserUtrDirect(user) },
             onRejectUtrClick = { user -> rejectUserUtrDirect(user) },
-            onReduceDaysClick = { user -> adjustUserDays(user, -7L) }
+            onReduceDaysClick = { user -> adjustUserDays(user, -7L) },
+            onDeleteClick = { user -> confirmDeleteUser(user) }
         )
         binding.recyclerAdminUsers.layoutManager = LinearLayoutManager(this)
         binding.recyclerAdminUsers.adapter = usersAdapter
+
+        binding.btnAdminAddUser.setOnClickListener { showAddUserDialog() }
 
         binding.etAdminUserSearch.doAfterTextChanged { editable ->
             currentUserQuery = editable?.toString().orEmpty()
@@ -627,6 +632,73 @@ class AdminPanelActivity : AppCompatActivity() {
             }
             applyUserFilters()
         }
+
+        binding.chipDateFieldToggle.setOnClickListener {
+            currentUserDateField = when (currentUserDateField) {
+                AdminUserDateField.JOIN_DATE -> AdminUserDateField.EXPIRY_DATE
+                AdminUserDateField.EXPIRY_DATE -> AdminUserDateField.UPDATED_DATE
+                AdminUserDateField.UPDATED_DATE -> AdminUserDateField.JOIN_DATE
+            }
+            binding.chipDateFieldToggle.text = when (currentUserDateField) {
+                AdminUserDateField.JOIN_DATE -> "📅 By: Join Date"
+                AdminUserDateField.EXPIRY_DATE -> "⏳ By: Expiry Date"
+                AdminUserDateField.UPDATED_DATE -> "🔄 By: Last Updated"
+            }
+            applyUserFilters()
+        }
+
+        binding.chipGroupUserDateFilter.setOnCheckedStateChangeListener { _, checkedIds ->
+            val checkedId = checkedIds.firstOrNull() ?: R.id.chip_date_filter_all
+            when (checkedId) {
+                R.id.chip_date_filter_today -> {
+                    currentUserDateFilter = AdminUserDateFilter.TODAY
+                    applyUserFilters()
+                }
+                R.id.chip_date_filter_7d -> {
+                    currentUserDateFilter = AdminUserDateFilter.LAST_7_DAYS
+                    applyUserFilters()
+                }
+                R.id.chip_date_filter_30d -> {
+                    currentUserDateFilter = AdminUserDateFilter.LAST_30_DAYS
+                    applyUserFilters()
+                }
+                R.id.chip_date_filter_custom -> {
+                    showCustomUserDateRangePicker()
+                }
+                else -> {
+                    currentUserDateFilter = AdminUserDateFilter.ALL_TIME
+                    binding.chipDateFilterCustom.text = "Custom Date Range"
+                    applyUserFilters()
+                }
+            }
+        }
+        binding.chipDateFilterCustom.setOnClickListener {
+            if (currentUserDateFilter == AdminUserDateFilter.CUSTOM_RANGE) {
+                showCustomUserDateRangePicker()
+            }
+        }
+    }
+
+    private fun showCustomUserDateRangePicker() {
+        val picker = MaterialDatePicker.Builder.dateRangePicker()
+            .setTitleText("Select User Filter Date Range")
+            .build()
+        picker.addOnPositiveButtonClickListener { range ->
+            val startUtc = range.first ?: 0L
+            val endUtc = (range.second ?: startUtc) + (DialerPreferences.ONE_DAY_MILLIS - 1L)
+            customDateStartMs = startUtc
+            customDateEndMs = endUtc
+            currentUserDateFilter = AdminUserDateFilter.CUSTOM_RANGE
+            val fmt = java.text.SimpleDateFormat("dd MMM", java.util.Locale.getDefault())
+            binding.chipDateFilterCustom.text = "${fmt.format(java.util.Date(startUtc))} - ${fmt.format(java.util.Date(endUtc))}"
+            applyUserFilters()
+        }
+        picker.addOnNegativeButtonClickListener {
+            if (currentUserDateFilter != AdminUserDateFilter.CUSTOM_RANGE) {
+                binding.chipGroupUserDateFilter.check(R.id.chip_date_filter_all)
+            }
+        }
+        picker.show(supportFragmentManager, "admin_user_date_range")
     }
 
     private fun setupPaymentsTab() {
@@ -678,23 +750,17 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun setupBroadcastTab() {
+        binding.etBroadcastImageUrl.doAfterTextChanged { editable ->
+            updateBroadcastImagePreview(editable?.toString()?.trim().orEmpty())
+        }
+
+        binding.btnBroadcastPreview.setOnClickListener {
+            val previewBroadcast = buildBroadcastFromInputs() ?: return@setOnClickListener
+            showBroadcastPreviewDialog(previewBroadcast)
+        }
+
         binding.btnBroadcastSendNow.setOnClickListener {
-            val title = binding.etBroadcastTitle.text?.toString()?.trim().orEmpty()
-            val message = binding.etBroadcastMessage.text?.toString()?.trim().orEmpty()
-            if (title.isBlank() && message.isBlank()) {
-                Toast.makeText(this, "Enter popup title or message", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val next = currentBroadcast.copy(
-                showPopup = true,
-                popupId = "pop_${System.currentTimeMillis()}",
-                title = title,
-                message = message,
-                imageUrl = binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty(),
-                buttonText = binding.etBroadcastBtnText.text?.toString()?.trim()?.ifBlank { "Open" } ?: "Open",
-                actionUrl = binding.etBroadcastActionUrl.text?.toString()?.trim().orEmpty(),
-                isCancelable = binding.switchBroadcastCancelable.isChecked
-            )
+            val next = buildBroadcastFromInputs() ?: return@setOnClickListener
             saveLiveBroadcast(next, R.string.admin_broadcast_sent_toast)
         }
 
@@ -718,6 +784,139 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.btnPublishCustomPopupAd.setOnClickListener {
             publishCustomPopupAdFromInputs()
         }
+        binding.btnPopupAdSendLiveNow.setOnClickListener {
+            sendCustomPopupAdAsLiveBroadcastNow()
+        }
+    }
+
+    private fun buildBroadcastFromInputs(): LiveBroadcast? {
+        val title = binding.etBroadcastTitle.text?.toString()?.trim().orEmpty()
+        val message = binding.etBroadcastMessage.text?.toString()?.trim().orEmpty()
+        val imageUrl = binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty()
+        val actionUrl = binding.etBroadcastActionUrl.text?.toString()?.trim().orEmpty()
+        if (title.isBlank() && message.isBlank() && imageUrl.isBlank()) {
+            Toast.makeText(this, "Enter popup image URL, title, or message", Toast.LENGTH_SHORT).show()
+            return null
+        }
+        return currentBroadcast.copy(
+            showPopup = true,
+            popupId = "pop_${System.currentTimeMillis()}",
+            title = title,
+            message = message,
+            imageUrl = imageUrl,
+            buttonText = binding.etBroadcastBtnText.text?.toString()?.trim()?.ifBlank { "Open Link" } ?: "Open Link",
+            actionUrl = actionUrl,
+            isCancelable = binding.switchBroadcastCancelable.isChecked
+        )
+    }
+
+    private fun sendCustomPopupAdAsLiveBroadcastNow() {
+        val imageUrl = binding.etPopupAdImageUrl.text?.toString()?.trim().orEmpty()
+        val title = binding.etPopupAdTitle.text?.toString()?.trim().orEmpty()
+        val message = binding.etPopupAdMessage.text?.toString()?.trim().orEmpty()
+        val targetUrl = binding.etPopupAdTargetUrl.text?.toString()?.trim().orEmpty()
+        val buttonText = binding.etPopupAdButtonText.text?.toString()?.trim()
+            ?.ifBlank { "Open Offer" }
+            ?: "Open Offer"
+
+        if (imageUrl.isBlank() && title.isBlank() && message.isBlank()) {
+            Toast.makeText(this, R.string.admin_popup_ad_validation_error, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Also publish the CustomPopupAd config AND push an immediate LiveBroadcast popup with link
+        publishCustomPopupAdFromInputs()
+        val livePopup = currentBroadcast.copy(
+            showPopup = true,
+            popupId = "pop_${System.currentTimeMillis()}",
+            title = title,
+            message = message,
+            imageUrl = imageUrl,
+            buttonText = buttonText,
+            actionUrl = targetUrl,
+            isCancelable = true
+        )
+        bindBroadcastInputs(livePopup)
+        saveLiveBroadcast(livePopup, R.string.admin_broadcast_sent_toast)
+    }
+
+    private fun updateBroadcastImagePreview(imageUrl: String) {
+        if (imageUrl.isBlank()) {
+            binding.cardBroadcastImagePreview.visibility = View.GONE
+            return
+        }
+        binding.cardBroadcastImagePreview.visibility = View.VISIBLE
+        binding.ivBroadcastImagePreview.load(imageUrl) {
+            crossfade(true)
+            listener(
+                onError = { _, _ ->
+                    binding.cardBroadcastImagePreview.visibility = View.GONE
+                },
+                onSuccess = { _, _ ->
+                    binding.cardBroadcastImagePreview.visibility = View.VISIBLE
+                }
+            )
+        }
+    }
+
+    private fun showBroadcastPreviewDialog(broadcast: LiveBroadcast) {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_live_broadcast, null)
+        val cardImageWrapper = dialogView.findViewById<View>(R.id.card_popup_image_wrapper)
+        val ivImage = dialogView.findViewById<android.widget.ImageView>(R.id.iv_popup_image)
+        val tvImageLinkBadge = dialogView.findViewById<TextView>(R.id.tv_popup_image_link_badge)
+        val tvTitle = dialogView.findViewById<TextView>(R.id.tv_popup_title)
+        val tvMessage = dialogView.findViewById<TextView>(R.id.tv_popup_message)
+        val btnAction = dialogView.findViewById<MaterialButton>(R.id.btn_popup_action)
+        val btnDismiss = dialogView.findViewById<MaterialButton>(R.id.btn_popup_close)
+
+        val cleanTitle = broadcast.title.trim()
+        val cleanMessage = broadcast.message.trim()
+        tvTitle.text = cleanTitle
+        tvTitle.visibility = if (cleanTitle.isNotEmpty()) View.VISIBLE else View.GONE
+        tvMessage.text = cleanMessage
+        tvMessage.visibility = if (cleanMessage.isNotEmpty()) View.VISIBLE else View.GONE
+        btnAction.text = broadcast.buttonText.ifBlank { "Open Link" }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .setCancelable(true)
+            .create()
+
+        val hasActionUrl = broadcast.actionUrl.isNotBlank()
+        val openActionUrl = {
+            if (hasActionUrl) {
+                runCatching {
+                    val raw = broadcast.actionUrl.trim()
+                    val normalized = if (raw.startsWith("http://", true) || raw.startsWith("https://", true)) {
+                        raw
+                    } else {
+                        "https://$raw"
+                    }
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(normalized)))
+                }
+            }
+            dialog.dismiss()
+        }
+
+        if (broadcast.imageUrl.isNotBlank()) {
+            cardImageWrapper?.visibility = View.VISIBLE
+            tvImageLinkBadge?.visibility = if (hasActionUrl) View.VISIBLE else View.GONE
+            ivImage.load(broadcast.imageUrl) {
+                crossfade(true)
+            }
+            if (hasActionUrl) {
+                cardImageWrapper?.setOnClickListener { openActionUrl() }
+                ivImage.setOnClickListener { openActionUrl() }
+            }
+        } else {
+            cardImageWrapper?.visibility = View.GONE
+            tvImageLinkBadge?.visibility = View.GONE
+        }
+
+        btnAction.setOnClickListener { openActionUrl() }
+        btnDismiss.visibility = View.VISIBLE
+        btnDismiss.setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 
     private fun selectedPopupAdTriggerMode(): String {
@@ -837,6 +1036,7 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.etBroadcastBtnText.setText(broadcast.buttonText)
         binding.etBroadcastActionUrl.setText(broadcast.actionUrl)
         binding.switchBroadcastCancelable.isChecked = broadcast.isCancelable
+        updateBroadcastImagePreview(broadcast.imageUrl)
 
         binding.switchBannerAdEnable.isChecked = broadcast.showBannerAd
         binding.etBannerAdText.setText(broadcast.bannerText)
@@ -1416,12 +1616,32 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun applyUserFilters() {
+        val trialDays = currentConfig.trialDays.toInt()
         val filtered = AdminRepository.filterUsers(
             users = allUsers,
             filter = currentUserFilter,
             query = currentUserQuery,
-            trialDaysConfig = currentConfig.trialDays.toInt()
+            trialDaysConfig = trialDays,
+            nowMs = System.currentTimeMillis(),
+            dateFilter = currentUserDateFilter,
+            dateField = currentUserDateField,
+            customStartMs = customDateStartMs,
+            customEndMs = customDateEndMs
         )
+        val fieldLabel = when (currentUserDateField) {
+            AdminUserDateField.JOIN_DATE -> "Join Date"
+            AdminUserDateField.EXPIRY_DATE -> "Expiry Date"
+            AdminUserDateField.UPDATED_DATE -> "Last Updated"
+        }
+        val rangeLabel = when (currentUserDateFilter) {
+            AdminUserDateFilter.ALL_TIME -> "All Dates"
+            AdminUserDateFilter.TODAY -> "Today"
+            AdminUserDateFilter.LAST_7_DAYS -> "Last 7 Days"
+            AdminUserDateFilter.LAST_30_DAYS -> "Last 30 Days"
+            AdminUserDateFilter.CUSTOM_RANGE -> binding.chipDateFilterCustom.text.toString()
+        }
+        binding.tvAdminUserDateSummary.text =
+            "Showing ${filtered.size} of ${allUsers.size} users • Filter: $rangeLabel ($fieldLabel)"
         binding.tvAdminUsersEmpty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
         usersAdapter.submitList(filtered)
     }
@@ -1876,7 +2096,7 @@ class AdminPanelActivity : AppCompatActivity() {
         container.addView(resetDeviceCheck)
         container.addView(delegateAdminCheck)
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(user.displayName.ifBlank { user.email.ifBlank { "Manage User" } })
             .setView(scrollView)
             .setNeutralButton("Copy UID") { _, _ ->
@@ -1928,6 +2148,196 @@ class AdminPanelActivity : AppCompatActivity() {
                         Toast.makeText(
                             this@AdminPanelActivity,
                             getString(R.string.admin_user_updated, nextName.ifBlank { user.email }),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }.onFailure { err ->
+                        Toast.makeText(
+                            this@AdminPanelActivity,
+                            getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .create()
+
+        if (!isTargetSuperAdmin) {
+            val deleteBtn = MaterialButton(
+                this,
+                null,
+                com.google.android.material.R.attr.materialButtonOutlinedStyle
+            ).apply {
+                text = getString(R.string.admin_delete_user_confirm)
+                setTextColor(ContextCompat.getColor(this@AdminPanelActivity, R.color.md_theme_error))
+                strokeColor = android.content.res.ColorStateList.valueOf(
+                    ContextCompat.getColor(this@AdminPanelActivity, R.color.md_theme_error)
+                )
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = 24 }
+                setOnClickListener {
+                    dialog.dismiss()
+                    confirmDeleteUser(user)
+                }
+            }
+            container.addView(deleteBtn)
+        }
+
+        dialog.show()
+    }
+
+    private fun showAddUserDialog() {
+        val actingEmail = GoogleAuthHelper.resolveActiveEmail(this)
+        val isActingSuperAdmin = UpiPaymentHelper.isSuperAdminEmail(actingEmail)
+
+        val scrollView = ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+        }
+        scrollView.addView(container)
+
+        val nameInput = EditText(this).apply {
+            hint = getString(R.string.admin_manage_display_name_hint)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        }
+        val emailInput = EditText(this).apply {
+            hint = getString(R.string.admin_add_user_email_hint)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        }
+        val phoneInput = EditText(this).apply {
+            hint = getString(R.string.admin_manage_phone_hint)
+            inputType = InputType.TYPE_CLASS_PHONE
+        }
+        val customUidInput = EditText(this).apply {
+            hint = getString(R.string.admin_add_user_uid_hint)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val activateProCheck = CheckBox(this).apply {
+            text = getString(R.string.admin_add_user_activate_pro)
+            isChecked = false
+        }
+        val subDaysInput = EditText(this).apply {
+            hint = getString(R.string.admin_add_user_sub_days_hint)
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText("30")
+            visibility = View.GONE
+        }
+        val bonusDaysInput = EditText(this).apply {
+            hint = getString(R.string.admin_add_user_bonus_days_hint)
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText("0")
+        }
+        activateProCheck.setOnCheckedChangeListener { _, checked ->
+            subDaysInput.visibility = if (checked) View.VISIBLE else View.GONE
+        }
+        val autoRecordCheck = CheckBox(this).apply {
+            text = getString(R.string.admin_manage_auto_record)
+            isChecked = currentConfig.defaultAutoRecording
+        }
+        val hideSubCheck = CheckBox(this).apply {
+            text = "Hide Subscription & Payment UI for this user"
+            isChecked = false
+        }
+        val grantAdminCheck = CheckBox(this).apply {
+            text = getString(R.string.admin_manage_delegate_admin)
+            isChecked = false
+            visibility = if (isActingSuperAdmin) View.VISIBLE else View.GONE
+        }
+        val noteInput = EditText(this).apply {
+            hint = "Admin note"
+        }
+
+        container.addView(nameInput)
+        container.addView(emailInput)
+        container.addView(phoneInput)
+        container.addView(customUidInput)
+        container.addView(activateProCheck)
+        container.addView(subDaysInput)
+        container.addView(bonusDaysInput)
+        container.addView(autoRecordCheck)
+        container.addView(hideSubCheck)
+        container.addView(grantAdminCheck)
+        container.addView(noteInput)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.admin_add_user_title)
+            .setView(scrollView)
+            .setPositiveButton(R.string.admin_add_user_create_btn) { _, _ ->
+                val name = nameInput.text?.toString().orEmpty().trim()
+                val email = emailInput.text?.toString().orEmpty().trim()
+                val phone = phoneInput.text?.toString().orEmpty().trim()
+                val customUid = customUidInput.text?.toString().orEmpty().trim()
+                val isPro = activateProCheck.isChecked
+                val subDays = subDaysInput.text?.toString()?.trim()?.toLongOrNull() ?: 30L
+                val bonusDays = bonusDaysInput.text?.toString()?.trim()?.toLongOrNull() ?: 0L
+                val note = noteInput.text?.toString().orEmpty().trim()
+                val grantAdmin = isActingSuperAdmin && grantAdminCheck.isChecked
+
+                lifecycleScope.launch {
+                    val result = adminRepository.createUserByAdmin(
+                        displayName = name,
+                        email = email,
+                        phoneNumber = phone,
+                        isPremium = isPro,
+                        subscriptionDays = subDays,
+                        bonusTrialDays = bonusDays,
+                        autoCallRecording = autoRecordCheck.isChecked,
+                        hideSubscriptionUI = hideSubCheck.isChecked,
+                        adminNote = note,
+                        grantAdminAccess = grantAdmin,
+                        actingAdminEmail = actingEmail,
+                        customUid = customUid
+                    )
+                    result.onSuccess { createdUser ->
+                        rtdbUsersById[createdUser.uid] = createdUser
+                        firestoreUsersById[createdUser.uid] = createdUser
+                        mergeAndPublishUsers()
+                        Toast.makeText(
+                            this@AdminPanelActivity,
+                            getString(
+                                R.string.admin_add_user_success,
+                                createdUser.displayName.ifBlank { createdUser.email.ifBlank { createdUser.uid } }
+                            ),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }.onFailure { err ->
+                        Toast.makeText(
+                            this@AdminPanelActivity,
+                            getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
+    }
+
+    private fun confirmDeleteUser(user: UserEntitlement) {
+        if (UpiPaymentHelper.isSuperAdminEmail(user.email)) {
+            Toast.makeText(this, R.string.admin_delete_super_admin_blocked, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val actingEmail = GoogleAuthHelper.resolveActiveEmail(this)
+        val label = user.displayName.ifBlank { user.email.ifBlank { user.userId } }
+        val identifier = user.email.ifBlank { user.phoneNumber.ifBlank { user.userId } }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.admin_delete_user_title)
+            .setMessage(getString(R.string.admin_delete_user_message, label, identifier))
+            .setPositiveButton(R.string.admin_delete_user_confirm) { _, _ ->
+                lifecycleScope.launch {
+                    val result = adminRepository.deleteUserByAdmin(user, actingEmail)
+                    result.onSuccess {
+                        val uid = user.userId.ifBlank { user.id }
+                        firestoreUsersById.remove(uid)
+                        rtdbUsersById.remove(uid)
+                        mergeAndPublishUsers()
+                        Toast.makeText(
+                            this@AdminPanelActivity,
+                            getString(R.string.admin_delete_user_success, label),
                             Toast.LENGTH_SHORT
                         ).show()
                     }.onFailure { err ->

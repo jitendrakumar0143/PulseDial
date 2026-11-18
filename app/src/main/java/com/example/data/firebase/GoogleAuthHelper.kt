@@ -1,5 +1,6 @@
 package com.example.data.firebase
 
+import android.accounts.Account
 import android.accounts.AccountManager
 import android.app.Activity
 import android.content.Context
@@ -14,13 +15,13 @@ import com.example.R
 import com.example.billing.SubscriptionEnforcementService
 import com.example.data.DialerPreferences
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import java.util.ArrayList
 import java.util.Date
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -30,16 +31,79 @@ import kotlinx.coroutines.withContext
 object GoogleAuthHelper {
 
     private const val TAG = "GoogleAuthHelper"
+    const val GOOGLE_ACCOUNT_TYPE = "com.google"
 
     /**
-     * Checks if the user is authenticated either via Firebase Auth OR via the SHA-1-independent
-     * Device + Email/Mobile fallback stored in [DialerPreferences].
+     * Returns the list of Google [Account]s (`com.google`) currently signed in on the mobile device
+     * that are visible to the app via [AccountManager].
+     */
+    fun getDeviceSignedInGoogleAccounts(context: Context): List<Account> {
+        return runCatching {
+            AccountManager.get(context.applicationContext)
+                .getAccountsByType(GOOGLE_ACCOUNT_TYPE)
+                .filter { account ->
+                    account.name.isNotBlank() && account.name.contains("@")
+                }
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Returns the normalized email addresses of all Google accounts currently signed in on the mobile device.
+     */
+    fun getDeviceSignedInGoogleEmails(context: Context): List<String> {
+        val seen = linkedSetOf<String>()
+        val result = mutableListOf<String>()
+        getDeviceSignedInGoogleAccounts(context).forEach { account ->
+            val trimmed = account.name.trim()
+            val lower = trimmed.lowercase()
+            if (trimmed.contains("@") && seen.add(lower)) {
+                result.add(trimmed)
+            }
+        }
+        return result
+    }
+
+    /**
+     * Verifies that [candidateEmail] is a valid email address and matches a Google account
+     * currently signed in on this mobile device.
+     */
+    fun isEmailSignedInOnDevice(context: Context, candidateEmail: String): Boolean {
+        val clean = candidateEmail.trim()
+        if (!clean.contains("@") || !clean.contains(".") || clean.length < 5) {
+            return false
+        }
+        val lowerCandidate = clean.lowercase()
+        val deviceEmails = getDeviceSignedInGoogleEmails(context).map { it.lowercase() }
+        if (deviceEmails.isNotEmpty()) {
+            return lowerCandidate in deviceEmails
+        }
+        val firebaseEmail = runCatching { Firebase.auth.currentUser?.email?.trim()?.lowercase() }.getOrNull()
+        if (!firebaseEmail.isNullOrBlank()) {
+            return lowerCandidate == firebaseEmail
+        }
+        return true
+    }
+
+    /**
+     * Checks if the user is authenticated AND that their logged-in email belongs to a Google account
+     * currently signed in on this mobile device.
      */
     fun isUserAuthenticated(context: Context): Boolean {
         val firebaseUser = runCatching { Firebase.auth.currentUser }.getOrNull()
-        if (firebaseUser != null) return true
         val prefs = DialerPreferences(context.applicationContext)
-        return prefs.isLoggedIn && prefs.loggedInUserId.isNotBlank()
+        val hasSession = firebaseUser != null || (prefs.isLoggedIn && prefs.loggedInUserId.isNotBlank())
+        if (!hasSession) return false
+
+        val activeEmail = resolveActiveEmail(context).trim()
+        val deviceEmails = getDeviceSignedInGoogleEmails(context)
+        if (deviceEmails.isNotEmpty()) {
+            if (activeEmail.isBlank() || !isEmailSignedInOnDevice(context, activeEmail)) {
+                return false
+            }
+        } else if (activeEmail.isNotBlank() && !activeEmail.contains("@")) {
+            return false
+        }
+        return true
     }
 
     /**
@@ -95,14 +159,23 @@ object GoogleAuthHelper {
     }
 
     /**
-     * Creates a native Android `AccountManager` intent to pick a Google account on the device.
-     * Works on 100% of Android devices regardless of debug/release keystore SHA-1 fingerprint.
+     * Creates a native Android `AccountManager` intent restricted to the Google account(s)
+     * currently signed in on the mobile device.
+     * When [context] has visible `com.google` accounts on the device, passes `allowableAccounts`
+     * so the user can only select from the Google accounts already logged in on the phone.
      */
-    fun createChooseGoogleAccountIntent(): Intent {
+    fun createChooseGoogleAccountIntent(context: Context? = null): Intent {
+        val deviceAccounts = context?.let { getDeviceSignedInGoogleAccounts(it) }.orEmpty()
+        val selectedAccount = deviceAccounts.firstOrNull()
+        val allowableAccounts = if (deviceAccounts.isNotEmpty()) {
+            ArrayList(deviceAccounts)
+        } else {
+            null
+        }
         return AccountManager.newChooseAccountIntent(
-            null,
-            null,
-            arrayOf("com.google"),
+            selectedAccount,
+            allowableAccounts,
+            arrayOf(GOOGLE_ACCOUNT_TYPE),
             null,
             null,
             null,
@@ -124,13 +197,11 @@ object GoogleAuthHelper {
     }
 
     /**
-     * Immediately completes login (for either Google Sign-In or SHA-1 Fallback Login):
-     * 1. Saves `isLoggedIn = true`, `userId`, `userEmail` / `userPhoneNumber`, and `deviceId` in `SharedPreferences`.
-     * 2. Immediately creates/updates `/users/{userId}` in Firebase Realtime Database
-     *    (`https://gen-lang-client-0353534085-default-rtdb.firebaseio.com`) with `ServerValue.TIMESTAMP`
-     *    for `installDate` (if first time on this device), `subscriptionStatus = "trial"`,
-     *    `isPremium = false`, and `isBlocked = false`.
-     * 3. Starts real-time `<1 second` listeners (`SubscriptionEnforcementService` + `RealtimeSyncManager`).
+     * Immediately completes login for the verified device Google account:
+     * 1. Enforces that if the device has signed-in Google accounts, [emailOrPhone] matches one of them.
+     * 2. Saves `isLoggedIn = true`, `userId`, `userEmail` / `userPhoneNumber`, and `deviceId` in `SharedPreferences`.
+     * 3. Immediately creates/updates `/users/{userId}` in Firebase Realtime Database.
+     * 4. Starts real-time `<1 second` listeners (`SubscriptionEnforcementService` + `RealtimeSyncManager`).
      */
     fun completeFallbackLogin(
         context: Context,
@@ -142,13 +213,19 @@ object GoogleAuthHelper {
         val prefs = DialerPreferences(appContext)
         prefs.ensureFirstLaunchRecorded()
 
-        val androidId = DeviceIdentityProvider.getHardwareAndroidId(appContext)
-        val deviceHash = DeviceIdentityProvider.getDeviceHash(appContext)
-        val shortTag = DeviceIdentityProvider.formatShortDeviceTag(deviceHash)
-
         val trimmedInput = emailOrPhone.trim()
         val isEmail = trimmedInput.contains("@")
         val resolvedEmail = if (isEmail) trimmedInput else prefs.userEmail
+
+        if (getDeviceSignedInGoogleEmails(appContext).isNotEmpty()) {
+            require(resolvedEmail.isNotBlank() && isEmailSignedInOnDevice(appContext, resolvedEmail)) {
+                "Login restricted: Only the Google email currently signed in on this mobile device is allowed."
+            }
+        }
+
+        val androidId = DeviceIdentityProvider.getHardwareAndroidId(appContext)
+        val deviceHash = DeviceIdentityProvider.getDeviceHash(appContext)
+        val shortTag = DeviceIdentityProvider.formatShortDeviceTag(deviceHash)
         val existingCustomPhone = prefs.userPhoneNumber
             .takeIf { it != DialerPreferences.DEFAULT_USER_NUMBER }
             .orEmpty()
@@ -296,13 +373,19 @@ object GoogleAuthHelper {
                         Firebase.auth.signInWithCredential(authCredential).awaitTask()
                     }.getOrNull()
                     val firebaseUser = authResult?.user ?: runCatching { Firebase.auth.currentUser }.getOrNull()
-                    completeFallbackLogin(
-                        context = context,
-                        emailOrPhone = firebaseUser?.email ?: googleCred.id,
-                        displayName = firebaseUser?.displayName ?: googleCred.displayName,
-                        explicitUid = firebaseUser?.uid
-                    )
-                    onAuthSuccess()
+                    val candidateEmail = (firebaseUser?.email ?: googleCred.id).trim()
+                    if (isEmailSignedInOnDevice(context, candidateEmail)) {
+                        completeFallbackLogin(
+                            context = context,
+                            emailOrPhone = candidateEmail,
+                            displayName = firebaseUser?.displayName ?: googleCred.displayName,
+                            explicitUid = firebaseUser?.uid
+                        )
+                        onAuthSuccess()
+                    } else {
+                        runCatching { Firebase.auth.signOut() }
+                        onUnauthenticated()
+                    }
                 } else {
                     onUnauthenticated()
                 }
@@ -329,9 +412,15 @@ object GoogleAuthHelper {
             return
         }
 
-        val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+        // Use GetGoogleIdOption so CredentialManager ONLY shows Google accounts already signed in
+        // on the mobile device (preventing external web-login with a non-device email).
+        val deviceGoogleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(clientId)
+            .setAutoSelectEnabled(true)
+            .build()
         val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInOption)
+            .addCredentialOption(deviceGoogleIdOption)
             .build()
 
         scope.launch {
@@ -345,23 +434,29 @@ object GoogleAuthHelper {
                         Firebase.auth.signInWithCredential(authCredential).awaitTask()
                     }.getOrNull()
                     val firebaseUser = authResult?.user ?: runCatching { Firebase.auth.currentUser }.getOrNull()
+                    val candidateEmail = (firebaseUser?.email ?: googleCred.id).trim()
+                    if (!isEmailSignedInOnDevice(activity, candidateEmail)) {
+                        runCatching { Firebase.auth.signOut() }
+                        onAuthError(activity.getString(R.string.auth_only_device_email_allowed))
+                        return@launch
+                    }
                     completeFallbackLogin(
                         context = activity,
-                        emailOrPhone = firebaseUser?.email ?: googleCred.id,
+                        emailOrPhone = candidateEmail,
                         displayName = firebaseUser?.displayName ?: googleCred.displayName,
                         explicitUid = firebaseUser?.uid
                     )
                     onAuthSuccess()
                 } else {
-                    Log.w(TAG, "Unexpected credential type returned; triggering SHA-1 bypass fallback")
+                    Log.w(TAG, "Unexpected credential type returned; triggering device Google account picker")
                     onFallbackRequired("Unexpected credential type")
                 }
             } catch (e: GetCredentialCancellationException) {
-                Log.w(TAG, "Google Sign-In aborted/cancelled (possible SHA-1 mismatch): ${e.message}", e)
+                Log.w(TAG, "Google Sign-In aborted/cancelled: ${e.message}", e)
                 onAuthCancelled()
                 onFallbackRequired(e.localizedMessage ?: "Google Sign-In fallback triggered")
             } catch (e: Exception) {
-                Log.w(TAG, "Google Sign-In failed (SHA-1 mismatch / ApiException 10); launching Google account picker", e)
+                Log.w(TAG, "Google Sign-In fallback to device Google account picker", e)
                 onFallbackRequired(e.localizedMessage ?: "Sign in fallback triggered")
             }
         }

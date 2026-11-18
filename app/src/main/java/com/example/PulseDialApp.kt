@@ -13,6 +13,7 @@ class PulseDialApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.example.data.PulseDialCrashLogger.install(this)
         val prefs = DialerPreferences(this)
         prefs.ensureFirstLaunchRecorded()
         AppCompatDelegate.setDefaultNightMode(prefs.displayThemeMode)
@@ -54,13 +55,23 @@ class PulseDialApp : Application() {
                 enableVibration(false)
             }
 
+            val followUpChannel = NotificationChannel(
+                CHANNEL_FOLLOW_UP,
+                "Post-Call Follow-Up",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Quick actions to send WhatsApp or SMS follow-ups after calls"
+            }
+
             manager.createNotificationChannel(incomingChannel)
             manager.createNotificationChannel(ongoingChannel)
+            manager.createNotificationChannel(followUpChannel)
         }
     }
 
     companion object {
         const val CHANNEL_INCOMING_CALLS = "pulsedial_incoming_calls"
         const val CHANNEL_ONGOING_CALLS = "pulsedial_ongoing_calls"
+        const val CHANNEL_FOLLOW_UP = "pulsedial_follow_up"
     }
 }

@@ -296,9 +296,83 @@ object RealtimeDatabaseSync {
             onBonusTrialDaysChanged(days)
         }?.let { cleanups.add(it) }
 
+        // Atomic parent snapshot listener so multi-field Admin updates (isPremium + subscriptionExpiresAtMs + status)
+        // never evaluate against a stale previous expiry timestamp.
+        onValue("$NODE_USERS/$uid", context) { snapshot ->
+            if (!snapshot.exists()) return@onValue
+            val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
+            val expMs = asLong(rawMap["subscriptionExpiresAtMs"]) ?: asLong(rawMap["subscriptionExpiresAt"])
+            if (rawMap.containsKey("subscriptionExpiresAtMs") || rawMap.containsKey("subscriptionExpiresAt")) {
+                onExpiresAtChanged(expMs)
+            }
+            asLong(rawMap["bonusTrialDays"])?.let { onBonusTrialDaysChanged(it.toInt().coerceIn(0, 3650)) }
+            asLong(rawMap["installDate"])?.takeIf { it > 0L }?.let(onInstallDateChanged)
+            asBool(rawMap["isBlocked"])?.let(onIsBlockedChanged)
+            val status = (rawMap["subscriptionStatus"] as? String)?.trim().orEmpty()
+            if (status.isNotEmpty()) {
+                onSubscriptionStatusChanged(status)
+            }
+            val prem = asBool(rawMap["isPremium"]) ?: asBool(rawMap["isPremiumUser"])
+            if (prem != null) {
+                onIsPremiumChanged(prem)
+            }
+        }?.let { cleanups.add(it) }
+
         if (cleanups.isEmpty()) return null
         return {
             cleanups.forEach { cleanup -> runCatching { cleanup() } }
+        }
+    }
+
+    /**
+     * Propagates Admin-updated entitlement fields across any duplicate `/users/{otherUid}` nodes
+     * sharing the same normalized email address (e.g. when a user signed in via fallback UID or
+     * when Admin pre-created the user by email before their first login).
+     */
+    fun propagateEntitlementByEmailInRtdb(
+        email: String,
+        primaryUid: String,
+        fields: Map<String, Any?>,
+        context: Context? = null
+    ) {
+        val normalizedEmail = email.trim().lowercase()
+        if (normalizedEmail.isEmpty() || fields.isEmpty()) return
+        val usersRef = refForPath(NODE_USERS, context) ?: return
+        val entitlementKeys = setOf(
+            "isPremium",
+            "isPremiumUser",
+            "subscriptionStatus",
+            "subscriptionExpiresAtMs",
+            "isBlocked",
+            "bonusTrialDays",
+            "adminNote",
+            "hideSubscriptionUI",
+            "autoCallRecording",
+            "autoRecordEnabled",
+            "isAdmin",
+            "adminGrantedBy",
+            "updatedAtMs"
+        )
+        val filteredFields = fields.filterKeys { it in entitlementKeys }
+        if (filteredFields.isEmpty()) return
+        runCatching {
+            usersRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    if (!snapshot.exists()) return
+                    for (child in snapshot.children) {
+                        val otherUid = child.key.orEmpty()
+                        if (otherUid.isBlank() || otherUid == primaryUid) continue
+                        val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
+                        if (childEmail == normalizedEmail) {
+                            child.ref.updateChildren(filteredFields)
+                        }
+                    }
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Log.d(TAG, "propagateEntitlementByEmailInRtdb cancelled: ${error.message}")
+                }
+            })
         }
     }
 
@@ -746,20 +820,94 @@ object RealtimeDatabaseSync {
                 userRef.addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(snapshot: DataSnapshot) {
                         val updateMap = identityUpdate.toMutableMap()
-                        if (!snapshot.exists() || !snapshot.hasChild("installDate")) {
+                        if (snapshot.exists()) {
+                            if (!snapshot.hasChild("installDate")) {
+                                updateMap["installDate"] = deviceTrialStartMs ?: ServerValue.TIMESTAMP
+                            }
+                            if (!snapshot.hasChild("subscriptionStatus")) {
+                                updateMap["subscriptionStatus"] = UserEntitlement.STATUS_TRIAL
+                            }
+                            if (!snapshot.hasChild("isPremium") && !snapshot.hasChild("isPremiumUser")) {
+                                updateMap["isPremium"] = false
+                                updateMap["isPremiumUser"] = false
+                            }
+                            if (!snapshot.hasChild("isBlocked")) {
+                                updateMap["isBlocked"] = false
+                            }
+                            userRef.updateChildren(updateMap)
+                            return
+                        }
+
+                        // New UID node: check if Admin already created or granted a subscription for this email
+                        val normalizedEmail = cleanEmail.lowercase()
+                        if (normalizedEmail.isNotEmpty()) {
+                            root.child(NODE_USERS).addListenerForSingleValueEvent(object : ValueEventListener {
+                                override fun onDataChange(allUsersSnap: DataSnapshot) {
+                                    var matchedPrem: Boolean? = null
+                                    var matchedStatus: String? = null
+                                    var matchedExpMs: Long? = null
+                                    var matchedBonusDays: Long? = null
+                                    var matchedBlocked: Boolean? = null
+                                    var matchedAdmin: Boolean? = null
+                                    var matchedGrantedBy: String? = null
+                                    for (child in allUsersSnap.children) {
+                                        val otherUid = child.key.orEmpty()
+                                        if (otherUid == cleanUid) continue
+                                        val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
+                                        if (childEmail == normalizedEmail) {
+                                            val cPrem = asBool(child.child("isPremium").value)
+                                                ?: asBool(child.child("isPremiumUser").value)
+                                                ?: false
+                                            val cStatus = (child.child("subscriptionStatus").value as? String)?.trim().orEmpty()
+                                            if (cPrem || cStatus == UserEntitlement.STATUS_ACTIVE || matchedStatus == null) {
+                                                matchedPrem = cPrem
+                                                matchedStatus = cStatus.ifBlank {
+                                                    if (cPrem) UserEntitlement.STATUS_ACTIVE else UserEntitlement.STATUS_TRIAL
+                                                }
+                                                matchedExpMs = asLong(child.child("subscriptionExpiresAtMs").value)
+                                                matchedBonusDays = asLong(child.child("bonusTrialDays").value)
+                                                matchedBlocked = asBool(child.child("isBlocked").value)
+                                                matchedAdmin = asBool(child.child("isAdmin").value)
+                                                matchedGrantedBy = (child.child("adminGrantedBy").value as? String)
+                                                if (cPrem || cStatus == UserEntitlement.STATUS_ACTIVE) break
+                                            }
+                                        }
+                                    }
+                                    updateMap["installDate"] = deviceTrialStartMs ?: ServerValue.TIMESTAMP
+                                    updateMap["subscriptionStatus"] = matchedStatus ?: UserEntitlement.STATUS_TRIAL
+                                    updateMap["isPremium"] = matchedPrem ?: false
+                                    updateMap["isPremiumUser"] = matchedPrem ?: false
+                                    updateMap["isBlocked"] = matchedBlocked ?: false
+                                    if (matchedExpMs != null && matchedExpMs > 0L) {
+                                        updateMap["subscriptionExpiresAtMs"] = matchedExpMs
+                                    }
+                                    if (matchedBonusDays != null && matchedBonusDays > 0L) {
+                                        updateMap["bonusTrialDays"] = matchedBonusDays
+                                    }
+                                    if (matchedAdmin == true) {
+                                        updateMap["isAdmin"] = true
+                                        updateMap["adminGrantedBy"] = matchedGrantedBy.orEmpty()
+                                    }
+                                    userRef.updateChildren(updateMap)
+                                }
+
+                                override fun onCancelled(error: DatabaseError) {
+                                    updateMap["installDate"] = deviceTrialStartMs ?: ServerValue.TIMESTAMP
+                                    updateMap["subscriptionStatus"] = UserEntitlement.STATUS_TRIAL
+                                    updateMap["isPremium"] = false
+                                    updateMap["isPremiumUser"] = false
+                                    updateMap["isBlocked"] = false
+                                    userRef.updateChildren(updateMap)
+                                }
+                            })
+                        } else {
                             updateMap["installDate"] = deviceTrialStartMs ?: ServerValue.TIMESTAMP
-                        }
-                        if (!snapshot.exists() || !snapshot.hasChild("subscriptionStatus")) {
                             updateMap["subscriptionStatus"] = UserEntitlement.STATUS_TRIAL
-                        }
-                        if (!snapshot.exists() || !snapshot.hasChild("isPremium")) {
                             updateMap["isPremium"] = false
                             updateMap["isPremiumUser"] = false
-                        }
-                        if (!snapshot.exists() || !snapshot.hasChild("isBlocked")) {
                             updateMap["isBlocked"] = false
+                            userRef.updateChildren(updateMap)
                         }
-                        userRef.updateChildren(updateMap)
                     }
 
                     override fun onCancelled(error: DatabaseError) {
@@ -839,6 +987,21 @@ object RealtimeDatabaseSync {
     fun pushUserFields(uid: String, fields: Map<String, Any?>, context: Context? = null) {
         if (uid.isBlank() || fields.isEmpty()) return
         update("$NODE_USERS/$uid", fields, context)
+    }
+
+    /**
+     * Deletes a user node `/users/{uid}` in Firebase Realtime Database in <1s.
+     */
+    fun deleteUserNode(uid: String, context: Context? = null): Boolean {
+        val cleanUid = uid.trim()
+        if (cleanUid.isEmpty()) return false
+        return runCatching {
+            val ref = refForPath("$NODE_USERS/$cleanUid", context) ?: return false
+            ref.removeValue()
+            true
+        }.onFailure { e ->
+            Log.d(TAG, "RTDB deleteUserNode($cleanUid) skipped: ${e.message}")
+        }.getOrDefault(false)
     }
 
     /**
@@ -960,6 +1123,8 @@ object RealtimeDatabaseSync {
             "autoRecordEnabled" to entitlement.autoCallRecording,
             "autoCallRecording" to entitlement.autoCallRecording,
             "themeMode" to entitlement.themeMode,
+            "themePaletteId" to entitlement.themePaletteId,
+            "useDynamicColors" to entitlement.useDynamicColors,
             "dialpadTonesEnabled" to entitlement.dialpadTonesEnabled,
             "blockedNumbers" to entitlement.blockedNumbers.take(500),
             "quickDeclineResponses" to entitlement.quickDeclineResponses.take(50),
@@ -1070,7 +1235,9 @@ object RealtimeDatabaseSync {
                 ?: base.subscriptionStatus,
             paymentRefId = (map["paymentRefId"] as? String) ?: base.paymentRefId,
             autoCallRecording = autoRecordVal,
-            themeMode = (map["themeMode"] as? String) ?: base.themeMode,
+            themeMode = (map["themeMode"] as? String)?.takeIf { it.isNotBlank() } ?: base.themeMode,
+            themePaletteId = (map["themePaletteId"] as? String)?.takeIf { it.isNotBlank() } ?: base.themePaletteId,
+            useDynamicColors = asBool(map["useDynamicColors"]) ?: base.useDynamicColors,
             dialpadTonesEnabled = asBool(map["dialpadTonesEnabled"]) ?: base.dialpadTonesEnabled,
             blockedNumbers = parsedBlockedNumbers,
             quickDeclineResponses = parsedQuickDeclines,

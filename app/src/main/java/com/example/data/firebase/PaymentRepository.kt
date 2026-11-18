@@ -318,15 +318,18 @@ class PaymentRepository(
                     reviewedByUid = adminUid,
                     reviewNote = cleanNote
                 )
-                RealtimeDatabaseSync.pushUserFields(
-                    request.userId,
-                    mapOf(
-                        "isPremium" to true,
-                        "isPremiumUser" to true,
-                        "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
-                        "subscriptionExpiresAtMs" to nextExpiresAtMs,
-                        "updatedAtMs" to nowMs
-                    )
+                val rtdbApproveMap = mapOf(
+                    "isPremium" to true,
+                    "isPremiumUser" to true,
+                    "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                    "subscriptionExpiresAtMs" to nextExpiresAtMs,
+                    "updatedAtMs" to nowMs
+                )
+                RealtimeDatabaseSync.pushUserFields(request.userId, rtdbApproveMap)
+                RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
+                    email = request.userEmail,
+                    primaryUid = request.userId,
+                    fields = rtdbApproveMap
                 )
                 return Result.success(Unit)
             }
@@ -369,15 +372,18 @@ class PaymentRepository(
                 reviewedByUid = adminUid,
                 reviewNote = cleanNote
             )
-            RealtimeDatabaseSync.pushUserFields(
-                request.userId,
-                mapOf(
-                    "isPremium" to true,
-                    "isPremiumUser" to true,
-                    "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
-                    "subscriptionExpiresAtMs" to nextExpiresAt.toDate().time,
-                    "updatedAtMs" to System.currentTimeMillis()
-                )
+            val rtdbApproveMap = mapOf(
+                "isPremium" to true,
+                "isPremiumUser" to true,
+                "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                "subscriptionExpiresAtMs" to nextExpiresAt.toDate().time,
+                "updatedAtMs" to System.currentTimeMillis()
+            )
+            RealtimeDatabaseSync.pushUserFields(request.userId, rtdbApproveMap)
+            RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
+                email = request.userEmail,
+                primaryUid = request.userId,
+                fields = rtdbApproveMap
             )
 
             val batch = db.batch()
@@ -466,15 +472,18 @@ class PaymentRepository(
                 reviewedByUid = adminUid,
                 reviewNote = cleanNote
             )
-            RealtimeDatabaseSync.pushUserFields(
-                request.userId,
-                mapOf(
-                    "isPremium" to false,
-                    "isPremiumUser" to false,
-                    "subscriptionStatus" to UserEntitlement.STATUS_EXPIRED,
-                    "subscriptionExpiresAtMs" to null,
-                    "updatedAtMs" to System.currentTimeMillis()
-                )
+            val rtdbRejectMap = mapOf(
+                "isPremium" to false,
+                "isPremiumUser" to false,
+                "subscriptionStatus" to UserEntitlement.STATUS_EXPIRED,
+                "subscriptionExpiresAtMs" to null,
+                "updatedAtMs" to System.currentTimeMillis()
+            )
+            RealtimeDatabaseSync.pushUserFields(request.userId, rtdbRejectMap)
+            RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
+                email = request.userEmail,
+                primaryUid = request.userId,
+                fields = rtdbRejectMap
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)

@@ -55,6 +55,20 @@ enum class AdminSubscriberFilter {
     NEW_TRIAL_USERS
 }
 
+enum class AdminUserDateFilter {
+    ALL_TIME,
+    TODAY,
+    LAST_7_DAYS,
+    LAST_30_DAYS,
+    CUSTOM_RANGE
+}
+
+enum class AdminUserDateField {
+    JOIN_DATE,
+    EXPIRY_DATE,
+    UPDATED_DATE
+}
+
 class AdminRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth,
@@ -514,6 +528,7 @@ class AdminRepository(
         }
 
         val nowMs = System.currentTimeMillis()
+        val monotonicNowMs = maxOf(nowMs, (user.updatedAt?.toDate()?.time ?: 0L) + 1_000L)
         val resolvedExpiry: Timestamp? = if (isPremium && !isBlocked) {
             subscriptionExpiresAt
                 ?: user.subscriptionExpiresAt?.takeIf { it.toDate().time > nowMs }
@@ -528,20 +543,24 @@ class AdminRepository(
             else -> UserEntitlement.STATUS_TRIAL
         }
 
+        val rtdbUpdateFields = mapOf(
+            "isPremium" to isPremium,
+            "isPremiumUser" to isPremium,
+            "subscriptionStatus" to resolvedStatus,
+            "subscriptionExpiresAtMs" to resolvedExpiry?.toDate()?.time,
+            "isBlocked" to isBlocked,
+            "bonusTrialDays" to bonusTrialDays.coerceIn(0L, 3650L),
+            "adminNote" to adminNote.trim().take(240),
+            "hideSubscriptionUI" to hideSubscriptionUI,
+            "updatedAtMs" to monotonicNowMs
+        )
+
         return try {
-            RealtimeDatabaseSync.pushUserFields(
-                targetUid,
-                mapOf(
-                    "isPremium" to isPremium,
-                    "isPremiumUser" to isPremium,
-                    "subscriptionStatus" to resolvedStatus,
-                    "subscriptionExpiresAtMs" to resolvedExpiry?.toDate()?.time,
-                    "isBlocked" to isBlocked,
-                    "bonusTrialDays" to bonusTrialDays.coerceIn(0L, 3650L),
-                    "adminNote" to adminNote.trim().take(240),
-                    "hideSubscriptionUI" to hideSubscriptionUI,
-                    "updatedAtMs" to System.currentTimeMillis()
-                )
+            RealtimeDatabaseSync.pushUserFields(targetUid, rtdbUpdateFields)
+            RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
+                email = user.email,
+                primaryUid = targetUid,
+                fields = rtdbUpdateFields
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
@@ -829,6 +848,7 @@ class AdminRepository(
         val cleanBonus = bonusTrialDays.coerceIn(0L, 3650L)
 
         val nowMs = System.currentTimeMillis()
+        val monotonicNowMs = maxOf(nowMs, (user.updatedAt?.toDate()?.time ?: 0L) + 1_000L)
         val resolvedExpiry: Timestamp? = if (isPremium && !isBlocked) {
             subscriptionExpiresAt
                 ?: user.subscriptionExpiresAt?.takeIf { it.toDate().time > nowMs }
@@ -873,7 +893,7 @@ class AdminRepository(
             "adminNote" to cleanNote,
             "isAdmin" to resolvedIsAdmin,
             "adminGrantedBy" to resolvedGrantedBy,
-            "updatedAtMs" to nowMs
+            "updatedAtMs" to monotonicNowMs
         )
         if (resetDeviceLock) {
             rtdbMap["deviceHash"] = ""
@@ -889,6 +909,11 @@ class AdminRepository(
 
         return try {
             RealtimeDatabaseSync.pushUserFields(targetUid, rtdbMap)
+            RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
+                email = user.email,
+                primaryUid = targetUid,
+                fields = rtdbMap
+            )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
@@ -932,6 +957,182 @@ class AdminRepository(
             if (firestoreError == null && e is CancellationException) throw e
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.UPDATE, userRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    /**
+     * Allows an authorized Admin to add a new user record directly into Firebase RTDB & Firestore.
+     */
+    suspend fun createUserByAdmin(
+        displayName: String,
+        email: String,
+        phoneNumber: String,
+        isPremium: Boolean,
+        subscriptionDays: Long,
+        bonusTrialDays: Long,
+        autoCallRecording: Boolean,
+        hideSubscriptionUI: Boolean,
+        adminNote: String,
+        grantAdminAccess: Boolean = false,
+        actingAdminEmail: String = "",
+        customUid: String = ""
+    ): Result<UserEntitlement> {
+        try {
+            requireAdminUid()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+
+        val cleanEmail = email.trim().take(254)
+        val cleanPhone = phoneNumber.trim().take(32)
+        val cleanName = displayName.trim().ifBlank {
+            cleanEmail.substringBefore("@").ifBlank { cleanPhone.ifBlank { "PulseDial User" } }
+        }.take(120)
+        if (cleanEmail.isBlank() && cleanPhone.isBlank() && displayName.isBlank()) {
+            return Result.failure(IllegalArgumentException("Enter a name, email, or mobile number."))
+        }
+
+        val sanitizedCustomUid = customUid.trim().replace(Regex("[^a-zA-Z0-9_-]"), "").take(128)
+        val generatedUid = if (sanitizedCustomUid.isNotEmpty()) {
+            sanitizedCustomUid
+        } else {
+            "usr_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        }
+
+        val nowMs = System.currentTimeMillis()
+        val nowTs = Timestamp(Date(nowMs))
+        val clampedSubDays = subscriptionDays.coerceIn(0L, 3650L)
+        val expiryTs = if (isPremium && clampedSubDays > 0L) {
+            Timestamp(Date(nowMs + clampedSubDays * DialerPreferences.ONE_DAY_MILLIS))
+        } else {
+            null
+        }
+        val cleanBonus = bonusTrialDays.coerceIn(0L, 3650L)
+        val canGrantDelegatedAdmin = UpiPaymentHelper.isSuperAdminEmail(actingAdminEmail)
+        val resolvedIsAdmin = UpiPaymentHelper.isSuperAdminEmail(cleanEmail) ||
+            (canGrantDelegatedAdmin && grantAdminAccess)
+        val resolvedGrantedBy = when {
+            UpiPaymentHelper.isSuperAdminEmail(cleanEmail) -> cleanEmail
+            resolvedIsAdmin -> actingAdminEmail.trim()
+            else -> ""
+        }
+        val status = if (isPremium) UserEntitlement.STATUS_ACTIVE else UserEntitlement.STATUS_TRIAL
+        val cleanNote = adminNote.trim().take(240)
+        val productId = if (isPremium) "admin_added_pro" else ""
+        val purchaseToken = if (isPremium) "admin_manual" else ""
+
+        val newUser = UserEntitlement(
+            id = generatedUid,
+            userId = generatedUid,
+            displayName = cleanName,
+            email = cleanEmail,
+            phoneNumber = cleanPhone,
+            deviceHash = "",
+            trialStartedAt = nowTs,
+            isPremiumUser = isPremium,
+            subscriptionStatus = status,
+            subscriptionProductId = productId,
+            purchaseToken = purchaseToken,
+            paymentRefId = "",
+            subscriptionExpiresAt = expiryTs,
+            isBlocked = false,
+            isAdmin = resolvedIsAdmin,
+            adminGrantedBy = resolvedGrantedBy,
+            bonusTrialDays = cleanBonus,
+            adminNote = cleanNote,
+            hideSubscriptionUI = hideSubscriptionUI,
+            autoCallRecording = autoCallRecording,
+            createdAt = nowTs,
+            updatedAt = nowTs
+        )
+
+        val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(generatedUid)
+        return try {
+            RealtimeDatabaseSync.pushUserEntitlement(newUser, overwriteWithSet = true)
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(newUser)
+            }
+            val firestorePayload = hashMapOf<String, Any?>(
+                "userId" to generatedUid,
+                "displayName" to cleanName,
+                "email" to cleanEmail,
+                "phoneNumber" to cleanPhone,
+                "deviceHash" to "",
+                "trialStartedAt" to FieldValue.serverTimestamp(),
+                "isPremiumUser" to isPremium,
+                "subscriptionStatus" to status,
+                "subscriptionProductId" to productId,
+                "purchaseToken" to purchaseToken,
+                "paymentRefId" to "",
+                "subscriptionExpiresAt" to expiryTs,
+                "isBlocked" to false,
+                "isAdmin" to resolvedIsAdmin,
+                "adminGrantedBy" to resolvedGrantedBy,
+                "bonusTrialDays" to cleanBonus,
+                "adminNote" to cleanNote,
+                "hideSubscriptionUI" to hideSubscriptionUI,
+                "autoCallRecording" to autoCallRecording,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            userRef.set(firestorePayload).awaitTask()
+            Result.success(newUser)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.CREATE, userRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    /**
+     * Deletes a user record from both Firebase RTDB and Firestore.
+     * Super Admin accounts can never be deleted; delegated admins can only be deleted by Super Admins.
+     */
+    suspend fun deleteUserByAdmin(
+        user: UserEntitlement,
+        actingAdminEmail: String = ""
+    ): Result<Unit> {
+        try {
+            requireAdminUid()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        if (UpiPaymentHelper.isSuperAdminEmail(user.email)) {
+            return Result.failure(IllegalStateException("Super Admin account cannot be deleted."))
+        }
+        val targetIsDelegatedAdmin = UpiPaymentHelper.isDelegatedAdminAuthorized(
+            user.isAdmin,
+            user.adminGrantedBy
+        )
+        if (targetIsDelegatedAdmin && !UpiPaymentHelper.isSuperAdminEmail(actingAdminEmail)) {
+            return Result.failure(
+                IllegalStateException("Only a Super Admin can delete another Admin user.")
+            )
+        }
+
+        val targetUid = user.userId.ifBlank { user.id }
+        require(targetUid.isNotBlank()) { "User ID must not be blank" }
+
+        val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(targetUid)
+        return try {
+            RealtimeDatabaseSync.deleteUserNode(targetUid)
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
+            userRef.delete().awaitTask()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.DELETE, userRef.path, auth)
             Result.failure(actualError)
         }
     }
@@ -1265,12 +1466,68 @@ class AdminRepository(
             nowMs: Long = System.currentTimeMillis()
         ): Boolean = resolveUserAccountStatus(user, trialDaysConfig, nowMs) == AdminUserAccountStatus.EXPIRING_SOON
 
+        fun resolveUserDateMs(
+            user: UserEntitlement,
+            dateField: AdminUserDateField = AdminUserDateField.JOIN_DATE
+        ): Long {
+            return when (dateField) {
+                AdminUserDateField.JOIN_DATE ->
+                    user.trialStartedAt?.toDate()?.time
+                        ?: user.createdAt?.toDate()?.time
+                        ?: user.updatedAt?.toDate()?.time
+                        ?: 0L
+                AdminUserDateField.EXPIRY_DATE ->
+                    resolveEffectiveExpiryMs(user).takeIf { it > 0L }
+                        ?: user.trialStartedAt?.toDate()?.time?.let {
+                            it + (DialerPreferences.TRIAL_DAYS + user.bonusTrialDays.coerceAtLeast(0L)) *
+                                DialerPreferences.ONE_DAY_MILLIS
+                        }
+                        ?: 0L
+                AdminUserDateField.UPDATED_DATE ->
+                    user.updatedAt?.toDate()?.time
+                        ?: user.createdAt?.toDate()?.time
+                        ?: user.trialStartedAt?.toDate()?.time
+                        ?: 0L
+            }
+        }
+
+        fun matchesDateFilter(
+            user: UserEntitlement,
+            dateFilter: AdminUserDateFilter,
+            customStartMs: Long = 0L,
+            customEndMs: Long = Long.MAX_VALUE,
+            nowMs: Long = System.currentTimeMillis(),
+            dateField: AdminUserDateField = AdminUserDateField.JOIN_DATE
+        ): Boolean {
+            if (dateFilter == AdminUserDateFilter.ALL_TIME) return true
+            val ts = resolveUserDateMs(user, dateField)
+            if (ts <= 0L) return false
+            val startOfTodayMs = nowMs - DialerPreferences.ONE_DAY_MILLIS
+            return when (dateFilter) {
+                AdminUserDateFilter.ALL_TIME -> true
+                AdminUserDateFilter.TODAY -> ts in startOfTodayMs..(nowMs + DialerPreferences.ONE_DAY_MILLIS)
+                AdminUserDateFilter.LAST_7_DAYS ->
+                    ts in (nowMs - 7L * DialerPreferences.ONE_DAY_MILLIS)..(nowMs + DialerPreferences.ONE_DAY_MILLIS)
+                AdminUserDateFilter.LAST_30_DAYS ->
+                    ts in (nowMs - 30L * DialerPreferences.ONE_DAY_MILLIS)..(nowMs + DialerPreferences.ONE_DAY_MILLIS)
+                AdminUserDateFilter.CUSTOM_RANGE -> {
+                    val low = minOf(customStartMs, customEndMs)
+                    val high = maxOf(customStartMs, customEndMs)
+                    ts in low..high
+                }
+            }
+        }
+
         fun filterUsers(
             users: List<UserEntitlement>,
             filter: AdminUserFilter,
             query: String,
             trialDaysConfig: Int = DialerPreferences.TRIAL_DAYS,
-            nowMs: Long = System.currentTimeMillis()
+            nowMs: Long = System.currentTimeMillis(),
+            dateFilter: AdminUserDateFilter = AdminUserDateFilter.ALL_TIME,
+            customStartMs: Long = 0L,
+            customEndMs: Long = Long.MAX_VALUE,
+            dateField: AdminUserDateField = AdminUserDateField.JOIN_DATE
         ): List<UserEntitlement> {
             val trimmed = query.trim().lowercase()
             return users.filter { user ->
@@ -1286,6 +1543,9 @@ class AdminRepository(
                     AdminUserFilter.BLOCKED -> status == AdminUserAccountStatus.BLOCKED
                 }
                 if (!matchesFilter) return@filter false
+                if (!matchesDateFilter(user, dateFilter, customStartMs, customEndMs, nowMs, dateField)) {
+                    return@filter false
+                }
                 if (trimmed.isEmpty()) return@filter true
 
                 val deviceTag = if (user.deviceHash.length == 64) {

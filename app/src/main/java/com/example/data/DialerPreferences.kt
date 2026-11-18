@@ -758,6 +758,25 @@ class DialerPreferences(context: Context) {
         get() = prefs.getInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_NO)
         set(value) = prefs.edit { putInt(KEY_THEME_MODE, value) }
 
+    var selectedThemePaletteId: String
+        get() = prefs.getString(
+            KEY_SELECTED_THEME_PALETTE_ID,
+            com.example.data.firebase.UserEntitlement.DEFAULT_THEME_PALETTE_ID
+        )?.ifBlank { com.example.data.firebase.UserEntitlement.DEFAULT_THEME_PALETTE_ID }
+            ?: com.example.data.firebase.UserEntitlement.DEFAULT_THEME_PALETTE_ID
+        set(value) = prefs.edit {
+            putString(
+                KEY_SELECTED_THEME_PALETTE_ID,
+                value.trim().lowercase().ifBlank {
+                    com.example.data.firebase.UserEntitlement.DEFAULT_THEME_PALETTE_ID
+                }
+            )
+        }
+
+    var useDynamicColors: Boolean
+        get() = prefs.getBoolean(KEY_USE_DYNAMIC_COLORS, false)
+        set(value) = prefs.edit { putBoolean(KEY_USE_DYNAMIC_COLORS, value) }
+
     var isPremiumUser: Boolean
         get() = prefs.getBoolean(KEY_IS_PREMIUM_USER, false)
         set(value) {
@@ -1069,6 +1088,10 @@ class DialerPreferences(context: Context) {
         get() = prefs.getString(KEY_PREFERRED_SIM_ACCOUNT_ID, "").orEmpty()
         set(value) = prefs.edit { putString(KEY_PREFERRED_SIM_ACCOUNT_ID, value.trim()) }
 
+    var pendingAfterCallAdTimestampMs: Long
+        get() = prefs.getLong(KEY_PENDING_AFTER_CALL_AD_TS, 0L)
+        set(value) = prefs.edit { putLong(KEY_PENDING_AFTER_CALL_AD_TS, value.coerceAtLeast(0L)) }
+
     private fun normalizePhone(raw: String): String = raw.filter { it.isDigit() }
 
     companion object {
@@ -1122,6 +1145,8 @@ class DialerPreferences(context: Context) {
         private const val KEY_USER_CUSTOM_AUTO_RECORDING = "user_custom_auto_recording"
         private const val KEY_USER_CUSTOM_DIALPAD_TONES = "user_custom_dialpad_tones"
         private const val KEY_THEME_MODE = "display_theme_mode"
+        private const val KEY_SELECTED_THEME_PALETTE_ID = "selected_theme_palette_id"
+        private const val KEY_USE_DYNAMIC_COLORS = "use_dynamic_colors"
         private const val KEY_BLOCKED_NUMBERS = "blocked_numbers"
         private const val KEY_QUICK_DECLINE_RESPONSES = "quick_decline_responses"
         private const val KEY_USER_NAME = "user_name"
@@ -1152,6 +1177,7 @@ class DialerPreferences(context: Context) {
         const val KEY_RECORD_TELEGRAM_CALLS = "record_telegram_calls"
         const val KEY_RECORD_INSTAGRAM_CALLS = "record_instagram_calls"
         const val KEY_PREFERRED_SIM_ACCOUNT_ID = "preferred_sim_account_id"
+        private const val KEY_PENDING_AFTER_CALL_AD_TS = "pending_after_call_ad_ts"
 
         const val TRIAL_DAYS = 7
         const val MONTHLY_SUBSCRIPTION_DAYS = 30

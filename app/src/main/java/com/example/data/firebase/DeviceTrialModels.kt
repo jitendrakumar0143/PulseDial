@@ -49,6 +49,9 @@ data class UserEntitlement(
     @get:PropertyName("autoCallRecording")
     val autoCallRecording: Boolean = false,
     val themeMode: String = THEME_LIGHT,
+    val themePaletteId: String = DEFAULT_THEME_PALETTE_ID,
+    @get:PropertyName("useDynamicColors")
+    val useDynamicColors: Boolean = false,
     @get:PropertyName("dialpadTonesEnabled")
     val dialpadTonesEnabled: Boolean = true,
     val blockedNumbers: List<String> = emptyList(),
@@ -103,6 +106,8 @@ data class UserEntitlement(
 
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
+        const val THEME_SYSTEM = "system"
+        const val DEFAULT_THEME_PALETTE_ID = "emerald_pulse"
 
         const val SHIELD_OFF = "OFF"
         const val SHIELD_SILENT_RECORD = "SILENT_RECORD"

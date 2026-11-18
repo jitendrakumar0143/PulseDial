@@ -50,4 +50,93 @@
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">50%</item>
     </style>
+
+    <!-- Standard Theme Overlay -->
+    <style name="ThemeOverlay.PulseDial.EmeraldPulse" parent="">
+        <item name="colorPrimary">@color/md_theme_primary</item>
+        <item name="colorOnPrimary">@color/md_theme_onPrimary</item>
+        <item name="colorPrimaryContainer">@color/md_theme_primaryContainer</item>
+        <item name="colorOnPrimaryContainer">@color/md_theme_onPrimaryContainer</item>
+        <item name="colorSecondary">@color/md_theme_secondary</item>
+        <item name="colorOnSecondary">@color/md_theme_onSecondary</item>
+        <item name="colorSecondaryContainer">@color/md_theme_secondaryContainer</item>
+        <item name="colorOnSecondaryContainer">@color/md_theme_onSecondaryContainer</item>
+        <item name="colorTertiary">@color/md_theme_tertiary</item>
+        <item name="colorOnTertiary">@color/md_theme_onTertiary</item>
+        <item name="colorTertiaryContainer">@color/md_theme_tertiaryContainer</item>
+        <item name="colorOnTertiaryContainer">@color/md_theme_onTertiaryContainer</item>
+    </style>
+
+    <!-- 3 Full-App 3D Mix-Color Premium Theme Overlays (Background + Surface + Text + Accents) -->
+    <style name="ThemeOverlay.PulseDial.CyberNeon3D" parent="">
+        <item name="colorPrimary">#7C3AED</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#2E1065</item>
+        <item name="colorOnPrimaryContainer">#F5F3FF</item>
+        <item name="colorSecondary">#06B6D4</item>
+        <item name="colorOnSecondary">#083344</item>
+        <item name="colorSecondaryContainer">#164E63</item>
+        <item name="colorOnSecondaryContainer">#A5F3FC</item>
+        <item name="colorTertiary">#EC4899</item>
+        <item name="colorOnTertiary">#FFFFFF</item>
+        <item name="colorTertiaryContainer">#831843</item>
+        <item name="colorOnTertiaryContainer">#FCE7F3</item>
+        <item name="android:colorBackground">#12072B</item>
+        <item name="colorSurface">#1E1140</item>
+        <item name="colorSurfaceVariant">#2A1854</item>
+        <item name="colorSurfaceContainer">#190D36</item>
+        <item name="colorOnSurface">#F5F3FF</item>
+        <item name="colorOnSurfaceVariant">#A5F3FC</item>
+        <item name="colorOutline">#22D3EE</item>
+        <item name="android:textColorPrimary">#F5F3FF</item>
+        <item name="android:textColorSecondary">#A5F3FC</item>
+    </style>
+
+    <style name="ThemeOverlay.PulseDial.Aurora3DMix" parent="">
+        <item name="colorPrimary">#10B981</item>
+        <item name="colorOnPrimary">#022C22</item>
+        <item name="colorPrimaryContainer">#064E3B</item>
+        <item name="colorOnPrimaryContainer">#ECFDF5</item>
+        <item name="colorSecondary">#6366F1</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="colorSecondaryContainer">#1E1B4B</item>
+        <item name="colorOnSecondaryContainer">#E0E7FF</item>
+        <item name="colorTertiary">#F43F5E</item>
+        <item name="colorOnTertiary">#FFFFFF</item>
+        <item name="colorTertiaryContainer">#881337</item>
+        <item name="colorOnTertiaryContainer">#FFE4E6</item>
+        <item name="android:colorBackground">#04211D</item>
+        <item name="colorSurface">#0A2A32</item>
+        <item name="colorSurfaceVariant">#113842</item>
+        <item name="colorSurfaceContainer">#072229</item>
+        <item name="colorOnSurface">#ECFDF5</item>
+        <item name="colorOnSurfaceVariant">#6EE7B7</item>
+        <item name="colorOutline">#34D399</item>
+        <item name="android:textColorPrimary">#ECFDF5</item>
+        <item name="android:textColorSecondary">#6EE7B7</item>
+    </style>
+
+    <style name="ThemeOverlay.PulseDial.RoyalGoldVip" parent="">
+        <item name="colorPrimary">#F59E0B</item>
+        <item name="colorOnPrimary">#451A03</item>
+        <item name="colorPrimaryContainer">#78350F</item>
+        <item name="colorOnPrimaryContainer">#FFFBEB</item>
+        <item name="colorSecondary">#D97706</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="colorSecondaryContainer">#451A03</item>
+        <item name="colorOnSecondaryContainer">#FDE68A</item>
+        <item name="colorTertiary">#FBBF24</item>
+        <item name="colorOnTertiary">#451A03</item>
+        <item name="colorTertiaryContainer">#92400E</item>
+        <item name="colorOnTertiaryContainer">#FEF3C7</item>
+        <item name="android:colorBackground">#171005</item>
+        <item name="colorSurface">#24190B</item>
+        <item name="colorSurfaceVariant">#33230F</item>
+        <item name="colorSurfaceContainer">#1E1408</item>
+        <item name="colorOnSurface">#FFFBEB</item>
+        <item name="colorOnSurfaceVariant">#FDE68A</item>
+        <item name="colorOutline">#FBBF24</item>
+        <item name="android:textColorPrimary">#FFFBEB</item>
+        <item name="android:textColorSecondary">#FDE68A</item>
+    </style>
 </resources>

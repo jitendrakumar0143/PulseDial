@@ -25,7 +25,8 @@ import kotlin.math.ceil
 class DeviceTrialRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth,
-    private val prefs: DialerPreferences? = null
+    private val prefs: DialerPreferences? = null,
+    private val appContext: Context? = null
 ) {
 
     constructor(context: Context) : this(
@@ -33,7 +34,8 @@ class DeviceTrialRepository(
             context.applicationContext.getString(R.string.firestore_database_id)
         ),
         auth = Firebase.auth,
-        prefs = DialerPreferences(context.applicationContext)
+        prefs = DialerPreferences(context.applicationContext),
+        appContext = context.applicationContext
     )
 
     private fun requireUserId(): String {
@@ -205,7 +207,7 @@ class DeviceTrialRepository(
         val userDocPath = "$COLLECTION_USERS/$uid"
         val userDocRef = db.collection(COLLECTION_USERS).document(uid)
 
-        val userEntitlement: UserEntitlement = try {
+        val rawFirestoreUser: UserEntitlement = try {
             val userSnap = userDocRef.snapshots().first()
             val existingUser = userSnap.toObject(
                 UserEntitlement::class.java,
@@ -248,24 +250,63 @@ class DeviceTrialRepository(
                     UserEntitlement::class.java,
                     DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                 ) ?: UserEntitlement(userId = uid, deviceHash = deviceHash, isPremiumUser = false)
-                RealtimeDatabaseSync.pushUserEntitlement(created)
+                RealtimeDatabaseSync.pushUserFields(
+                    uid,
+                    mapOf(
+                        "uid" to uid,
+                        "userId" to uid,
+                        "displayName" to created.displayName,
+                        "email" to created.email,
+                        "phone" to created.phoneNumber,
+                        "phoneNumber" to created.phoneNumber,
+                        "deviceHash" to deviceHash
+                    )
+                )
                 created
             } else {
-                val updateUserPayload = mapOf(
-                    "displayName" to (currentUser?.displayName?.take(120) ?: existingUser.displayName),
-                    "email" to (currentUser?.email?.take(254) ?: existingUser.email),
-                    "phoneNumber" to (sanitizedLocalPhone ?: existingUser.phoneNumber),
-                    "deviceHash" to deviceHash,
-                    "updatedAt" to FieldValue.serverTimestamp()
+                val nextDisplayName = currentUser?.displayName?.take(120)?.takeIf { it.isNotBlank() }
+                    ?: existingUser.displayName
+                val nextEmail = currentUser?.email?.take(254)?.takeIf { it.isNotBlank() }
+                    ?: existingUser.email
+                val nextPhone = sanitizedLocalPhone ?: existingUser.phoneNumber
+                val profileChanged = nextDisplayName != existingUser.displayName ||
+                    nextEmail != existingUser.email ||
+                    nextPhone != existingUser.phoneNumber ||
+                    deviceHash != existingUser.deviceHash
+                val refreshedUser = if (profileChanged) {
+                    val updateUserPayload = mapOf(
+                        "displayName" to nextDisplayName,
+                        "email" to nextEmail,
+                        "phoneNumber" to nextPhone,
+                        "deviceHash" to deviceHash,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    userDocRef.update(updateUserPayload).awaitTask()
+                    val refreshedUserSnap = userDocRef.snapshots().first()
+                    val parsed = refreshedUserSnap.toObject(
+                        UserEntitlement::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ) ?: existingUser
+                    prefs?.let { SettingsManager.applyCloudUserSettings(refreshedUserSnap, parsed, it) }
+                    parsed
+                } else {
+                    prefs?.let { SettingsManager.applyCloudUserSettings(userSnap, existingUser, it) }
+                    existingUser
+                }
+                // Only sync non-entitlement identity fields to RTDB so we NEVER overwrite an Admin-granted
+                // subscription in `/users/{uid}` with stale Firestore trial defaults.
+                RealtimeDatabaseSync.pushUserFields(
+                    uid,
+                    mapOf(
+                        "uid" to uid,
+                        "userId" to uid,
+                        "displayName" to refreshedUser.displayName,
+                        "email" to refreshedUser.email,
+                        "phone" to refreshedUser.phoneNumber,
+                        "phoneNumber" to refreshedUser.phoneNumber,
+                        "deviceHash" to deviceHash
+                    )
                 )
-                userDocRef.update(updateUserPayload).awaitTask()
-                val refreshedUserSnap = userDocRef.snapshots().first()
-                val refreshedUser = refreshedUserSnap.toObject(
-                    UserEntitlement::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ) ?: existingUser
-                prefs?.let { SettingsManager.applyCloudUserSettings(refreshedUserSnap, refreshedUser, it) }
-                RealtimeDatabaseSync.pushUserEntitlement(refreshedUser)
                 refreshedUser
             }
         } catch (e: Exception) {
@@ -277,6 +318,20 @@ class DeviceTrialRepository(
             handleFirestoreError(actualError, OperationType.WRITE, userDocPath, auth)
             return Result.failure(actualError)
         }
+
+        val liveRtdbUser = runCatching {
+            val fetched = appContext?.let { ctx ->
+                RealtimeDatabaseSync.fetchUserSnapshotOnce(ctx, uid, rawFirestoreUser)?.first
+            }
+            fetched ?: RealtimeSyncManager.syncState.value.userEntitlement?.takeIf {
+                it.uid == uid || it.userId == uid
+            }
+        }.getOrNull()
+        val userEntitlement: UserEntitlement = mergeEntitlementSources(
+            firestoreUser = rawFirestoreUser,
+            rtdbUser = liveRtdbUser,
+            nowMs = System.currentTimeMillis()
+        ) ?: rawFirestoreUser
 
         val baseTrialDays = (prefs?.configuredTrialDays ?: DialerPreferences.TRIAL_DAYS).coerceIn(1, 365)
         val bonusDays = userEntitlement.bonusTrialDays.coerceAtLeast(0L)
@@ -480,5 +535,72 @@ class DeviceTrialRepository(
     companion object {
         const val COLLECTION_DEVICE_TRIALS = "device_trials"
         const val COLLECTION_USERS = "users"
+
+        /**
+         * Deterministically merges Firestore and Realtime Database user entitlement snapshots
+         * so that an active Admin-granted subscription in RTDB is never overwritten or reverted
+         * by a stale Firestore trial document (or vice versa).
+         */
+        fun mergeEntitlementSources(
+            firestoreUser: UserEntitlement?,
+            rtdbUser: UserEntitlement?,
+            nowMs: Long = System.currentTimeMillis()
+        ): UserEntitlement? {
+            if (firestoreUser == null) return rtdbUser
+            if (rtdbUser == null) return firestoreUser
+
+            val fsUpdatedMs = firestoreUser.updatedAt?.toDate()?.time ?: 0L
+            val rtdbUpdatedMs = rtdbUser.updatedAt?.toDate()?.time ?: 0L
+
+            val rtdbExpMs = rtdbUser.subscriptionExpiresAt?.toDate()?.time ?: 0L
+            val fsExpMs = firestoreUser.subscriptionExpiresAt?.toDate()?.time ?: 0L
+
+            val rtdbActiveSub = !rtdbUser.isBlocked &&
+                (rtdbUser.isPremiumUser || rtdbUser.subscriptionStatus == UserEntitlement.STATUS_ACTIVE) &&
+                (rtdbExpMs <= 0L || rtdbExpMs > nowMs)
+            val fsActiveSub = !firestoreUser.isBlocked &&
+                (firestoreUser.isPremiumUser || firestoreUser.subscriptionStatus == UserEntitlement.STATUS_ACTIVE) &&
+                (fsExpMs <= 0L || fsExpMs > nowMs)
+
+            val rtdbExplicitlyRevoked = rtdbUser.isBlocked ||
+                rtdbUser.subscriptionStatus.equals("revoked", ignoreCase = true) ||
+                rtdbUser.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+                rtdbUser.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                rtdbUser.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
+            val fsExplicitlyRevoked = firestoreUser.isBlocked ||
+                firestoreUser.subscriptionStatus.equals("revoked", ignoreCase = true) ||
+                firestoreUser.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+                firestoreUser.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                firestoreUser.subscriptionStatus == UserEntitlement.STATUS_BLOCKED
+
+            // Prefer RTDB when:
+            // 1. RTDB has an active subscription while Firestore is on a non-revoked trial state, OR
+            // 2. RTDB has an explicit revocation with a newer timestamp than Firestore, OR
+            // 3. Both have active subscriptions and RTDB has the further-future expiry, OR
+            // 4. RTDB has a newer or equal update timestamp.
+            val preferRtdb = when {
+                rtdbExplicitlyRevoked && rtdbUpdatedMs >= fsUpdatedMs -> true
+                fsExplicitlyRevoked && fsUpdatedMs > rtdbUpdatedMs -> false
+                rtdbActiveSub && !fsActiveSub -> true
+                fsActiveSub && !rtdbActiveSub -> false
+                rtdbActiveSub && fsActiveSub && rtdbExpMs != fsExpMs -> rtdbExpMs > fsExpMs
+                else -> rtdbUpdatedMs >= fsUpdatedMs
+            }
+
+            val winner = if (preferRtdb) rtdbUser else firestoreUser
+            val secondary = if (preferRtdb) firestoreUser else rtdbUser
+
+            return winner.copy(
+                displayName = winner.displayName.ifBlank { secondary.displayName },
+                email = winner.email.ifBlank { secondary.email },
+                phoneNumber = winner.phoneNumber.ifBlank { secondary.phoneNumber },
+                deviceHash = winner.deviceHash.ifBlank { secondary.deviceHash },
+                trialStartedAt = winner.trialStartedAt ?: secondary.trialStartedAt,
+                bonusTrialDays = maxOf(winner.bonusTrialDays, secondary.bonusTrialDays),
+                isAdmin = winner.isAdmin || secondary.isAdmin,
+                adminGrantedBy = winner.adminGrantedBy.ifBlank { secondary.adminGrantedBy },
+                adminNote = winner.adminNote.ifBlank { secondary.adminNote }
+            )
+        }
     }
 }

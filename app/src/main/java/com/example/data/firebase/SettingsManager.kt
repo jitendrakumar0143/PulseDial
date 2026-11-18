@@ -107,23 +107,51 @@ class SettingsManager(
     }
 
     fun setThemeMode(nightMode: Int) {
+        lastLocalThemeChangeAtMs = System.currentTimeMillis()
         prefs.displayThemeMode = nightMode
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
             AppCompatDelegate.getDefaultNightMode() != nightMode
         ) {
             AppCompatDelegate.setDefaultNightMode(nightMode)
         }
-        val themeStr = if (nightMode == AppCompatDelegate.MODE_NIGHT_YES) {
-            UserEntitlement.THEME_DARK
-        } else {
-            UserEntitlement.THEME_LIGHT
-        }
+        val themeStr = themeModeToString(nightMode)
         pushFieldsAsync(mapOf("themeMode" to themeStr))
         activeUid()?.let { uid ->
             RealtimeDatabaseSync.pushUserFields(
                 uid,
                 mapOf(
                     "themeMode" to themeStr,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setThemePalette(paletteId: String) {
+        lastLocalThemeChangeAtMs = System.currentTimeMillis()
+        val clean = paletteId.trim().lowercase().ifBlank { UserEntitlement.DEFAULT_THEME_PALETTE_ID }
+        prefs.selectedThemePaletteId = clean
+        pushFieldsAsync(mapOf("themePaletteId" to clean))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "themePaletteId" to clean,
+                    "updatedAtMs" to System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun setUseDynamicColors(enabled: Boolean) {
+        lastLocalThemeChangeAtMs = System.currentTimeMillis()
+        prefs.useDynamicColors = enabled
+        pushFieldsAsync(mapOf("useDynamicColors" to enabled))
+        activeUid()?.let { uid ->
+            RealtimeDatabaseSync.pushUserFields(
+                uid,
+                mapOf(
+                    "useDynamicColors" to enabled,
                     "updatedAtMs" to System.currentTimeMillis()
                 )
             )
@@ -389,14 +417,12 @@ class SettingsManager(
             ?: return Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
         val uid = activeUid()
             ?: return Result.failure(IllegalStateException("User must be signed in before syncing settings."))
-        val themeStr = if (prefs.displayThemeMode == AppCompatDelegate.MODE_NIGHT_YES) {
-            UserEntitlement.THEME_DARK
-        } else {
-            UserEntitlement.THEME_LIGHT
-        }
+        val themeStr = themeModeToString(prefs.displayThemeMode)
         val payload = mapOf(
             "autoCallRecording" to prefs.autoCallRecording,
             "themeMode" to themeStr,
+            "themePaletteId" to prefs.selectedThemePaletteId,
+            "useDynamicColors" to prefs.useDynamicColors,
             "dialpadTonesEnabled" to prefs.dialpadTonesEnabled,
             "blockedNumbers" to prefs.getBlockedNumbers().map { it.take(40) }.take(500),
             "quickDeclineResponses" to prefs.getQuickDeclineResponses().map { it.take(200) }.take(50),
@@ -421,6 +447,8 @@ class SettingsManager(
                 "autoRecordEnabled" to prefs.autoCallRecording,
                 "autoCallRecording" to prefs.autoCallRecording,
                 "themeMode" to themeStr,
+                "themePaletteId" to prefs.selectedThemePaletteId,
+                "useDynamicColors" to prefs.useDynamicColors,
                 "dialpadTonesEnabled" to prefs.dialpadTonesEnabled,
                 "blockedNumbers" to prefs.getBlockedNumbers().map { it.take(40) }.take(500),
                 "quickDeclineResponses" to prefs.getQuickDeclineResponses().map { it.take(200) }.take(50),
@@ -471,6 +499,14 @@ class SettingsManager(
     }
 
     companion object {
+        @Volatile
+        private var lastLocalThemeChangeAtMs: Long = 0L
+
+        private fun isRecentLocalThemeChange(): Boolean {
+            val elapsed = System.currentTimeMillis() - lastLocalThemeChangeAtMs
+            return lastLocalThemeChangeAtMs > 0L && elapsed in 0L..8_000L
+        }
+
         private fun resolveFirestoreOrNull(context: Context): FirebaseFirestore? {
             val initialized = runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
             if (!initialized) return null
@@ -505,21 +541,25 @@ class SettingsManager(
                 prefs.dialpadTonesEnabled = user.dialpadTonesEnabled
             }
 
-            if (snapshot.contains("themeMode") &&
-                prefs.configuredForceThemeMode == AppConfig.THEME_USER
-            ) {
-                val desiredMode = if (user.themeMode == UserEntitlement.THEME_DARK) {
-                    AppCompatDelegate.MODE_NIGHT_YES
-                } else {
-                    AppCompatDelegate.MODE_NIGHT_NO
-                }
-                if (prefs.displayThemeMode != desiredMode) {
-                    prefs.displayThemeMode = desiredMode
-                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
-                        AppCompatDelegate.getDefaultNightMode() != desiredMode
-                    ) {
-                        AppCompatDelegate.setDefaultNightMode(desiredMode)
+            if (!isRecentLocalThemeChange()) {
+                if (snapshot.contains("themeMode") &&
+                    prefs.configuredForceThemeMode == AppConfig.THEME_USER
+                ) {
+                    val desiredMode = stringToThemeMode(user.themeMode)
+                    if (prefs.displayThemeMode != desiredMode) {
+                        prefs.displayThemeMode = desiredMode
+                        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
+                            AppCompatDelegate.getDefaultNightMode() != desiredMode
+                        ) {
+                            AppCompatDelegate.setDefaultNightMode(desiredMode)
+                        }
                     }
+                }
+                if (snapshot.contains("themePaletteId") && user.themePaletteId.isNotBlank()) {
+                    prefs.selectedThemePaletteId = user.themePaletteId
+                }
+                if (snapshot.contains("useDynamicColors")) {
+                    prefs.useDynamicColors = user.useDynamicColors
                 }
             }
 
@@ -578,7 +618,8 @@ class SettingsManager(
         fun applyRtdbUserEntitlement(
             user: UserEntitlement,
             prefs: DialerPreferences,
-            hasBlockedNumbersField: Boolean = false
+            hasBlockedNumbersField: Boolean = false,
+            hasThemeModeField: Boolean = false
         ) {
             val allowed = prefs.allowCallRecordingConfig
             prefs.autoCallRecording = allowed && user.autoCallRecording
@@ -602,35 +643,36 @@ class SettingsManager(
             prefs.recordMeetCalls = user.recordMeetCalls
             prefs.recordTelegramCalls = user.recordTelegramCalls
             prefs.recordInstagramCalls = user.recordInstagramCalls
-            if (prefs.configuredForceThemeMode == AppConfig.THEME_USER) {
-                val desiredMode = if (user.themeMode == UserEntitlement.THEME_DARK) {
-                    AppCompatDelegate.MODE_NIGHT_YES
-                } else {
-                    AppCompatDelegate.MODE_NIGHT_NO
+            if (!isRecentLocalThemeChange()) {
+                if (user.themePaletteId.isNotBlank()) {
+                    prefs.selectedThemePaletteId = user.themePaletteId
                 }
-                if (prefs.displayThemeMode != desiredMode) {
-                    prefs.displayThemeMode = desiredMode
-                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
-                        AppCompatDelegate.getDefaultNightMode() != desiredMode
-                    ) {
-                        AppCompatDelegate.setDefaultNightMode(desiredMode)
+                if (hasThemeModeField && prefs.configuredForceThemeMode == AppConfig.THEME_USER) {
+                    val desiredMode = stringToThemeMode(user.themeMode)
+                    if (prefs.displayThemeMode != desiredMode) {
+                        prefs.displayThemeMode = desiredMode
+                        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
+                            AppCompatDelegate.getDefaultNightMode() != desiredMode
+                        ) {
+                            AppCompatDelegate.setDefaultNightMode(desiredMode)
+                        }
                     }
                 }
             }
         }
 
         fun themeModeToString(nightMode: Int): String =
-            if (nightMode == AppCompatDelegate.MODE_NIGHT_YES) {
-                UserEntitlement.THEME_DARK
-            } else {
-                UserEntitlement.THEME_LIGHT
+            when (nightMode) {
+                AppCompatDelegate.MODE_NIGHT_YES -> UserEntitlement.THEME_DARK
+                AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM -> UserEntitlement.THEME_SYSTEM
+                else -> UserEntitlement.THEME_LIGHT
             }
 
         fun stringToThemeMode(themeMode: String): Int =
-            if (themeMode == UserEntitlement.THEME_DARK) {
-                AppCompatDelegate.MODE_NIGHT_YES
-            } else {
-                AppCompatDelegate.MODE_NIGHT_NO
+            when (themeMode.trim().lowercase()) {
+                UserEntitlement.THEME_DARK -> AppCompatDelegate.MODE_NIGHT_YES
+                UserEntitlement.THEME_SYSTEM -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                else -> AppCompatDelegate.MODE_NIGHT_NO
             }
     }
 }

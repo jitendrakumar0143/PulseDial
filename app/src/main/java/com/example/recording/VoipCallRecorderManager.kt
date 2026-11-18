@@ -163,6 +163,21 @@ object VoipCallRecorderManager {
         }
     }
 
+    fun onVoipNotificationCleared(source: CallRecordingSource) {
+        if (source == CallRecordingSource.CELLULAR) return
+        if (lastVoipSource == source) {
+            lastVoipSource = null
+            lastVoipLabelHint = null
+            lastVoipCallHintMs = 0L
+        }
+        if (activeRecordingSource == source && voipRecorder?.isRecording == true) {
+            val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (am?.mode != AudioManager.MODE_IN_COMMUNICATION) {
+                stopRecordingIfNeeded()
+            }
+        }
+    }
+
     fun onCellularCallStarted() {
         stopRecordingIfNeeded()
     }
@@ -250,9 +265,13 @@ object VoipCallRecorderManager {
             return
         }
 
-        val candidateSource = lastVoipSource ?: return
+        val fallbackEnabledSource = CallRecordingSource.entries.firstOrNull {
+            it != CallRecordingSource.CELLULAR && prefs.isVoipSourceEnabled(it)
+        }
+        val candidateSource = lastVoipSource ?: fallbackEnabledSource ?: return
         val withinEventWindow = (nowMs - lastVoipEventMs) <= RECENT_VOIP_WINDOW_MS ||
-            (nowMs - lastVoipCallHintMs) <= RECENT_VOIP_WINDOW_MS
+            (nowMs - lastVoipCallHintMs) <= RECENT_VOIP_WINDOW_MS ||
+            fallbackEnabledSource != null
         if (!withinEventWindow) return
 
         val allowed = shouldRecordVoipSource(

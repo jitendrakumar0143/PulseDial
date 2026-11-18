@@ -82,15 +82,44 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         setupKeypadButtons()
         setupActionChips()
         setupSimSelector()
+        applyVipDialpadStyling()
         updateInputDisplay()
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 RealtimeSyncManager.syncState.collect {
                     syncToneGeneratorState()
+                    applyVipDialpadStyling()
                 }
             }
         }
+    }
+
+    private fun applyVipDialpadStyling() {
+        val ctx = context ?: return
+        if (_binding == null) return
+        com.example.ui.theme.ThemeStudioManager.applyPremiumDialpadChrome(
+            context = ctx,
+            prefs = prefs,
+            vipHeaderBadge = binding.tvDialpadVipBadge,
+            displayCard = binding.cardDialpadDisplay,
+            keyCards = listOf(
+                binding.btnKey1,
+                binding.btnKey2,
+                binding.btnKey3,
+                binding.btnKey4,
+                binding.btnKey5,
+                binding.btnKey6,
+                binding.btnKey7,
+                binding.btnKey8,
+                binding.btnKey9,
+                binding.btnKeyStar,
+                binding.btnKey0,
+                binding.btnKeyHash
+            ),
+            callButton = binding.btnDialpadCall,
+            rootContainer = binding.root
+        )
     }
 
     private fun syncToneGeneratorState() {
@@ -214,6 +243,7 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         super.onResume()
         if (_binding != null) {
             refreshSimChipUi()
+            applyVipDialpadStyling()
         }
     }
 
@@ -292,6 +322,12 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         } else {
             PhoneNumberUtils.formatNumber(rawInput, Locale.getDefault().country) ?: rawInput
         }
+        binding.etDialpadInput.textSize = when {
+            rawInput.isEmpty() -> 16f
+            rawInput.length <= 12 -> 22f
+            else -> 18f
+        }
+        binding.etDialpadInput.letterSpacing = if (rawInput.isEmpty()) 0.01f else 0.04f
         binding.etDialpadInput.setText(formatted)
         updateT9Suggestions()
         updateActionChips()

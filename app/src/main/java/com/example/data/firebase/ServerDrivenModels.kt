@@ -164,7 +164,7 @@ data class DynamicSettingItem(
             DynamicSettingItem(
                 key = KEY_AUTO_RECORDING,
                 title = "Auto Call Recording",
-                description = "Automatically record calls from the first ring (.mp3)",
+                description = "Automatically record calls from the first ring (.m4a)",
                 iconKey = ICON_RECORD,
                 type = TYPE_TOGGLE,
                 enabled = true,
@@ -184,8 +184,8 @@ data class DynamicSettingItem(
             ),
             DynamicSettingItem(
                 key = KEY_ACCESSIBILITY_STATUS,
-                title = "Accessibility Service Status",
-                description = "Enable PulseDial Call Audio Helper for Android 10–16+ calls",
+                title = "Call Audio & Default Dialer",
+                description = "Use PulseDial as Default Dialer for Android 10–16+ calls",
                 iconKey = ICON_ACCESSIBILITY,
                 type = TYPE_ACTION,
                 enabled = true,

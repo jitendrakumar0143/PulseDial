@@ -90,6 +90,8 @@ object RealtimeSyncManager {
 
     private var latestConfig: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
     private var latestUser: UserEntitlement? = null
+    private var latestRtdbUser: UserEntitlement? = null
+    private var latestFirestoreUser: UserEntitlement? = null
     private var latestDevice: DeviceTrial? = null
     private var rtdbServerTimeOffsetMs: Long? = null
     private var hasReceivedInitialConfig = false
@@ -206,43 +208,62 @@ object RealtimeSyncManager {
         user: UserEntitlement?,
         snapshot: DocumentSnapshot?,
         prefs: DialerPreferences,
-        hasRtdbBlockedNumbersField: Boolean = false
+        hasRtdbBlockedNumbersField: Boolean = false,
+        hasRtdbThemeModeField: Boolean = false
     ) {
-        val incomingMs = user?.updatedAt?.toDate()?.time ?: 0L
-        val existingMs = latestUser?.updatedAt?.toDate()?.time ?: 0L
         if (snapshot != null && snapshot.metadata.isFromCache && latestUser != null) {
             return
         }
-        if (latestUser != null && incomingMs > 0L && existingMs > incomingMs + 2_000L) {
-            return
-        }
         val previous = latestUser
-        latestUser = user
-
-        if (user != null) {
-            if (snapshot != null) {
+        if (snapshot != null) {
+            latestFirestoreUser = user
+            if (user != null) {
                 SettingsManager.applyCloudUserSettings(snapshot, user, prefs)
-            } else {
-                SettingsManager.applyRtdbUserEntitlement(user, prefs, hasRtdbBlockedNumbersField)
             }
-            com.example.billing.SubscriptionEnforcementService.onUserEntitlementSynced(user, appContext)
+        } else {
+            latestRtdbUser = user
+            if (user != null) {
+                SettingsManager.applyRtdbUserEntitlement(
+                    user = user,
+                    prefs = prefs,
+                    hasBlockedNumbersField = hasRtdbBlockedNumbersField,
+                    hasThemeModeField = hasRtdbThemeModeField
+                )
+            }
+        }
+
+        val mergedUser = DeviceTrialRepository.mergeEntitlementSources(
+            firestoreUser = latestFirestoreUser,
+            rtdbUser = latestRtdbUser,
+            nowMs = System.currentTimeMillis()
+        ) ?: user
+        latestUser = mergedUser
+
+        if (mergedUser != null) {
+            SettingsManager.applyRtdbUserEntitlement(
+                user = mergedUser,
+                prefs = prefs,
+                hasBlockedNumbersField = hasRtdbBlockedNumbersField || snapshot != null,
+                hasThemeModeField = hasRtdbThemeModeField || (snapshot?.contains("themeMode") == true)
+            )
+            com.example.billing.SubscriptionEnforcementService.onUserEntitlementSynced(mergedUser, appContext)
             if (hasReceivedInitialUser && previous != null) {
-                if (!previous.isBlocked && user.isBlocked) {
+                if (!previous.isBlocked && mergedUser.isBlocked) {
                     _events.tryEmit(RealtimeSyncEvent.AccountBlocked)
-                } else if (previous.isBlocked && !user.isBlocked) {
+                } else if (previous.isBlocked && !mergedUser.isBlocked) {
                     _events.tryEmit(RealtimeSyncEvent.AccountUnblocked)
                 }
-                if ((!previous.isPremiumUser && user.isPremiumUser && !user.isBlocked) ||
+                if ((!previous.isPremiumUser && mergedUser.isPremiumUser && !mergedUser.isBlocked) ||
                     (previous.subscriptionStatus != UserEntitlement.STATUS_ACTIVE &&
-                        user.subscriptionStatus == UserEntitlement.STATUS_ACTIVE &&
-                        !user.isBlocked) ||
-                    (user.isPremiumUser && !user.isBlocked &&
-                        previous.subscriptionExpiresAt != user.subscriptionExpiresAt)
+                        mergedUser.subscriptionStatus == UserEntitlement.STATUS_ACTIVE &&
+                        !mergedUser.isBlocked) ||
+                    (mergedUser.isPremiumUser && !mergedUser.isBlocked &&
+                        previous.subscriptionExpiresAt != mergedUser.subscriptionExpiresAt)
                 ) {
                     _events.tryEmit(RealtimeSyncEvent.PaymentApproved)
                 } else if (previous.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL &&
-                    (user.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
-                        user.subscriptionStatus == UserEntitlement.STATUS_EXPIRED)
+                    (mergedUser.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                        mergedUser.subscriptionStatus == UserEntitlement.STATUS_EXPIRED)
                 ) {
                     _events.tryEmit(RealtimeSyncEvent.PaymentDisapproved("Disapproved by Admin"))
                 }
@@ -251,7 +272,7 @@ object RealtimeSyncManager {
         }
 
         recomputeEntitlementFromSnapshots(prefs)
-        bumpState(userEntitlement = user)
+        bumpState(userEntitlement = mergedUser)
     }
 
     fun startForUser(uid: String) {
@@ -294,7 +315,8 @@ object RealtimeSyncManager {
                     user = rtdbUser,
                     snapshot = null,
                     prefs = prefs,
-                    hasRtdbBlockedNumbersField = rawMap.containsKey("blockedNumbers")
+                    hasRtdbBlockedNumbersField = rawMap.containsKey("blockedNumbers"),
+                    hasRtdbThemeModeField = rawMap.containsKey("themeMode")
                 )
             }
         )
@@ -561,9 +583,7 @@ object RealtimeSyncManager {
 
         val nowMs = System.currentTimeMillis()
         val liveServerOffsetMs = rtdbServerTimeOffsetMs
-        val serverNow = device?.lastVerifiedAt?.toDate()?.time
-            ?: liveServerOffsetMs?.let { nowMs + it }
-            ?: nowMs
+        val serverNow = liveServerOffsetMs?.let { nowMs + it } ?: nowMs
 
         val effectivePremium = !blocked && rawPremium &&
             (effectiveExpiresAtMs <= 0L || serverNow < effectiveExpiresAtMs)
@@ -658,9 +678,9 @@ object RealtimeSyncManager {
         val deviceHash = DeviceIdentityProvider.getDeviceHash(ctx)
         scope.launch(Dispatchers.IO) {
             runCatching {
-                val res = DeviceTrialRepository(ctx).syncDeviceAndUserTrial(deviceHash)
+                // Fetch RTDB first so active Admin grants in RTDB are loaded before Firestore sync
                 val rtdbConfig = RealtimeDatabaseSync.fetchAppConfigOnce(ctx, latestConfig)
-                val rtdbUserResult = RealtimeDatabaseSync.fetchUserSnapshotOnce(ctx, uid, latestUser)
+                val rtdbUserResult = RealtimeDatabaseSync.fetchUserSnapshotOnce(ctx, uid, latestRtdbUser ?: latestUser)
                 scope.launch(Dispatchers.Main.immediate) {
                     if (activeUid != uid) return@launch
                     rtdbConfig?.let { applyIncomingAppConfig(it, prefs) }
@@ -672,6 +692,10 @@ object RealtimeSyncManager {
                             hasRtdbBlockedNumbersField = hasBlockedField
                         )
                     }
+                }
+                val res = DeviceTrialRepository(ctx).syncDeviceAndUserTrial(deviceHash)
+                scope.launch(Dispatchers.Main.immediate) {
+                    if (activeUid != uid) return@launch
                     if (res.isSuccess && rtdbUserResult == null) {
                         bumpState()
                     }
@@ -714,6 +738,8 @@ object RealtimeSyncManager {
         activeUid = null
         latestConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
         latestUser = null
+        latestRtdbUser = null
+        latestFirestoreUser = null
         latestDevice = null
         rtdbServerTimeOffsetMs = null
         hasReceivedInitialConfig = false

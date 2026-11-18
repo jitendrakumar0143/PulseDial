@@ -16,16 +16,48 @@
         app:elevation="0dp"
         app:liftOnScroll="true">
 
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/top_app_bar"
+        <!-- 3D Mix Gradient Top Accent Strip for Active Premium Subscribers -->
+        <View
+            android:id="@+id/view_vip_3d_top_accent_bar"
             android:layout_width="match_parent"
-            android:layout_height="64dp"
-            android:paddingHorizontal="6dp"
-            app:subtitleTextAppearance="@style/TextAppearance.Material3.LabelMedium"
-            app:subtitleTextColor="@color/md_theme_primary"
-            app:title="@string/app_name"
-            app:titleTextAppearance="@style/TextAppearance.Material3.HeadlineSmall"
-            app:titleTextColor="@color/md_theme_onSurface" />
+            android:layout_height="4dp"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingEnd="14dp">
+
+            <com.google.android.material.appbar.MaterialToolbar
+                android:id="@+id/top_app_bar"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
+                android:paddingHorizontal="6dp"
+                app:subtitleTextAppearance="@style/TextAppearance.Material3.LabelMedium"
+                app:subtitleTextColor="@color/md_theme_primary"
+                app:title="@string/app_name"
+                app:titleTextAppearance="@style/TextAppearance.Material3.HeadlineSmall"
+                app:titleTextColor="@color/md_theme_onSurface" />
+
+            <!-- Premium VIP Pro Header Crown Badge -->
+            <TextView
+                android:id="@+id/tv_vip_pro_header_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:letterSpacing="0.04"
+                android:maxLines="1"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="5dp"
+                android:text="👑 VIP PRO"
+                android:textColor="#FFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <com.google.android.material.divider.MaterialDivider
             android:layout_width="match_parent"

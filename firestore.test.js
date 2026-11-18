@@ -633,3 +633,85 @@ test("Server-driven navigation_tabs, settings_items, live_broadcast & hideSubscr
   await assertSucceeds(aliceDb.collection("app_config").doc("settings_items").get());
   await assertSucceeds(aliceDb.collection("app_config").doc("live_broadcast").get());
 });
+
+test("Verified Admin can add and delete regular users, while non-admins cannot and Super Admins cannot be deleted", async () => {
+  const ts = pastDate();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: "jitendrakumar888126@gmail.com",
+    email_verified: true,
+  }).firestore();
+
+  // Super Admin doc seeded via admin/system context
+  const superAdminUid = "super_admin_pushpendra";
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("users").doc(superAdminUid).set({
+      userId: superAdminUid,
+      displayName: "Pushpendra",
+      email: "0143pushpendra@gmail.com",
+      deviceHash: "",
+      trialStartedAt: ts,
+      isPremiumUser: true,
+      subscriptionProductId: "admin_pro",
+      purchaseToken: "manual",
+      isAdmin: true,
+      adminGrantedBy: "0143pushpendra@gmail.com",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  });
+
+  // Non-admin CANNOT create a user doc for someone else
+  await assertFails(
+    aliceDb.collection("users").doc("usr_created_by_alice").set({
+      userId: "usr_created_by_alice",
+      displayName: "Unauthorized User",
+      email: "unauth@example.com",
+      deviceHash: "",
+      trialStartedAt: ts,
+      isPremiumUser: true,
+      subscriptionProductId: "admin_added_pro",
+      purchaseToken: "admin_manual",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  // Verified Admin CAN add a new user (with custom Pro days)
+  const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  await assertSucceeds(
+    adminDb.collection("users").doc("usr_added_by_admin_1").set({
+      userId: "usr_added_by_admin_1",
+      displayName: "Manual Pro Member",
+      email: "manualpro@example.com",
+      phoneNumber: "+919876543210",
+      deviceHash: "",
+      trialStartedAt: ts,
+      isPremiumUser: true,
+      subscriptionStatus: "active",
+      subscriptionProductId: "admin_added_pro",
+      purchaseToken: "admin_manual",
+      paymentRefId: "",
+      subscriptionExpiresAt: thirtyDaysOut,
+      isBlocked: false,
+      isAdmin: false,
+      adminGrantedBy: "",
+      bonusTrialDays: 0,
+      adminNote: "Added from Admin Panel",
+      hideSubscriptionUI: false,
+      autoCallRecording: true,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  // Non-admin CANNOT delete any user doc (not even own or added user)
+  await assertFails(aliceDb.collection("users").doc("usr_added_by_admin_1").delete());
+
+  // Admin CANNOT delete a Super Admin account
+  await assertFails(adminDb.collection("users").doc(superAdminUid).delete());
+
+  // Verified Admin CAN delete a regular user doc
+  await assertSucceeds(adminDb.collection("users").doc("usr_added_by_admin_1").delete());
+});
+

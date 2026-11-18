@@ -39,7 +39,7 @@ import java.util.Locale
  *   3. MIC
  * - Automatically detects silent HAL streams (maxAmplitude == 0) over the initial window and switches
  *   to the next AudioSource cleanly without user-audible beeps or announcements.
- * - Exports seekable finalized AAC audio named Number_yyyyMMdd_HHmmss.mp3 to the user's SAF folder
+ * - Exports seekable finalized AAC audio named Number_yyyyMMdd_HHmmss.m4a to the user's SAF folder
  *   or Scoped Storage MediaStore (IS_PENDING) and triggers MediaScannerConnection.scanFile().
  */
 class CallRecorder(private val context: Context) {
@@ -269,7 +269,7 @@ class CallRecorder(private val context: Context) {
     }
 
     private fun createTempRecordingFile(): File {
-        return File(appContext.cacheDir, "rec_tmp_${System.currentTimeMillis()}.mp3")
+        return File(appContext.cacheDir, "rec_tmp_${System.currentTimeMillis()}.m4a")
     }
 
     private fun createMediaRecorder(): MediaRecorder {
@@ -380,7 +380,7 @@ class CallRecorder(private val context: Context) {
             }
             val targetDir = resolveSafTargetDirectory(rootDir, source, createSubfolder)
 
-            val targetDoc = targetDir.createFile(MIME_TYPE_MP3, fileName) ?: return null
+            val targetDoc = targetDir.createFile(MIME_TYPE_M4A, fileName) ?: return null
             val outStream = appContext.contentResolver.openOutputStream(targetDoc.uri, "w") ?: run {
                 targetDoc.delete()
                 return null
@@ -397,7 +397,7 @@ class CallRecorder(private val context: Context) {
                 MediaScannerConnection.scanFile(
                     appContext,
                     arrayOf(filePath),
-                    arrayOf(MIME_TYPE_MP3),
+                    arrayOf(MIME_TYPE_M4A),
                     null
                 )
             }
@@ -429,8 +429,8 @@ class CallRecorder(private val context: Context) {
         val relativePath = source.relativePublicPath()
         val values = ContentValues().apply {
             put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
-            put(MediaStore.Audio.Media.TITLE, fileName.removeSuffix(".mp3"))
-            put(MediaStore.Audio.Media.MIME_TYPE, MIME_TYPE_MP3)
+            put(MediaStore.Audio.Media.TITLE, fileName.removeSuffix(".m4a"))
+            put(MediaStore.Audio.Media.MIME_TYPE, MIME_TYPE_M4A)
             put(MediaStore.Audio.Media.RELATIVE_PATH, relativePath)
             put(MediaStore.Audio.Media.IS_MUSIC, 1)
             put(MediaStore.Audio.Media.IS_PENDING, 1)
@@ -457,7 +457,7 @@ class CallRecorder(private val context: Context) {
                 MediaScannerConnection.scanFile(
                     appContext,
                     arrayOf(absPath),
-                    arrayOf(MIME_TYPE_MP3),
+                    arrayOf(MIME_TYPE_M4A),
                     null
                 )
             }
@@ -503,7 +503,7 @@ class CallRecorder(private val context: Context) {
             MediaScannerConnection.scanFile(
                 appContext,
                 arrayOf(outFile.absolutePath),
-                arrayOf(MIME_TYPE_MP3),
+                arrayOf(MIME_TYPE_M4A),
                 null
             )
             fileName
@@ -531,7 +531,7 @@ class CallRecorder(private val context: Context) {
 
     companion object {
         private const val TAG = "CallRecorder"
-        private const val MIME_TYPE_MP3 = "audio/mpeg"
+        private const val MIME_TYPE_M4A = "audio/mp4"
         private const val SILENCE_CHECK_INTERVAL_MS = 250L
         private const val SILENCE_CHECK_SAMPLES = 6
 
@@ -567,9 +567,9 @@ class CallRecorder(private val context: Context) {
                 .take(24)
                 .ifEmpty { "Unknown" }
             return if (source.filePrefix.isBlank()) {
-                "${sanitized}_$timestamp.mp3"
+                "${sanitized}_$timestamp.m4a"
             } else {
-                "${source.filePrefix}_${sanitized}_$timestamp.mp3"
+                "${source.filePrefix}_${sanitized}_$timestamp.m4a"
             }
         }
     }

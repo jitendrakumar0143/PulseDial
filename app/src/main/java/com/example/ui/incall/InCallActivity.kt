@@ -8,6 +8,7 @@ import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
 import android.telecom.Call
+import android.telecom.CallAudioState
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.Toast
@@ -136,7 +137,7 @@ class InCallActivity : AppCompatActivity() {
 
     private fun setupControls() {
         binding.btnIncallMute.setOnClickListener { CallManager.toggleMute() }
-        binding.btnIncallSpeaker.setOnClickListener { CallManager.toggleSpeaker() }
+        binding.btnIncallSpeaker.setOnClickListener { handleAudioRouteClick() }
         binding.btnIncallKeypad.setOnClickListener {
             isKeypadVisible = !isKeypadVisible
             binding.layoutIncallKeypadPanel.visibility = if (isKeypadVisible) View.VISIBLE else View.GONE
@@ -241,6 +242,42 @@ class InCallActivity : AppCompatActivity() {
         if (!started && !CallManager.uiState.value.isRecording) {
             Toast.makeText(this, R.string.incall_recording_failed, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun handleAudioRouteClick() {
+        val state = CallManager.uiState.value
+        val supported = state.supportedAudioRoutes
+        val hasBluetooth = (supported and CallAudioState.ROUTE_BLUETOOTH) != 0
+        val hasWiredHeadset = (supported and CallAudioState.ROUTE_WIRED_HEADSET) != 0
+
+        if (!hasBluetooth && !hasWiredHeadset) {
+            CallManager.toggleSpeaker()
+            return
+        }
+
+        val options = mutableListOf<Pair<Int, String>>()
+        if (hasBluetooth) {
+            options.add(CallAudioState.ROUTE_BLUETOOTH to getString(R.string.incall_audio_bluetooth))
+        }
+        if (hasWiredHeadset) {
+            options.add(CallAudioState.ROUTE_WIRED_HEADSET to getString(R.string.incall_audio_headset))
+        } else {
+            options.add(CallAudioState.ROUTE_EARPIECE to getString(R.string.incall_audio_earpiece))
+        }
+        options.add(CallAudioState.ROUTE_SPEAKER to getString(R.string.incall_speaker))
+
+        val labels = options.map { it.second }.toTypedArray()
+        val checked = options.indexOfFirst { (route, _) -> (state.audioRoute and route) != 0 }
+            .coerceAtLeast(0)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.incall_audio_chooser_title)
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                CallManager.setAudioRoute(options[which].first)
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
     }
 
     private fun showQuickDeclineChooser() {
@@ -414,10 +451,23 @@ class InCallActivity : AppCompatActivity() {
             )
         )
 
+        val isBtActive = (state.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
+        val isHeadsetActive = (state.audioRoute and CallAudioState.ROUTE_WIRED_HEADSET) != 0
+        val isAudioHighlighted = state.isSpeakerOn || isBtActive || isHeadsetActive
+        binding.btnIncallSpeaker.setIconResource(
+            if (isBtActive) R.drawable.ic_bluetooth else R.drawable.ic_volume_up
+        )
+        binding.tvIncallSpeakerLabel.text = getString(
+            when {
+                isBtActive -> R.string.incall_audio_bluetooth
+                isHeadsetActive -> R.string.incall_audio_headset
+                else -> R.string.incall_speaker
+            }
+        )
         binding.btnIncallSpeaker.setBackgroundColor(
             ContextCompat.getColor(
                 this,
-                if (state.isSpeakerOn) R.color.incall_surface_active else R.color.incall_surface
+                if (isAudioHighlighted) R.color.incall_surface_active else R.color.incall_surface
             )
         )
 
