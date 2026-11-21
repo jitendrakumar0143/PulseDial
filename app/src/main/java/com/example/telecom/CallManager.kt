@@ -95,6 +95,15 @@ object CallManager {
     private val _callsFlow = MutableStateFlow<List<Call>>(emptyList())
     val callsFlow: StateFlow<List<Call>> = _callsFlow.asStateFlow()
 
+    private val _inCallUiVisible = MutableStateFlow(false)
+    val inCallUiVisible: StateFlow<Boolean> = _inCallUiVisible.asStateFlow()
+
+    fun setInCallUiVisible(visible: Boolean) {
+        _inCallUiVisible.value = visible
+    }
+
+    fun isInCallUiVisible(): Boolean = _inCallUiVisible.value
+
     private val trackedCalls = CopyOnWriteArrayList<Call>()
     private val callIdentities = ConcurrentHashMap<Call, ResolvedCallIdentity>()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -143,6 +152,38 @@ object CallManager {
     }
 
     fun isSimSwitchInProgress(): Boolean = isSimSwitchPending.get()
+
+    /**
+     * Authoritative cleanup invoked when the background service's [TelephonyCallStateMonitor]
+     * detects a [android.telephony.TelephonyManager.CALL_STATE_IDLE] transition after
+     * [android.telephony.TelephonyManager.CALL_STATE_OFFHOOK] (or after RINGING).
+     *
+     * Clears any stale tracked call entries, stops call recording, cancels call notifications,
+     * and resets [uiState] to `hasActiveCall = false` so [com.example.ui.incall.InCallActivity]
+     * and floating call pills immediately terminate and clean up.
+     */
+    fun forceCleanupOnTelephonyIdle(context: Context, wasOffhook: Boolean) {
+        if (isSimSwitchPending.get()) return
+        val appCtx = context.applicationContext
+        stopRecordingIfNeeded()
+        com.example.recording.CallRecorderForegroundService.stop(appCtx)
+        CustomInCallService.cancelCallNotification(appCtx)
+
+        val hadLiveTrackedCalls = trackedCalls.isNotEmpty()
+        val hadActiveUi = _uiState.value.hasActiveCall
+        if (hadLiveTrackedCalls || hadActiveUi || wasOffhook) {
+            trackedCalls.clear()
+            callIdentities.clear()
+            _callsFlow.value = emptyList()
+            _uiState.update { prev ->
+                CallUiState(
+                    hasActiveCall = false,
+                    callState = Call.STATE_DISCONNECTED,
+                    lastSavedRecordingName = prev.lastSavedRecordingName
+                )
+            }
+        }
+    }
 
     /**
      * Updates the tracked multi-call list from CustomInCallService (or single-call compat callers).

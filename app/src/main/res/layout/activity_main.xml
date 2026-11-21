@@ -247,15 +247,15 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_marginEnd="20dp"
-        android:layout_marginBottom="98dp"
+        android:layout_marginBottom="104dp"
         android:contentDescription="@string/action_dialpad"
         app:backgroundTint="@color/md_theme_primary"
-        app:elevation="6dp"
+        app:elevation="8dp"
         app:fabCustomSize="60dp"
         app:maxImageSize="28dp"
-        app:shapeAppearanceOverlay="@style/ShapeAppearance.Material3.Corner.Large"
+        app:shapeAppearanceOverlay="@style/ShapeAppearance.Material3.Corner.Full"
         app:srcCompat="@drawable/ic_dialpad"
-        app:tint="@color/md_theme_onPrimary" />
+        app:tint="#FFFFFF" />
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/bottom_navigation"

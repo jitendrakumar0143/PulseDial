@@ -19,6 +19,7 @@ import com.example.billing.SubscriptionManager
 import com.example.data.DialerPreferences
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.telecom.CallManager
+import com.example.telecom.TelephonyCallStateMonitor
 import com.example.ui.incall.InCallActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,7 @@ import kotlinx.coroutines.launch
 class CallRecorderForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    internal var telephonyCallStateMonitor: TelephonyCallStateMonitor? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -76,13 +78,49 @@ class CallRecorderForegroundService : Service() {
         val isCellularCall = intent?.getBooleanExtra(EXTRA_IS_CELLULAR_CALL, true) ?: true
         val notification = buildSilentNotification()
         startForegroundWithCompatTypes(notification, isCellularCall)
+        if (isCellularCall) {
+            ensureTelephonyCallStateMonitorStarted()
+        }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        telephonyCallStateMonitor?.stop()
+        telephonyCallStateMonitor = null
         serviceScope.cancel()
         stopForegroundCompat()
         super.onDestroy()
+    }
+
+    private fun ensureTelephonyCallStateMonitorStarted() {
+        val monitor = telephonyCallStateMonitor ?: TelephonyCallStateMonitor(
+            context = applicationContext,
+            onIdleAfterOffhook = {
+                handleCellularIdleTermination(wasOffhook = true)
+            },
+            onIdleAfterRinging = {
+                handleCellularIdleTermination(wasOffhook = false)
+            }
+        ).also { telephonyCallStateMonitor = it }
+        if (!monitor.isMonitoring()) {
+            monitor.start()
+        }
+        // Recording for cellular calls typically begins while ringing or offhook
+        if (monitor.getLastObservedState() == android.telephony.TelephonyManager.CALL_STATE_IDLE) {
+            val callState = CallManager.uiState.value.callState
+            if (callState == android.telecom.Call.STATE_RINGING) {
+                monitor.seedInitialState(android.telephony.TelephonyManager.CALL_STATE_RINGING)
+            } else if (CallManager.uiState.value.hasActiveCall) {
+                monitor.seedInitialState(android.telephony.TelephonyManager.CALL_STATE_OFFHOOK)
+            }
+        }
+    }
+
+    internal fun handleCellularIdleTermination(wasOffhook: Boolean) {
+        if (CallManager.isSimSwitchInProgress()) return
+        CallManager.forceCleanupOnTelephonyIdle(applicationContext, wasOffhook = wasOffhook)
+        stopForegroundCompat()
+        stopSelf()
     }
 
     private fun startForegroundWithCompatTypes(notification: Notification, isCellularCall: Boolean) {

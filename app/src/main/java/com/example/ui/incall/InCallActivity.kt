@@ -159,6 +159,7 @@ class InCallActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        CallManager.setInCallUiVisible(true)
         if (::proximityScreenLockController.isInitialized) {
             val state = CallManager.uiState.value
             proximityScreenLockController.updateCallState(
@@ -168,6 +169,11 @@ class InCallActivity : AppCompatActivity() {
                 isSpeakerOn = state.isSpeakerOn
             )
         }
+    }
+
+    override fun onPause() {
+        CallManager.setInCallUiVisible(false)
+        super.onPause()
     }
 
     override fun onStop() {
@@ -238,6 +244,7 @@ class InCallActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        CallManager.setInCallUiVisible(false)
         if (::proximityScreenLockController.isInitialized) {
             proximityScreenLockController.release()
         }
@@ -253,6 +260,13 @@ class InCallActivity : AppCompatActivity() {
             binding.viewLiveSignalBars.stopSignalAnimation()
         }
         super.onDestroy()
+        val ui = CallManager.uiState.value
+        if (!ui.hasActiveCall ||
+            ui.callState == Call.STATE_DISCONNECTED ||
+            ui.callState == Call.STATE_DISCONNECTING
+        ) {
+            com.example.telecom.CustomInCallService.cancelCallNotification(this)
+        }
         toneGenerator?.release()
         toneGenerator = null
     }
@@ -760,6 +774,9 @@ class InCallActivity : AppCompatActivity() {
         if (shouldInvokeCallManagerEnd) {
             CallManager.declineOrEndCall()
         }
+        if (CallManager.getTrackedCallsCount() <= 1) {
+            com.example.telecom.CustomInCallService.cancelCallNotification(this)
+        }
 
         if (isMinimizedToTopBar && binding.floating3dCallPill.currentMode != Floating3DCallPillView.PillMode.HIDDEN) {
             binding.floating3dCallPill.dismissWithReverseAnimation {
@@ -783,7 +800,8 @@ class InCallActivity : AppCompatActivity() {
         lifecycleScope.launch {
             delay(CALL_ENDED_HOLD_MS)
             if (isFinishing || isDestroyed) return@launch
-            if (CallManager.uiState.value.hasActiveCall) {
+            val latest = CallManager.uiState.value
+            if (latest.hasActiveCall && latest.callState != Call.STATE_DISCONNECTED) {
                 isDismissingInCall = false
                 return@launch
             }
@@ -1305,7 +1323,7 @@ class InCallActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 CallManager.uiState.collect { state ->
-                    if (!state.hasActiveCall) {
+                    if (!state.hasActiveCall || state.callState == Call.STATE_DISCONNECTED) {
                         if (state.isSwitchingSim || CallManager.isSimSwitchInProgress()) {
                             val targetLabel = state.alternateSimLabel
                                 .ifBlank { getString(R.string.incall_sim_badge_fallback) }

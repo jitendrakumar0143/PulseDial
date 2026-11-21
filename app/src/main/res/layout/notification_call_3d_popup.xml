@@ -6,7 +6,7 @@
     android:orientation="vertical"
     android:padding="14dp">
 
-    <!-- Header Row: 3D Badge + Caller Name + Live Call Timer -->
+    <!-- Header Row: 3D Badge + Caller Name + Live Call Timer / Ringing Pill -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -14,19 +14,18 @@
         android:orientation="horizontal">
 
         <ImageView
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="@drawable/bg_circle_avatar"
-            android:backgroundTint="#10B981"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="@drawable/bg_notif_btn_answer_3d"
             android:contentDescription="@null"
-            android:padding="8dp"
+            android:padding="9dp"
             android:src="@drawable/ic_call"
             android:tint="#FFFFFF" />
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="12dp"
             android:layout_weight="1"
             android:orientation="vertical">
 
@@ -37,16 +36,17 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="#FFFFFF"
-                android:textSize="15sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tv_notif_popup_number"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#A5F3FC"
+                android:textColor="#BAE6FD"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -54,11 +54,11 @@
             android:id="@+id/chrono_notif_call_timer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:background="#4010B981"
+            android:background="@drawable/bg_notif_btn_glass_3d"
             android:paddingHorizontal="10dp"
             android:paddingVertical="5dp"
             android:textColor="#6EE7B7"
-            android:textSize="14sp"
+            android:textSize="13sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -68,7 +68,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:background="#260F172A"
+        android:background="@drawable/bg_notif_btn_glass_3d"
         android:ellipsize="end"
         android:maxLines="2"
         android:paddingHorizontal="10dp"
@@ -76,7 +76,7 @@
         android:textColor="#E2E8F0"
         android:textSize="12sp" />
 
-    <!-- Quick Action Buttons inside Pull-Down 3D Popup -->
+    <!-- Quick Action Buttons inside Upper-Side / Pull-Down 3D Popup -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -91,11 +91,11 @@
             android:layout_height="40dp"
             android:layout_marginEnd="6dp"
             android:layout_weight="1"
-            android:backgroundTint="#28354E"
+            android:background="@drawable/bg_notif_btn_glass_3d"
             android:text="@string/incall_mute"
             android:textAllCaps="false"
-            android:textColor="#F8FAFC"
-            android:textSize="12sp"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
         <Button
@@ -105,11 +105,11 @@
             android:layout_height="40dp"
             android:layout_marginEnd="6dp"
             android:layout_weight="1"
-            android:backgroundTint="#28354E"
+            android:background="@drawable/bg_notif_btn_glass_3d"
             android:text="@string/incall_speaker"
             android:textAllCaps="false"
-            android:textColor="#F8FAFC"
-            android:textSize="12sp"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
         <Button
@@ -118,11 +118,11 @@
             android:layout_width="0dp"
             android:layout_height="40dp"
             android:layout_weight="1"
-            android:backgroundTint="#E11D48"
+            android:background="@drawable/bg_notif_btn_decline_3d"
             android:text="@string/incall_end_call"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
-            android:textSize="12sp"
+            android:textSize="13sp"
             android:textStyle="bold" />
     </LinearLayout>
 </LinearLayout>

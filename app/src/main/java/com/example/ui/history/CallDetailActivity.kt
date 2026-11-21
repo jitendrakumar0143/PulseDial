@@ -177,11 +177,15 @@ class CallDetailActivity : AppCompatActivity() {
 
     private fun setupActions() {
         binding.btnSaveContact.setOnClickListener {
+            val existingRealName = matchedContact?.name?.takeUnless {
+                ContactsRepository.isNameJustPhoneNumber(it, phoneNumber)
+            }
             SaveContactHelper.showSaveNumberDialog(
                 context = this,
                 lifecycleOwner = this,
                 initialNumber = phoneNumber,
-                initialName = matchedContact?.name ?: initialName.orEmpty(),
+                initialName = existingRealName ?: initialName.orEmpty(),
+                isEditingExisting = existingRealName != null,
                 onSaved = { loadDetailsAndHistory() }
             )
         }
@@ -317,6 +321,12 @@ class CallDetailActivity : AppCompatActivity() {
                 }
                 binding.chipGroupDetectedSocials.addView(chip)
             }
+            com.example.ui.theme.ThemeStudioManager.invalidateHierarchyThemeTag(binding.chipGroupDetectedSocials)
+            com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(
+                rootView = binding.chipGroupDetectedSocials,
+                prefs = prefs,
+                applyRootBackground = false
+            )
         }
     }
 
@@ -453,7 +463,13 @@ class CallDetailActivity : AppCompatActivity() {
             binding.tvDetailAvatar.text = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "#"
 
             val isSaved = matchedContact != null
-            binding.btnSaveContact.visibility = if (isSaved) View.GONE else View.VISIBLE
+            val hasRealContactName = matchedContact != null &&
+                !ContactsRepository.isNameJustPhoneNumber(matchedContact!!.name, phoneNumber)
+            binding.btnSaveContact.visibility = View.VISIBLE
+            binding.btnSaveContact.text = getString(
+                if (hasRealContactName) R.string.call_detail_edit_contact_button
+                else R.string.call_detail_save_contact_button
+            )
             binding.btnDetailStar.visibility = if (isSaved) View.VISIBLE else View.GONE
             if (matchedContact != null) {
                 binding.btnDetailStar.setImageResource(

@@ -739,6 +739,21 @@ object ThemeStudioManager {
         val hairlinePx = (1f * density).toInt().coerceAtLeast(1)
 
         when (view) {
+            is AppBarLayout -> {
+                view.background = GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(
+                        palette.bgStartColorInt(),
+                        ColorUtils.blendARGB(palette.bgMidColorInt(), palette.primaryColorInt(), 0.14f),
+                        palette.bgEndColorInt()
+                    )
+                )
+            }
+            is MaterialToolbar -> {
+                view.setTitleTextColor(palette.textPrimaryColorInt())
+                view.setSubtitleTextColor(palette.textSecondaryColorInt())
+                view.setNavigationIconTint(Color.WHITE)
+            }
             is MaterialCardView -> {
                 if (view.id != R.id.card_live_banner_ad && view.id != R.id.card_trial_locked_banner) {
                     view.setCardBackgroundColor(palette.cardBgColorInt())
@@ -851,10 +866,23 @@ object ThemeStudioManager {
                 applyCrispTypography(view)
             }
             is TextView -> {
-                if (view.id == R.id.tv_avatar_initial) {
+                val bg = view.background
+                val isAvatarView = view.id == R.id.tv_avatar_initial ||
+                    view.id == R.id.tv_contact_initial ||
+                    view.id == R.id.tv_detail_avatar
+                if (isAvatarView) {
                     view.background = palette.createDarkGlassIconTileDrawable(
-                        cornerRadiusPx = 24f * density,
+                        cornerRadiusPx = 28f * density,
                         isOval = true,
+                        strokeWidthPx = hairlinePx
+                    )
+                    view.setTextColor(Color.WHITE)
+                } else if (bg is GradientDrawable) {
+                    val isOval = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+                        bg.shape == GradientDrawable.OVAL
+                    view.background = palette.createDarkGlassIconTileDrawable(
+                        cornerRadiusPx = 14f * density,
+                        isOval = isOval,
                         strokeWidthPx = hairlinePx
                     )
                     view.setTextColor(Color.WHITE)
@@ -891,10 +919,10 @@ object ThemeStudioManager {
                     )
                 } else {
                     val existingTint = ImageViewCompat.getImageTintList(view)
-                    if (existingTint != null && ColorUtils.calculateLuminance(existingTint.defaultColor) < 0.35) {
+                    if (existingTint == null || ColorUtils.calculateLuminance(existingTint.defaultColor) < 0.35) {
                         ImageViewCompat.setImageTintList(
                             view,
-                            ColorStateList.valueOf(palette.textSecondaryColorInt())
+                            ColorStateList.valueOf(palette.textPrimaryColorInt())
                         )
                     }
                 }
@@ -910,21 +938,37 @@ object ThemeStudioManager {
             }
             is FrameLayout -> {
                 val bg = view.background
-                if (bg is GradientDrawable && view.childCount == 1 && view.getChildAt(0) is ImageView) {
+                if (bg is GradientDrawable) {
                     val isOval = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
                         bg.shape == GradientDrawable.OVAL
-                    view.background = palette.createDarkGlassIconTileDrawable(
-                        cornerRadiusPx = 14f * density,
-                        isOval = isOval,
-                        strokeWidthPx = hairlinePx
-                    )
-                    val childIcon = view.getChildAt(0) as ImageView
-                    if (ImageViewCompat.getImageTintList(childIcon) != null) {
-                        ImageViewCompat.setImageTintList(
-                            childIcon,
-                            ColorStateList.valueOf(palette.cardStrokeColorInt())
+                    if (view.childCount == 1 && view.getChildAt(0) is ImageView) {
+                        view.background = palette.createDarkGlassIconTileDrawable(
+                            cornerRadiusPx = 14f * density,
+                            isOval = isOval,
+                            strokeWidthPx = hairlinePx
+                        )
+                        val childIcon = view.getChildAt(0) as ImageView
+                        if (ImageViewCompat.getImageTintList(childIcon) != null) {
+                            ImageViewCompat.setImageTintList(
+                                childIcon,
+                                ColorStateList.valueOf(palette.cardStrokeColorInt())
+                            )
+                        }
+                    } else {
+                        view.background = palette.create3DGlassCardDrawable(
+                            cornerRadiusPx = 14f * density,
+                            strokeWidthPx = hairlinePx
                         )
                     }
+                }
+            }
+            is ViewGroup -> {
+                val bg = view.background
+                if (bg is GradientDrawable && view !is BottomNavigationView) {
+                    view.background = palette.create3DGlassCardDrawable(
+                        cornerRadiusPx = 14f * density,
+                        strokeWidthPx = hairlinePx
+                    )
                 }
             }
         }
@@ -1021,6 +1065,7 @@ object ThemeStudioManager {
             val callBtnFill = ColorUtils.blendARGB(palette.primaryColorInt(), palette.bgMidColorInt(), 0.16f)
             callButton?.backgroundTintList = ColorStateList.valueOf(callBtnFill)
             callButton?.setTextColor(Color.WHITE)
+            callButton?.iconTint = ColorStateList.valueOf(Color.WHITE)
             callButton?.let { applyCrispTypography(it) }
         } else if (isPremium) {
             if (rootContainer != null) {

@@ -1483,8 +1483,10 @@
                             android:orientation="vertical">
 
                             <FrameLayout
-                                android:layout_width="64dp"
-                                android:layout_height="60dp">
+                                android:layout_width="76dp"
+                                android:layout_height="64dp"
+                                android:clipChildren="false"
+                                android:clipToPadding="false">
 
                                 <com.google.android.material.button.MaterialButton
                                     android:id="@+id/btn_incall_record"
@@ -1505,10 +1507,10 @@
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:layout_gravity="top|end"
-                                    android:background="@drawable/bg_frosted_glass_pill"
-                                    android:backgroundTint="#E11D48"
-                                    android:paddingHorizontal="5dp"
-                                    android:paddingVertical="1dp"
+                                    android:background="@drawable/bg_notif_btn_decline_3d"
+                                    android:elevation="4dp"
+                                    android:paddingHorizontal="6dp"
+                                    android:paddingVertical="2dp"
                                     android:text="@string/incall_rec_badge"
                                     android:textColor="#FFFFFF"
                                     android:textSize="9sp"

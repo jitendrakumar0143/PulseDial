@@ -46,7 +46,8 @@
             android:text="@string/dialpad_paste"
             android:visibility="gone"
             app:chipCornerRadius="20dp"
-            app:chipIcon="@drawable/ic_content_paste" />
+            app:chipIcon="@drawable/ic_content_paste"
+            app:chipIconTint="@color/md_theme_primary" />
 
         <com.google.android.material.chip.Chip
             android:id="@+id/chip_add_contact"
@@ -58,7 +59,8 @@
             android:text="@string/dialpad_add_contact"
             android:visibility="gone"
             app:chipCornerRadius="20dp"
-            app:chipIcon="@drawable/ic_person_add" />
+            app:chipIcon="@drawable/ic_person_add"
+            app:chipIconTint="@color/md_theme_primary" />
 
         <com.google.android.material.chip.Chip
             android:id="@+id/chip_lookup_caller_id"

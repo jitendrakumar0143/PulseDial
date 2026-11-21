@@ -64,6 +64,7 @@
     <string name="detail_action_call">Call</string>
     <string name="detail_action_message">Message</string>
     <string name="detail_action_save">Save</string>
+    <string name="detail_action_edit">Edit</string>
     <string name="detail_action_copy">Copy</string>
     <string name="detail_action_block">Block</string>
     <string name="detail_action_unblock">Unblock</string>
@@ -72,11 +73,16 @@
     <string name="detail_copied">Number copied to clipboard</string>
     <string name="detail_unblocked_confirmation">%1$s removed from blocked numbers</string>
     <string name="save_contact_title">Save Number</string>
+    <string name="save_contact_edit_title">Edit Contact</string>
     <string name="save_contact_name_hint">Contact Name</string>
     <string name="save_contact_number_hint">Phone Number</string>
     <string name="save_contact_btn">Save Contact</string>
+    <string name="save_contact_update_btn">Update Contact</string>
     <string name="save_contact_success">Saved %1$s to Contacts</string>
+    <string name="save_contact_updated_success">Updated %1$s in Contacts</string>
     <string name="save_contact_name_required">Please enter a contact name</string>
+    <string name="save_contact_number_required">Please enter a phone number</string>
+    <string name="save_contact_failed">Could not save contact. Please check Contacts permission.</string>
     <string name="contacts_add_new">New Contact</string>
 
     <!-- Call Detail Screen & Call Log Deletion -->
@@ -86,6 +92,7 @@
     <string name="call_detail_one_call_count">1 call logged</string>
     <string name="call_detail_saved_contact">Saved Contact</string>
     <string name="call_detail_save_contact_button">Save Contact</string>
+    <string name="call_detail_edit_contact_button">Edit Contact Name</string>
     <string name="call_detail_delete_single">Delete call entry</string>
     <string name="call_detail_delete_single_title">Delete this call log?</string>
     <string name="call_detail_delete_single_message">Remove this %1$s call entry (%2$s) from your call history?</string>

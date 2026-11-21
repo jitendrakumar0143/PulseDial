@@ -290,6 +290,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!CallManager.uiState.value.hasActiveCall && CallManager.getTrackedCallsCount() == 0) {
+            com.example.telecom.CustomInCallService.cancelCallNotification(this)
+        }
         refreshPremiumMainChrome()
         val isAuthenticated = GoogleAuthHelper.isUserAuthenticated(this)
         if (isAuthenticated) {

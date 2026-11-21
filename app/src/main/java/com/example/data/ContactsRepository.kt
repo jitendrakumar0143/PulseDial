@@ -150,8 +150,7 @@ class ContactsRepository(private val context: Context) {
     suspend fun getContacts(onlyStarred: Boolean = false): List<ContactEntry> = withContext(Dispatchers.IO) {
         if (!hasContactsPermission()) return@withContext emptyList()
 
-        val result = mutableListOf<ContactEntry>()
-        val seenKeys = HashSet<String>()
+        val byNormalizedNumber = LinkedHashMap<String, ContactEntry>()
         val projection = arrayOf(
             ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
             ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY,
@@ -177,7 +176,7 @@ class ContactsRepository(private val context: Context) {
 
                 while (cursor.moveToNext()) {
                     val contactId = cursor.getLong(idIdx)
-                    val name = cursor.getString(nameIdx)?.takeIf { it.isNotBlank() } ?: "Unknown"
+                    val name = cursor.getString(nameIdx)?.trim()?.takeIf { it.isNotBlank() } ?: "Unknown"
                     val number = cursor.getString(numIdx)?.trim().orEmpty()
                     if (number.isEmpty()) continue
                     val photoUri = if (photoIdx >= 0) {
@@ -185,24 +184,27 @@ class ContactsRepository(private val context: Context) {
                     } else {
                         null
                     }
-                    val dedupKey = "$contactId:${number.filter { it.isDigit() }}"
-                    if (seenKeys.add(dedupKey)) {
-                        result.add(
-                            ContactEntry(
-                                contactId = contactId,
-                                name = name,
-                                number = number,
-                                isStarred = cursor.getInt(starIdx) == 1,
-                                photoUri = photoUri
-                            )
-                        )
+                    val starred = cursor.getInt(starIdx) == 1
+                    val candidate = ContactEntry(
+                        contactId = contactId,
+                        name = name,
+                        number = number,
+                        isStarred = starred,
+                        photoUri = photoUri
+                    )
+                    val dedupKey = normalizePhoneDedupKey(number)
+                    val existing = byNormalizedNumber[dedupKey]
+                    if (existing == null) {
+                        byNormalizedNumber[dedupKey] = candidate
+                    } else {
+                        byNormalizedNumber[dedupKey] = mergePreferredContact(existing, candidate)
                     }
                 }
             }
         } catch (_: SecurityException) {
             return@withContext emptyList()
         }
-        result
+        byNormalizedNumber.values.sortedBy { it.name.lowercase() }
     }
 
     suspend fun lookupContactByNumber(phoneNumber: String): ContactEntry? = withContext(Dispatchers.IO) {
@@ -266,14 +268,45 @@ class ContactsRepository(private val context: Context) {
         val cleanNumber = phoneNumber.trim()
         if (cleanName.isEmpty() || cleanNumber.isEmpty()) return@withContext false
 
-        val cleanGoogleAccount = googleAccountName?.trim()?.takeIf { it.isNotEmpty() }
-        val accountType: String? = if (cleanGoogleAccount != null) GOOGLE_ACCOUNT_TYPE else null
+        // If this phone number already exists in Contacts, update its name instead of creating a duplicate
+        val existing = lookupContactByNumber(cleanNumber)
+        if (existing != null && updateExistingContactName(existing.contactId, cleanName)) {
+            return@withContext true
+        }
 
+        val cleanGoogleAccount = googleAccountName?.trim()?.takeIf { it.isNotEmpty() }
+        val verifiedDeviceGoogleAccount = cleanGoogleAccount?.takeIf { email ->
+            isGoogleAccountRegisteredOnDevice(email)
+        }
+
+        if (verifiedDeviceGoogleAccount != null) {
+            if (insertRawContact(cleanName, cleanNumber, GOOGLE_ACCOUNT_TYPE, verifiedDeviceGoogleAccount)) {
+                return@withContext true
+            }
+        }
+
+        // Fallback to local phone storage when no Google sync account is registered or Google write fails
+        insertRawContact(cleanName, cleanNumber, null, null)
+    }
+
+    private fun isGoogleAccountRegisteredOnDevice(email: String): Boolean {
+        return runCatching {
+            val am = AccountManager.get(context)
+            am.getAccountsByType(GOOGLE_ACCOUNT_TYPE).any { it.name.equals(email, ignoreCase = true) }
+        }.getOrDefault(false)
+    }
+
+    private fun insertRawContact(
+        cleanName: String,
+        cleanNumber: String,
+        accountType: String?,
+        accountName: String?
+    ): Boolean {
         val ops = ArrayList<ContentProviderOperation>().apply {
             add(
                 ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
                     .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, accountType)
-                    .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, cleanGoogleAccount)
+                    .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, accountName)
                     .build()
             )
             add(
@@ -305,12 +338,98 @@ class ContactsRepository(private val context: Context) {
             )
         }
 
-        return@withContext try {
-            context.contentResolver.applyBatch(ContactsContract.AUTHORITY, ops)
-            true
+        return try {
+            val results = context.contentResolver.applyBatch(ContactsContract.AUTHORITY, ops)
+            results.isNotEmpty() && results[0]?.uri != null
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun updateExistingContactName(contactId: Long, newName: String): Boolean {
+        return try {
+            val rawIds = ArrayList<Long>()
+            context.contentResolver.query(
+                ContactsContract.RawContacts.CONTENT_URI,
+                arrayOf(ContactsContract.RawContacts._ID),
+                "${ContactsContract.RawContacts.CONTACT_ID} = ? AND ${ContactsContract.RawContacts.DELETED} = 0",
+                arrayOf(contactId.toString()),
+                null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    rawIds.add(cursor.getLong(0))
+                }
+            }
+            if (rawIds.isEmpty()) return false
+
+            var updatedAny = false
+            for (rawId in rawIds) {
+                val values = ContentValues().apply {
+                    put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, newName)
+                    putNull(ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME)
+                    putNull(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME)
+                }
+                val rowsUpdated = context.contentResolver.update(
+                    ContactsContract.Data.CONTENT_URI,
+                    values,
+                    "${ContactsContract.Data.RAW_CONTACT_ID} = ? AND ${ContactsContract.Data.MIMETYPE} = ?",
+                    arrayOf(
+                        rawId.toString(),
+                        ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE
+                    )
+                )
+                if (rowsUpdated > 0) {
+                    updatedAny = true
+                } else {
+                    val insertValues = ContentValues().apply {
+                        put(ContactsContract.Data.RAW_CONTACT_ID, rawId)
+                        put(
+                            ContactsContract.Data.MIMETYPE,
+                            ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE
+                        )
+                        put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, newName)
+                    }
+                    val inserted = context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, insertValues)
+                    if (inserted != null) {
+                        updatedAny = true
+                    }
+                }
+            }
+            updatedAny
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    internal fun normalizePhoneDedupKey(rawNumber: String): String {
+        val digits = rawNumber.filter { it.isDigit() }
+        if (digits.isEmpty()) return rawNumber.trim().lowercase()
+        return if (digits.length >= 10) digits.takeLast(10) else digits
+    }
+
+    private fun mergePreferredContact(existing: ContactEntry, candidate: ContactEntry): ContactEntry {
+        val existingIsRealName = !isNameJustPhoneNumber(existing.name, existing.number) &&
+            !existing.name.equals("Unknown", ignoreCase = true)
+        val candidateIsRealName = !isNameJustPhoneNumber(candidate.name, candidate.number) &&
+            !candidate.name.equals("Unknown", ignoreCase = true)
+
+        val preferredName = when {
+            existingIsRealName && !candidateIsRealName -> existing.name
+            candidateIsRealName && !existingIsRealName -> candidate.name
+            candidate.name.length > existing.name.length -> candidate.name
+            else -> existing.name
+        }
+        val preferredNumber = if (candidate.number.startsWith("+") && !existing.number.startsWith("+")) {
+            candidate.number
+        } else {
+            existing.number
+        }
+        return existing.copy(
+            name = preferredName,
+            number = preferredNumber,
+            isStarred = existing.isStarred || candidate.isStarred,
+            photoUri = existing.photoUri ?: candidate.photoUri
+        )
     }
 
     suspend fun setContactStarred(contactId: Long, starred: Boolean): Boolean = withContext(Dispatchers.IO) {
@@ -368,6 +487,17 @@ class ContactsRepository(private val context: Context) {
             } else {
                 false
             }
+        }
+
+        fun isNameJustPhoneNumber(name: String, phoneNumber: String): Boolean {
+            val cleanName = name.trim()
+            if (cleanName.isEmpty()) return true
+            val nameDigits = cleanName.filter { it.isDigit() }
+            if (nameDigits.length < 5) return false
+            val hasLetters = cleanName.any { it.isLetter() }
+            if (hasLetters) return false
+            val numDigits = phoneNumber.filter { it.isDigit() }
+            return numDigits.isEmpty() || numbersMatch(nameDigits, numDigits)
         }
     }
 }

@@ -1,20 +1,27 @@
 package com.example.ui.common
 
 import android.accounts.Account
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.provider.ContactsContract
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.example.R
 import com.example.data.ContactsRepository
+import com.example.data.DialerPreferences
 import com.example.databinding.DialogSaveContactBinding
+import com.example.ui.theme.ThemeStudioManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.radiobutton.MaterialRadioButton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 object SaveContactHelper {
 
@@ -23,12 +30,29 @@ object SaveContactHelper {
         lifecycleOwner: LifecycleOwner,
         initialNumber: String = "",
         initialName: String = "",
+        isEditingExisting: Boolean = false,
         onSaved: () -> Unit = {}
     ) {
         val repository = ContactsRepository(context)
+        val prefs = DialerPreferences(context)
         val dialogBinding = DialogSaveContactBinding.inflate(LayoutInflater.from(context))
-        dialogBinding.etSaveName.setText(initialName)
-        dialogBinding.etSaveNumber.setText(initialNumber)
+
+        val cleanInitialName = initialName.trim().takeUnless {
+            it.isEmpty() ||
+                it.equals("Unknown", ignoreCase = true) ||
+                it.equals("Unknown Caller", ignoreCase = true) ||
+                ContactsRepository.isNameJustPhoneNumber(it, initialNumber)
+        }.orEmpty()
+
+        dialogBinding.etSaveName.setText(cleanInitialName)
+        dialogBinding.etSaveNumber.setText(initialNumber.trim())
+
+        dialogBinding.etSaveName.doAfterTextChanged {
+            dialogBinding.tilSaveName.error = null
+        }
+        dialogBinding.etSaveNumber.doAfterTextChanged {
+            dialogBinding.tilSaveNumber.error = null
+        }
 
         val googleAccounts = repository.getGoogleAccountNames(includeRawContactsFallback = false).toMutableList()
         val radioGroup = dialogBinding.rgSaveAccount
@@ -64,14 +88,22 @@ object SaveContactHelper {
         }
         radioGroup.check(defaultRadioId)
 
+        if (ThemeStudioManager.isFullApp3DMixThemeActive(prefs)) {
+            ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(
+                rootView = dialogBinding.root,
+                prefs = prefs,
+                applyRootBackground = true
+            )
+        }
+
         if (repository.hasContactsPermission()) {
-            lifecycleOwner.lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            lifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
                 val allAccounts = repository.getGoogleAccountNames(includeRawContactsFallback = true)
                 val extras = allAccounts.filter { candidate ->
                     googleAccounts.none { it.equals(candidate, ignoreCase = true) }
                 }
                 if (extras.isNotEmpty()) {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    withContext(Dispatchers.Main) {
                         if (radioGroup.isAttachedToWindow) {
                             val hadNoGmail = googleAccounts.isEmpty()
                             extras.forEach { email ->
@@ -83,23 +115,46 @@ object SaveContactHelper {
                                     radioGroup.check(rb.id)
                                 }
                             }
+                            if (ThemeStudioManager.isFullApp3DMixThemeActive(prefs)) {
+                                ThemeStudioManager.invalidateHierarchyThemeTag(dialogBinding.root)
+                                ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(
+                                    rootView = dialogBinding.root,
+                                    prefs = prefs,
+                                    applyRootBackground = true
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.save_contact_title)
+        val titleRes = if (isEditingExisting) R.string.save_contact_edit_title else R.string.save_contact_title
+        val positiveRes = if (isEditingExisting) R.string.save_contact_update_btn else R.string.save_contact_btn
+
+        val dialog = MaterialAlertDialogBuilder(context)
+            .setTitle(titleRes)
             .setView(dialogBinding.root)
-            .setPositiveButton(R.string.save_contact_btn) { _, _ ->
+            .setPositiveButton(positiveRes, null)
+            .setNegativeButton(R.string.dialog_close, null)
+            .create()
+
+        dialog.setOnShowListener {
+            val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            saveButton.setOnClickListener {
                 val name = dialogBinding.etSaveName.text?.toString().orEmpty().trim()
                 val number = dialogBinding.etSaveNumber.text?.toString().orEmpty().trim()
+
+                var hasError = false
                 if (name.isEmpty()) {
-                    Toast.makeText(context, R.string.save_contact_name_required, Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
+                    dialogBinding.tilSaveName.error = context.getString(R.string.save_contact_name_required)
+                    hasError = true
                 }
-                if (number.isEmpty()) return@setPositiveButton
+                if (number.isEmpty()) {
+                    dialogBinding.tilSaveNumber.error = context.getString(R.string.save_contact_number_required)
+                    hasError = true
+                }
+                if (hasError) return@setOnClickListener
 
                 val checkedId = radioGroup.checkedRadioButtonId
                 val selectedAccountName = if (checkedId != View.NO_ID) {
@@ -109,25 +164,45 @@ object SaveContactHelper {
                 }
 
                 if (repository.hasWriteContactsPermission()) {
+                    saveButton.isEnabled = false
                     lifecycleOwner.lifecycleScope.launch {
+                        val existedBefore = repository.lookupContactByNumber(number) != null
                         val saved = repository.saveNewContact(name, number, selectedAccountName)
                         if (saved) {
+                            val toastRes = if (existedBefore || isEditingExisting) {
+                                R.string.save_contact_updated_success
+                            } else {
+                                R.string.save_contact_success
+                            }
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.save_contact_success, name),
+                                context.getString(toastRes, name),
                                 Toast.LENGTH_SHORT
                             ).show()
+                            runCatching { dialog.dismiss() }
                             onSaved()
                         } else {
-                            openSystemInsertContact(context, name, number, selectedAccountName)
+                            saveButton.isEnabled = true
+                            val launched = openSystemInsertContact(context, name, number, selectedAccountName)
+                            if (launched) {
+                                runCatching { dialog.dismiss() }
+                            } else {
+                                Toast.makeText(context, R.string.save_contact_failed, Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
                 } else {
-                    openSystemInsertContact(context, name, number, selectedAccountName)
+                    val launched = openSystemInsertContact(context, name, number, selectedAccountName)
+                    if (launched) {
+                        runCatching { dialog.dismiss() }
+                    } else {
+                        Toast.makeText(context, R.string.save_contact_failed, Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
-            .setNegativeButton(R.string.dialog_close, null)
-            .show()
+        }
+
+        dialog.show()
     }
 
     private fun openSystemInsertContact(
@@ -135,7 +210,7 @@ object SaveContactHelper {
         name: String,
         number: String,
         googleAccountName: String? = null
-    ) {
+    ): Boolean {
         val intent = Intent(ContactsContract.Intents.Insert.ACTION).apply {
             type = ContactsContract.RawContacts.CONTENT_TYPE
             putExtra(ContactsContract.Intents.Insert.NAME, name)
@@ -146,7 +221,13 @@ object SaveContactHelper {
                     Account(googleAccountName, ContactsRepository.GOOGLE_ACCOUNT_TYPE)
                 )
             }
+            if (context !is Activity) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
         }
-        runCatching { context.startActivity(intent) }
+        return runCatching {
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
     }
 }

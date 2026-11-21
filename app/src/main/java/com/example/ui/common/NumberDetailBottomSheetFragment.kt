@@ -64,6 +64,7 @@ class NumberDetailBottomSheetFragment : BottomSheetDialogFragment() {
         binding.recyclerNumberHistory.layoutManager = LinearLayoutManager(ctx)
         binding.recyclerNumberHistory.adapter = historyAdapter
 
+        applySheetTheme()
         setupActions()
         loadDetailsAndHistory()
         viewLifecycleOwner.lifecycleScope.launch {
@@ -89,11 +90,15 @@ class NumberDetailBottomSheetFragment : BottomSheetDialogFragment() {
         }
 
         binding.actionDetailSave.setOnClickListener {
+            val existingRealName = matchedContact?.name?.takeUnless {
+                ContactsRepository.isNameJustPhoneNumber(it, phoneNumber)
+            }
             SaveContactHelper.showSaveNumberDialog(
                 context = requireContext(),
                 lifecycleOwner = viewLifecycleOwner,
                 initialNumber = phoneNumber,
-                initialName = matchedContact?.name ?: initialName.orEmpty(),
+                initialName = existingRealName ?: initialName.orEmpty(),
+                isEditingExisting = existingRealName != null,
                 onSaved = {
                     loadDetailsAndHistory()
                     onDataChanged?.invoke()
@@ -205,9 +210,13 @@ class NumberDetailBottomSheetFragment : BottomSheetDialogFragment() {
             binding.tvDetailNumber.text = phoneNumber
             binding.tvDetailAvatar.text = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "#"
 
-            // Hide Save button if already saved in contacts
             val isSaved = matchedContact != null
-            binding.actionDetailSave.visibility = if (isSaved) View.GONE else View.VISIBLE
+            val hasRealContactName = matchedContact != null &&
+                !ContactsRepository.isNameJustPhoneNumber(matchedContact!!.name, phoneNumber)
+            binding.actionDetailSave.visibility = View.VISIBLE
+            binding.tvDetailSaveLabel.text = getString(
+                if (hasRealContactName) R.string.detail_action_edit else R.string.detail_action_save
+            )
             binding.btnDetailStar.visibility = if (isSaved) View.VISIBLE else View.GONE
             if (matchedContact != null) {
                 binding.btnDetailStar.setImageResource(
@@ -220,6 +229,32 @@ class NumberDetailBottomSheetFragment : BottomSheetDialogFragment() {
             historyAdapter.submitList(history)
             binding.tvDetailHistoryEmpty.visibility = if (history.isEmpty()) View.VISIBLE else View.GONE
             binding.recyclerNumberHistory.visibility = if (history.isEmpty()) View.GONE else View.VISIBLE
+            applySheetTheme()
+        }
+    }
+
+    private fun applySheetTheme() {
+        val ctx = context ?: return
+        if (_binding == null) return
+        val is3D = com.example.ui.theme.ThemeStudioManager.isFullApp3DMixThemeActive(prefs)
+        if (is3D) {
+            val palette = com.example.ui.theme.ThemeStudioManager.resolveEffectivePalette(prefs)
+            val density = ctx.resources.displayMetrics.density
+            binding.root.background = palette.createFullApp3DBackgroundDrawable(
+                cornerRadiusPx = 28f * density
+            )
+            com.example.ui.theme.ThemeStudioManager.invalidateHierarchyThemeTag(binding.root)
+            com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(
+                rootView = binding.root,
+                prefs = prefs,
+                applyRootBackground = false
+            )
+        } else {
+            com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(
+                rootView = binding.root,
+                prefs = prefs,
+                applyRootBackground = false
+            )
         }
     }
 

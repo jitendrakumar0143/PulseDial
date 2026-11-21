@@ -9,12 +9,11 @@
     android:paddingVertical="10dp">
 
     <ImageView
-        android:layout_width="32dp"
-        android:layout_height="32dp"
-        android:background="@drawable/bg_circle_avatar"
-        android:backgroundTint="#10B981"
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:background="@drawable/bg_notif_btn_answer_3d"
         android:contentDescription="@null"
-        android:padding="7dp"
+        android:padding="8dp"
         android:src="@drawable/ic_call"
         android:tint="#FFFFFF" />
 
@@ -31,17 +30,18 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#F8FAFC"
-            android:textSize="14sp"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tv_notif_compact_meta"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#B8D4F6"
+            android:textColor="#CBD5E1"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -50,7 +50,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
-        android:background="#3310B981"
+        android:background="@drawable/bg_notif_btn_glass_3d"
         android:paddingHorizontal="10dp"
         android:paddingVertical="4dp"
         android:textColor="#6EE7B7"

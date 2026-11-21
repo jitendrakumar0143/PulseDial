@@ -691,4 +691,109 @@ class AllTabsAndInCallSmokeTest {
             assertEquals(palette.cardBgColorInt(), themeCard.cardBackgroundColor.defaultColor)
         }
     }
+
+    @Test
+    fun `CallDetail and NumberDetail dark glass styling, contact dedup, keypad icons, and foreground call popup tracking work cleanly`() {
+        val prefs = DialerPreferences(app)
+        prefs.adminBlockedUser = false
+        prefs.isPremiumUser = true
+        prefs.subscriptionExpiresAtMs = System.currentTimeMillis() + DialerPreferences.ONE_MONTH_MILLIS
+        prefs.selectedThemePaletteId = AppThemePalette.AURORA_3D_MIX.id
+
+        // 1. Verify CallDetailActivity restyles avatars, geo cards, and source badge on 3D themes (no white-on-white)
+        val detailIntent = CallDetailActivity.createIntent(app, "+91 98201 23456", null)
+        val detailCtrl = Robolectric.buildActivity(CallDetailActivity::class.java, detailIntent).setup()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        val detailActivity = detailCtrl.get()
+        val detailAvatar = detailActivity.findViewById<TextView>(R.id.tv_detail_avatar)
+        val sourceBadge = detailActivity.findViewById<TextView>(R.id.tv_caller_id_source_badge)
+        val cityText = detailActivity.findViewById<TextView>(R.id.tv_caller_id_city)
+        val cityBox = cityText.parent as View
+        assertEquals(android.graphics.Color.WHITE, detailAvatar.currentTextColor)
+        assertEquals(android.graphics.Color.WHITE, sourceBadge.currentTextColor)
+        assertTrue(cityBox.background is android.graphics.drawable.LayerDrawable)
+        assertEquals(View.VISIBLE, detailActivity.findViewById<View>(R.id.btn_save_contact).visibility)
+        detailCtrl.pause().stop().destroy()
+
+        // 2. Verify bottom_sheet_number_detail & item_contact restyle cleanly on 3D themes
+        val themedCtx = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val inflater = android.view.LayoutInflater.from(themedCtx)
+        val sheetRoot = inflater.inflate(R.layout.bottom_sheet_number_detail, null)
+        com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(sheetRoot, prefs)
+        val sheetGeoBox = sheetRoot.findViewById<View>(R.id.layout_sheet_caller_geo)
+        val sheetAvatar = sheetRoot.findViewById<TextView>(R.id.tv_detail_avatar)
+        assertTrue(sheetGeoBox.background is android.graphics.drawable.LayerDrawable)
+        assertEquals(android.graphics.Color.WHITE, sheetAvatar.currentTextColor)
+        assertNotNull(sheetRoot.findViewById<TextView>(R.id.tv_detail_save_label))
+
+        val contactRow = inflater.inflate(R.layout.item_contact, null)
+        com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(contactRow, prefs)
+        val contactAvatar = contactRow.findViewById<TextView>(R.id.tv_contact_initial)
+        assertEquals(android.graphics.Color.WHITE, contactAvatar.currentTextColor)
+
+        // 3. Verify ContactsRepository normalization & phone-as-name detection
+        val repo = com.example.data.ContactsRepository(app)
+        assertEquals("9820123456", repo.normalizePhoneDedupKey("+91 98201-23456"))
+        assertEquals("9820123456", repo.normalizePhoneDedupKey("09820123456"))
+        assertTrue(com.example.data.ContactsRepository.isNameJustPhoneNumber("+91 98201 23456", "+919820123456"))
+        assertFalse(com.example.data.ContactsRepository.isNameJustPhoneNumber("Aarav Sharma", "+919820123456"))
+
+        // 4. Verify keypad icons & 3D call notification popup layouts inflate cleanly
+        assertNotNull(androidx.core.content.ContextCompat.getDrawable(themedCtx, R.drawable.ic_dialpad))
+        assertNotNull(androidx.core.content.ContextCompat.getDrawable(themedCtx, R.drawable.ic_backspace))
+        assertNotNull(androidx.core.content.ContextCompat.getDrawable(themedCtx, R.drawable.ic_add_call))
+        assertNotNull(inflater.inflate(R.layout.notification_call_3d_compact, null))
+        assertNotNull(inflater.inflate(R.layout.notification_call_3d_popup, null))
+
+        // 5. Verify InCallActivity foreground visibility toggles CallManager.inCallUiVisible
+        CallManager.publishStateForTesting(
+            CallUiState(
+                hasActiveCall = true,
+                callState = Call.STATE_RINGING,
+                callerName = "Rahul",
+                callerNumber = "+919876543210"
+            )
+        )
+        val incallCtrl = Robolectric.buildActivity(InCallActivity::class.java).setup()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(CallManager.isInCallUiVisible())
+        incallCtrl.pause()
+        assertFalse(CallManager.isInCallUiVisible())
+        incallCtrl.stop().destroy()
+
+        // 6. Verify call notification clears immediately on disconnect / decline (never stays stuck)
+        assertFalse(
+            com.example.telecom.CustomInCallService.shouldShowCallNotification(
+                hasActiveCall = true,
+                callState = Call.STATE_DISCONNECTED,
+                liveCallCount = 0
+            )
+        )
+        assertFalse(
+            com.example.telecom.CustomInCallService.shouldShowCallNotification(
+                hasActiveCall = true,
+                callState = Call.STATE_DISCONNECTING,
+                liveCallCount = 1
+            )
+        )
+        assertTrue(
+            com.example.telecom.CustomInCallService.shouldShowCallNotification(
+                hasActiveCall = true,
+                callState = Call.STATE_RINGING,
+                liveCallCount = 1
+            )
+        )
+        val nm = app.getSystemService(android.app.NotificationManager::class.java)
+        val dummyNotif = android.app.Notification.Builder(app, com.example.PulseDialApp.CHANNEL_INCOMING_CALLS)
+            .setSmallIcon(R.drawable.ic_call)
+            .setContentTitle("Stale Call")
+            .build()
+        nm.notify(com.example.telecom.CustomInCallService.CALL_NOTIFICATION_ID, dummyNotif)
+        assertEquals(1, Shadows.shadowOf(nm).size())
+        com.example.telecom.CallNotificationActionReceiver().onReceive(
+            app,
+            android.content.Intent(com.example.telecom.CallNotificationActionReceiver.ACTION_DECLINE_CALL)
+        )
+        assertEquals(0, Shadows.shadowOf(nm).size())
+    }
 }

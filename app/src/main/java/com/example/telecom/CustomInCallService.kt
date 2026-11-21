@@ -100,11 +100,13 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
     private var pendingAnnouncementSpeech: String? = null
     private var announcerLoopJob: Job? = null
     private var proximitySpeakerController: ProximitySpeakerController? = null
+    internal var telephonyCallStateMonitor: TelephonyCallStateMonitor? = null
 
     @Volatile
     private var latestCustomPopupAd: CustomPopupAd = CustomPopupAd()
     private var rtdbCustomPopupAdCleanup: (() -> Unit)? = null
     private var afterCallAdDispatchedForCurrentSession: Boolean = false
+    private var lastPostedWasIncomingHeadsUp: Boolean = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -149,11 +151,19 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
                 val allStates = trackedCalls.map { getCompatState(it) }
                 if (!CallManager.shouldKeepRecordingActive(allStates, trackedCalls.size)) {
                     CallManager.stopRecordingIfNeeded()
+                    cancelCallNotification()
                     if (!CallManager.isSimSwitchInProgress()) {
                         maybeDispatchAfterCallPopupAd()
                     }
+                } else {
+                    refreshCallNotificationFromCurrentCalls()
                 }
-                refreshCallNotificationFromCurrentCalls()
+            } else if (state == Call.STATE_DISCONNECTING) {
+                if (!hasAnyLiveCall()) {
+                    cancelCallNotification()
+                } else {
+                    refreshCallNotificationFromCurrentCalls()
+                }
             }
         }
 
@@ -200,6 +210,17 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             CallManager.setSpeakerEnabled(speakerOn)
         }
         proximitySpeakerController = proxController
+
+        telephonyCallStateMonitor = TelephonyCallStateMonitor(
+            context = applicationContext,
+            onIdleAfterOffhook = {
+                handleTelephonyIdleCleanup(wasOffhook = true)
+            },
+            onIdleAfterRinging = {
+                handleTelephonyIdleCleanup(wasOffhook = false)
+            }
+        ).also { it.start() }
+
         var lastNotifSignature = ""
         serviceScope.launch {
             CallManager.uiState.collect { uiState ->
@@ -211,9 +232,21 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
                 }
                 if (sig != lastNotifSignature) {
                     lastNotifSignature = sig
-                    if (uiState.hasActiveCall && trackedCalls.isNotEmpty()) {
+                    if (uiState.hasActiveCall && hasAnyLiveCall()) {
                         refreshCallNotificationFromCurrentCalls()
+                    } else {
+                        cancelCallNotification()
                     }
+                }
+            }
+        }
+
+        serviceScope.launch {
+            CallManager.inCallUiVisible.collect {
+                if (hasAnyLiveCall()) {
+                    refreshCallNotificationFromCurrentCalls()
+                } else {
+                    cancelCallNotification()
                 }
             }
         }
@@ -296,6 +329,8 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         super.onDestroy()
         rtdbCustomPopupAdCleanup?.invoke()
         rtdbCustomPopupAdCleanup = null
+        telephonyCallStateMonitor?.stop()
+        telephonyCallStateMonitor = null
         proximitySpeakerController?.release()
         proximitySpeakerController = null
         stopCallAnnouncer()
@@ -318,10 +353,56 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         CallManager.detachService()
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        telephonyCallStateMonitor?.stop()
+        stopCallAnnouncer()
+        restoreRingerIfMutedByShield()
+        trackedCalls.forEach { call ->
+            runCatching { call.unregisterCallback(callCallback) }
+        }
+        trackedCalls.clear()
+        callMetadata.clear()
+        _callsState.value = emptyList()
+        CallManager.stopRecordingIfNeeded()
+        cancelCallNotification()
+        CallManager.detachService()
+        return super.onUnbind(intent)
+    }
+
+    /**
+     * Authoritative fallback cleanup triggered when [TelephonyCallStateMonitor] observes
+     * `CALL_STATE_OFFHOOK -> CALL_STATE_IDLE` (or `CALL_STATE_RINGING -> CALL_STATE_IDLE`).
+     * Ensures the active call UI, ongoing notification, announcer, and recorder terminate cleanly
+     * even if Telecom fails to deliver `onCallRemoved`.
+     */
+    internal fun handleTelephonyIdleCleanup(wasOffhook: Boolean) {
+        if (CallManager.isSimSwitchInProgress()) return
+        stopCallAnnouncer()
+        restoreRingerIfMutedByShield()
+        trackedCalls.forEach { call ->
+            runCatching { call.unregisterCallback(callCallback) }
+        }
+        trackedCalls.clear()
+        callMetadata.clear()
+        _callsState.value = emptyList()
+        cancelCallNotification()
+        CallManager.forceCleanupOnTelephonyIdle(applicationContext, wasOffhook = wasOffhook)
+        if (!CallManager.isSimSwitchInProgress()) {
+            maybeDispatchAfterCallPopupAd()
+        }
+    }
+
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
         val rawNumber = call.details?.handle?.schemeSpecificPart.orEmpty()
         val initialState = getCompatState(call)
+
+        if (initialState == Call.STATE_DISCONNECTED || initialState == Call.STATE_DISCONNECTING) {
+            if (!hasAnyLiveCall()) {
+                cancelCallNotification()
+            }
+            return
+        }
 
         // 1. Automatically reject explicitly blocked numbers before any recording or UI starts
         if (initialState == Call.STATE_RINGING && prefs.isNumberBlocked(rawNumber)) {
@@ -382,6 +463,22 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         }
         trackedCalls.addIfAbsent(call)
         call.registerCallback(callCallback)
+        telephonyCallStateMonitor?.let { monitor ->
+            if (!monitor.isMonitoring()) {
+                monitor.start()
+            }
+            val seededState = when (initialState) {
+                Call.STATE_RINGING -> android.telephony.TelephonyManager.CALL_STATE_RINGING
+                Call.STATE_DIALING,
+                Call.STATE_CONNECTING,
+                Call.STATE_ACTIVE,
+                Call.STATE_HOLDING -> android.telephony.TelephonyManager.CALL_STATE_OFFHOOK
+                else -> null
+            }
+            if (seededState != null) {
+                monitor.seedInitialState(seededState)
+            }
+        }
 
         val snapshot = trackedCalls.toList()
         _callsState.value = snapshot
@@ -401,7 +498,14 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
                 rawNumber = rawNumber,
                 telecomDisplayName = call.details?.callerDisplayName
             )
-            if (!trackedCalls.contains(call)) return@launch
+            val liveState = getCompatState(call)
+            if (!trackedCalls.contains(call) ||
+                liveState == Call.STATE_DISCONNECTED ||
+                liveState == Call.STATE_DISCONNECTING
+            ) {
+                if (!hasAnyLiveCall()) cancelCallNotification()
+                return@launch
+            }
             val currentMeta = callMetadata[call] ?: return@launch
             callMetadata[call] = currentMeta.copy(
                 savedContactName = if (!enriched.isUnknownNumber) enriched.displayName else currentMeta.savedContactName,
@@ -600,9 +704,21 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         )
     }
 
+    private fun hasAnyLiveCall(): Boolean {
+        return trackedCalls.any { call ->
+            val st = getCompatState(call)
+            st != Call.STATE_DISCONNECTED && st != Call.STATE_DISCONNECTING
+        }
+    }
+
     private fun refreshCallNotificationFromCurrentCalls() {
         val ui = CallManager.uiState.value
-        if (!ui.hasActiveCall || trackedCalls.isEmpty()) {
+        if (!ui.hasActiveCall ||
+            trackedCalls.isEmpty() ||
+            !hasAnyLiveCall() ||
+            ui.callState == Call.STATE_DISCONNECTED ||
+            ui.callState == Call.STATE_DISCONNECTING
+        ) {
             cancelCallNotification()
             return
         }
@@ -894,7 +1010,8 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val channelId = if (isRinging) {
+        val isInCallUiVisible = CallManager.isInCallUiVisible()
+        val channelId = if (isRinging && !isInCallUiVisible) {
             PulseDialApp.CHANNEL_INCOMING_CALLS
         } else {
             PulseDialApp.CHANNEL_ONGOING_CALLS
@@ -964,37 +1081,56 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         )
         val recLabel = getString(if (ui.isRecording) R.string.incall_rec_badge else R.string.incall_rec_off)
         val locSuffix = ui.callerLocation.trim().takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty()
-        val detailsSummary = "$simLabel • $audioLabel • $recLabel$locSuffix"
+        val detailsSummary = if (isRinging) {
+            "${getString(R.string.incall_status_ringing)} • $simLabel$locSuffix"
+        } else {
+            "$simLabel • $audioLabel • $recLabel$locSuffix"
+        }
 
         val compactViews = RemoteViews(packageName, R.layout.notification_call_3d_compact).apply {
             setTextViewText(R.id.tv_notif_compact_name, name)
-            setTextViewText(R.id.tv_notif_compact_meta, "$cleanSubtitle • $simLabel • $audioLabel")
-            setChronometer(R.id.chrono_notif_compact_timer, chronometerBase, null, isTimerRunning)
+            setTextViewText(
+                R.id.tv_notif_compact_meta,
+                if (isRinging) "$cleanSubtitle • ${getString(R.string.incall_status_ringing)}" else "$cleanSubtitle • $simLabel • $audioLabel"
+            )
+            if (isRinging) {
+                setViewVisibility(R.id.chrono_notif_compact_timer, android.view.View.GONE)
+            } else {
+                setViewVisibility(R.id.chrono_notif_compact_timer, android.view.View.VISIBLE)
+                setChronometer(R.id.chrono_notif_compact_timer, chronometerBase, null, isTimerRunning)
+            }
         }
         val popupViews = RemoteViews(packageName, R.layout.notification_call_3d_popup).apply {
             setTextViewText(R.id.tv_notif_popup_caller, name)
             setTextViewText(R.id.tv_notif_popup_number, cleanSubtitle)
             setTextViewText(R.id.tv_notif_popup_details, detailsSummary)
-            setChronometer(R.id.chrono_notif_call_timer, chronometerBase, null, isTimerRunning)
             if (isRinging) {
+                setViewVisibility(R.id.chrono_notif_call_timer, android.view.View.GONE)
                 setTextViewText(R.id.btn_notif_mute, getString(R.string.incall_answer))
+                setInt(R.id.btn_notif_mute, "setBackgroundResource", R.drawable.bg_notif_btn_answer_3d)
                 setOnClickPendingIntent(R.id.btn_notif_mute, answerPendingIntent)
-                setTextViewText(R.id.btn_notif_speaker, audioLabel)
-                setOnClickPendingIntent(R.id.btn_notif_speaker, toggleSpeakerPendingIntent)
+                setViewVisibility(R.id.btn_notif_speaker, android.view.View.GONE)
                 setTextViewText(R.id.btn_notif_end, getString(R.string.incall_decline))
+                setInt(R.id.btn_notif_end, "setBackgroundResource", R.drawable.bg_notif_btn_decline_3d)
                 setOnClickPendingIntent(R.id.btn_notif_end, declinePendingIntent)
             } else {
+                setViewVisibility(R.id.chrono_notif_call_timer, android.view.View.VISIBLE)
+                setChronometer(R.id.chrono_notif_call_timer, chronometerBase, null, isTimerRunning)
                 setTextViewText(
                     R.id.btn_notif_mute,
                     getString(if (ui.isMuted) R.string.incall_unmute else R.string.incall_mute)
                 )
+                setInt(R.id.btn_notif_mute, "setBackgroundResource", R.drawable.bg_notif_btn_glass_3d)
                 setOnClickPendingIntent(R.id.btn_notif_mute, toggleMutePendingIntent)
+                setViewVisibility(R.id.btn_notif_speaker, android.view.View.VISIBLE)
                 setTextViewText(
                     R.id.btn_notif_speaker,
                     getString(if (ui.isSpeakerOn) R.string.incall_speaker_on else R.string.incall_speaker)
                 )
+                setInt(R.id.btn_notif_speaker, "setBackgroundResource", R.drawable.bg_notif_btn_glass_3d)
                 setOnClickPendingIntent(R.id.btn_notif_speaker, toggleSpeakerPendingIntent)
                 setTextViewText(R.id.btn_notif_end, getString(R.string.incall_end_call))
+                setInt(R.id.btn_notif_end, "setBackgroundResource", R.drawable.bg_notif_btn_decline_3d)
                 setOnClickPendingIntent(R.id.btn_notif_end, hangUpPendingIntent)
             }
         }
@@ -1013,27 +1149,30 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_CALL)
             .setContentIntent(pendingIntent)
+            .setColor(android.graphics.Color.parseColor("#0B1220"))
             .setShowWhen(true)
             .setWhen(if (ui.connectTimeMillis > 0L) ui.connectTimeMillis else System.currentTimeMillis())
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setColorized(true)
+        }
+
         if (isRinging) {
-            builder.setFullScreenIntent(pendingIntent, true)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val callerPerson = Person.Builder()
-                    .setName(name.ifBlank { cleanSubtitle })
-                    .setIcon(Icon.createWithResource(this, R.drawable.ic_call))
-                    .setImportant(true)
-                    .build()
-                builder.setStyle(
-                    Notification.CallStyle.forIncomingCall(
-                        callerPerson,
-                        declinePendingIntent,
-                        answerPendingIntent
-                    )
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                builder.setCustomHeadsUpContentView(compactViews)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // Safety auto-eviction: a ringing phone call never exceeds 90 seconds,
+                // guaranteeing the OS clears the incoming banner even if Telecom drops callbacks.
+                builder.setTimeoutAfter(90_000L)
+            }
+            if (!isInCallUiVisible) {
+                builder.setFullScreenIntent(pendingIntent, true)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                builder.setStyle(Notification.DecoratedCustomViewStyle())
+                builder.setCustomContentView(compactViews)
                 builder.setCustomBigContentView(popupViews)
+                if (!isInCallUiVisible) {
+                    builder.setCustomHeadsUpContentView(popupViews)
+                }
             }
         } else {
             if (isTimerRunning) {
@@ -1046,14 +1185,19 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             }
         }
 
+        val postingIncomingHeadsUp = isRinging && !isInCallUiVisible
         runCatching {
+            if (lastPostedWasIncomingHeadsUp && !postingIncomingHeadsUp) {
+                manager.cancel(CALL_NOTIFICATION_ID)
+            }
             manager.notify(CALL_NOTIFICATION_ID, builder.build())
+            lastPostedWasIncomingHeadsUp = postingIncomingHeadsUp
         }
     }
 
     private fun cancelCallNotification() {
-        val manager = getSystemService(NotificationManager::class.java) ?: return
-        manager.cancel(CALL_NOTIFICATION_ID)
+        lastPostedWasIncomingHeadsUp = false
+        cancelCallNotification(this)
     }
 
     @Suppress("DEPRECATION")
@@ -1067,10 +1211,26 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
     companion object {
         private const val TAG = "CustomInCallService"
-        private const val CALL_NOTIFICATION_ID = 4401
+        const val CALL_NOTIFICATION_ID = 4401
         private const val FOLLOW_UP_NOTIFICATION_ID = 4403
         private const val ANNOUNCER_REPEAT_PAUSE_MS = 2_000L
         const val USAGE_NOTIFICATION_RING = AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+
+        fun cancelCallNotification(context: android.content.Context) {
+            runCatching {
+                val manager = context.getSystemService(NotificationManager::class.java) ?: return
+                manager.cancel(CALL_NOTIFICATION_ID)
+            }
+        }
+
+        fun shouldShowCallNotification(
+            hasActiveCall: Boolean,
+            callState: Int,
+            liveCallCount: Int
+        ): Boolean {
+            if (!hasActiveCall || liveCallCount <= 0) return false
+            return callState != Call.STATE_DISCONNECTED && callState != Call.STATE_DISCONNECTING
+        }
 
         /**
          * Formats the spoken caller announcement text:

@@ -6,17 +6,43 @@ import android.content.Intent
 
 /**
  * Handles Call Notification action buttons (Answer, Decline, Hang Up, Mute, Speaker)
- * from the 3D Pull-Down Call Notification Popup & Notification.CallStyle without unlocking.
+ * from the 3D Call Notification Popup without unlocking, and guarantees stale notifications
+ * are dismissed immediately when a call is declined, ended, or no longer tracked.
  */
 class CallNotificationActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
-        when (intent?.action) {
-            ACTION_ANSWER_CALL -> CallManager.answerCall()
+        val action = intent?.action ?: return
+        when (action) {
+            ACTION_ANSWER_CALL -> {
+                if (CallManager.getTrackedCallsCount() == 0) {
+                    CustomInCallService.cancelCallNotification(context)
+                } else {
+                    CallManager.answerCall()
+                }
+            }
             ACTION_DECLINE_CALL,
-            ACTION_HANG_UP_CALL -> CallManager.declineOrEndCall()
-            ACTION_TOGGLE_MUTE -> CallManager.toggleMute()
-            ACTION_TOGGLE_SPEAKER -> CallManager.toggleSpeaker()
+            ACTION_HANG_UP_CALL -> {
+                val trackedBefore = CallManager.getTrackedCallsCount()
+                CallManager.declineOrEndCall()
+                if (trackedBefore <= 1) {
+                    CustomInCallService.cancelCallNotification(context)
+                }
+            }
+            ACTION_TOGGLE_MUTE -> {
+                if (CallManager.getTrackedCallsCount() == 0) {
+                    CustomInCallService.cancelCallNotification(context)
+                } else {
+                    CallManager.toggleMute()
+                }
+            }
+            ACTION_TOGGLE_SPEAKER -> {
+                if (CallManager.getTrackedCallsCount() == 0) {
+                    CustomInCallService.cancelCallNotification(context)
+                } else {
+                    CallManager.toggleSpeaker()
+                }
+            }
         }
     }
 
