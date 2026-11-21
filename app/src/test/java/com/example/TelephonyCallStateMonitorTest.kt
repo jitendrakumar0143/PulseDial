@@ -211,4 +211,68 @@ class TelephonyCallStateMonitorTest {
         controller.destroy()
         assertFalse(monitor.isMonitoring())
     }
+
+    @Test
+    fun `incoming call launches top-drop center-split popup with non-overlapping clearance for Caller ID card`() {
+        CallManager.publishStateForTesting(
+            CallUiState(
+                hasActiveCall = true,
+                callerName = "Rohit Verma",
+                callerNumber = "+919811223344",
+                callerLocation = "New Delhi, Delhi • Airtel",
+                callerGeoLine = "New Delhi, Delhi 110001, India",
+                callerSocialSummary = "WhatsApp • Truecaller",
+                isUnknownCaller = true,
+                callerIdentitySource = "Directory Match",
+                callState = Call.STATE_RINGING
+            )
+        )
+
+        val controller = Robolectric.buildActivity(InCallActivity::class.java).setup()
+        val activity = controller.get()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        val pill = activity.findViewById<com.example.ui.incall.Floating3DCallPillView>(R.id.floating_3d_call_pill)
+        val fullContainer = activity.findViewById<android.view.View>(R.id.full_screen_call_container)
+        val scrollHeader = activity.findViewById<android.widget.ScrollView>(R.id.scroll_caller_header)
+        val callerIdCard = activity.findViewById<android.view.View>(R.id.card_caller_id_popup)
+        val duplicateLocLine = activity.findViewById<android.view.View>(R.id.tv_incall_location)
+        val bottomDock = activity.findViewById<android.view.View>(R.id.sideways_drag_dock)
+
+        // 1. Top drop-down center-to-sides unfolding popup is active on incoming call
+        assertEquals(android.view.View.VISIBLE, pill.visibility)
+        assertTrue(
+            pill.currentMode == com.example.ui.incall.Floating3DCallPillView.PillMode.STAGE_1_DROP ||
+                pill.currentMode == com.example.ui.incall.Floating3DCallPillView.PillMode.STAGE_2_UNFOLD ||
+                pill.currentMode == com.example.ui.incall.Floating3DCallPillView.PillMode.STAGE_3_DRAG_READY
+        )
+
+        // 2. Main screen reserves full clearance below the top popup & clips ScrollView cleanly
+        val density = activity.resources.displayMetrics.density
+        val minClearancePx = (InCallActivity.INCOMING_TOP_POPUP_CLEARANCE_DP * density).toInt()
+        assertTrue(
+            "Expected fullScreenCallContainer.paddingTop (${fullContainer.paddingTop}) >= $minClearancePx",
+            fullContainer.paddingTop >= minClearancePx
+        )
+        assertTrue(scrollHeader.clipChildren)
+        assertTrue(scrollHeader.clipToPadding)
+
+        // 3. Caller ID card is visible without duplicate location text or duplicate bottom drag dock
+        assertEquals(android.view.View.VISIBLE, callerIdCard.visibility)
+        assertEquals(android.view.View.GONE, duplicateLocLine.visibility)
+        assertEquals(android.view.View.GONE, bottomDock.visibility)
+
+        // 4. Answering the call transitions cleanly to active call UI & restores normal top padding
+        CallManager.publishStateForTesting(
+            CallManager.uiState.value.copy(
+                callState = Call.STATE_ACTIVE,
+                connectTimeMillis = System.currentTimeMillis()
+            )
+        )
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(android.view.View.GONE, pill.visibility)
+        assertTrue(fullContainer.paddingTop < minClearancePx)
+
+        controller.destroy()
+    }
 }

@@ -1034,8 +1034,13 @@ class MainActivity : AppCompatActivity() {
                         val displayName = resolveCallPillDisplayName(state)
                         val isBtActive = (state.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
                         if (state.callState == Call.STATE_RINGING) {
-                            val subtitle = state.callerNumber.ifBlank {
-                                state.callerLocation.ifBlank { getString(R.string.incall_status_ringing) }
+                            val loc = state.callerLocation.trim()
+                            val num = state.callerNumber.trim()
+                            val subtitle = when {
+                                loc.isNotBlank() && num.isNotBlank() && !num.equals(loc, ignoreCase = true) -> "$loc • $num"
+                                num.isNotBlank() -> num
+                                loc.isNotBlank() -> loc
+                                else -> getString(R.string.incall_status_ringing)
                             }
                             binding.floating3dCallPill.showIncomingCall(displayName, subtitle)
                         } else {

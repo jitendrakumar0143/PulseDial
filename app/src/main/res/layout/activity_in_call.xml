@@ -243,15 +243,15 @@
             app:barrierDirection="top"
             app:constraint_referenced_ids="layout_active_controls,layout_incoming_controls" />
 
-        <!-- 2. Center Caller Showcase (3D Entrance, 112dp Liquid-Platinum Avatar & Radar Depth) -->
+        <!-- 2. Center Caller Showcase (Clipped cleanly between Top Incoming Popup / Header and Bottom Controls) -->
         <ScrollView
             android:id="@+id/scroll_caller_header"
             android:layout_width="0dp"
             android:layout_height="0dp"
-            android:clipChildren="false"
-            android:clipToPadding="false"
+            android:clipChildren="true"
+            android:clipToPadding="true"
             android:fillViewport="true"
-            android:overScrollMode="never"
+            android:overScrollMode="ifContentScrolls"
             android:scrollbars="none"
             app:layout_constraintBottom_toTopOf="@id/barrier_bottom_controls"
             app:layout_constraintEnd_toEndOf="parent"
@@ -264,9 +264,9 @@
                 android:layout_height="wrap_content"
                 android:clipChildren="false"
                 android:clipToPadding="false"
-                android:gravity="center"
+                android:gravity="top|center_horizontal"
                 android:orientation="vertical"
-                android:paddingTop="8dp"
+                android:paddingTop="6dp"
                 android:paddingBottom="10dp">
 
                 <!-- Compatibility Pill (Hidden by default when HD Voice badge is active) -->
@@ -305,8 +305,8 @@
                 <!-- 116dp Voice-Reactive 3D Liquid-Platinum & Emerald Avatar Stage -->
                 <FrameLayout
                     android:id="@+id/layout_avatar_3d_stage"
-                    android:layout_width="196dp"
-                    android:layout_height="196dp"
+                    android:layout_width="156dp"
+                    android:layout_height="156dp"
                     android:clipChildren="false"
                     android:clipToPadding="false">
 
@@ -318,16 +318,16 @@
                     <!-- Legacy pulse views retained silently for backward compatibility -->
                     <View
                         android:id="@+id/view_incoming_pulse_outer"
-                        android:layout_width="160dp"
-                        android:layout_height="160dp"
+                        android:layout_width="148dp"
+                        android:layout_height="148dp"
                         android:layout_gravity="center"
                         android:alpha="0"
                         android:visibility="invisible" />
 
                     <View
                         android:id="@+id/view_incoming_pulse_inner"
-                        android:layout_width="136dp"
-                        android:layout_height="136dp"
+                        android:layout_width="132dp"
+                        android:layout_height="132dp"
                         android:layout_gravity="center"
                         android:alpha="0"
                         android:visibility="invisible" />
@@ -350,7 +350,7 @@
                             android:gravity="center"
                             android:text="?"
                             android:textColor="#F8FAFC"
-                            android:textSize="42sp"
+                            android:textSize="40sp"
                             android:textStyle="bold" />
                     </com.google.android.material.card.MaterialCardView>
 
@@ -360,7 +360,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="28dp"
                         android:layout_gravity="bottom|center_horizontal"
-                        android:layout_marginBottom="26dp"
+                        android:layout_marginBottom="8dp"
                         android:background="@drawable/bg_frosted_glass_pill"
                         android:backgroundTint="#CC92400E"
                         android:elevation="6dp"
@@ -378,13 +378,13 @@
                     android:id="@+id/tv_incall_name"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="6dp"
                     android:ellipsize="end"
                     android:gravity="center"
                     android:maxLines="2"
                     android:text="@string/incall_unknown_caller"
                     android:textColor="#FFFFFF"
-                    android:textSize="28sp"
+                    android:textSize="25sp"
                     android:textStyle="bold" />
 
                 <!-- Soft Silver Phone Number / Label -->
@@ -392,22 +392,23 @@
                     android:id="@+id/tv_incall_number"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="2dp"
                     android:ellipsize="end"
                     android:gravity="center"
                     android:maxLines="1"
                     android:textColor="#CBD5E1"
-                    android:textSize="15sp" />
+                    android:textSize="14.5sp" />
 
                 <!-- Location / Network Subtitle -->
                 <TextView
                     android:id="@+id/tv_incall_location"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="3dp"
                     android:ellipsize="end"
                     android:gravity="center"
-                    android:maxLines="1"
+                    android:lineSpacingExtra="2dp"
+                    android:maxLines="2"
                     android:textColor="#7DD3FC"
                     android:textSize="12sp"
                     android:visibility="gone" />
@@ -415,9 +416,9 @@
                 <!-- Compact Animated Live Audio Waveform -->
                 <com.example.ui.incall.LiveCallWaveformView
                     android:id="@+id/view_live_call_waveform"
-                    android:layout_width="110dp"
-                    android:layout_height="24dp"
-                    android:layout_marginTop="10dp" />
+                    android:layout_width="104dp"
+                    android:layout_height="20dp"
+                    android:layout_marginTop="6dp" />
 
                 <!-- Shimmer "Incoming Call…" / Live Call Timer (00:00) + Pulsing REC Badge -->
                 <LinearLayout
@@ -456,12 +457,12 @@
                     android:id="@+id/card_caller_id_popup"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="10dp"
                     android:visibility="gone"
-                    app:cardBackgroundColor="#1A0F172A"
-                    app:cardCornerRadius="22dp"
-                    app:cardElevation="0dp"
-                    app:strokeColor="#30E2E8F0"
+                    app:cardBackgroundColor="#CC0D1729"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="6dp"
+                    app:strokeColor="#486EE7B7"
                     app:strokeWidth="1dp">
 
                     <LinearLayout
@@ -469,7 +470,8 @@
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
                         android:paddingHorizontal="14dp"
-                        android:paddingVertical="10dp">
+                        android:paddingTop="6dp"
+                        android:paddingBottom="10dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -490,6 +492,8 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="6dp"
                                 android:layout_weight="1"
+                                android:ellipsize="end"
+                                android:maxLines="1"
                                 android:text="@string/caller_id_popup_badge"
                                 android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
                                 android:textColor="#6EE7B7"
@@ -507,17 +511,19 @@
                                 android:id="@+id/btn_dismiss_caller_popup"
                                 android:layout_width="48dp"
                                 android:layout_height="48dp"
+                                android:layout_marginEnd="-10dp"
                                 android:background="?attr/selectableItemBackgroundBorderless"
                                 android:contentDescription="@string/dialog_close"
                                 android:padding="14dp"
                                 android:src="@drawable/ic_close"
-                                app:tint="#94A3B8" />
+                                app:tint="#CBD5E1" />
                         </LinearLayout>
 
                         <TextView
                             android:id="@+id/tv_popup_caller_name"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:layout_marginTop="-4dp"
                             android:ellipsize="end"
                             android:maxLines="1"
                             android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
@@ -528,8 +534,10 @@
                             android:id="@+id/tv_popup_caller_location"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
                             android:ellipsize="end"
-                            android:maxLines="1"
+                            android:lineSpacingExtra="1dp"
+                            android:maxLines="2"
                             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                             android:textColor="#93C5FD" />
 
@@ -537,6 +545,7 @@
                             android:id="@+id/tv_popup_caller_number"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
                             android:ellipsize="end"
                             android:maxLines="1"
                             android:textAppearance="@style/TextAppearance.Material3.LabelSmall"

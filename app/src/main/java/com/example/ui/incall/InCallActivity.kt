@@ -79,6 +79,9 @@ class InCallActivity : AppCompatActivity() {
     private var hasPlayedShowcaseEntrance = false
     private var lastRecordingActive = false
     private var recordingStartTimeMs: Long = 0L
+    private var lastTopSystemBarInset: Int = 0
+    private var lastBottomSystemBarInset: Int = 0
+    private var isTopIncomingPopupReserved: Boolean = false
 
     private var incomingShimmerAnimator: ObjectAnimator? = null
     private var recPulseAnimator: ObjectAnimator? = null
@@ -115,16 +118,9 @@ class InCallActivity : AppCompatActivity() {
         val density = resources.displayMetrics.density
         ViewCompat.setOnApplyWindowInsetsListener(binding.incallRoot) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val targetTopPad = bars.top + (8f * density).toInt()
-            val targetBottomPad = bars.bottom + (14f * density).toInt()
-            if (binding.fullScreenCallContainer.paddingTop != targetTopPad ||
-                binding.fullScreenCallContainer.paddingBottom != targetBottomPad
-            ) {
-                binding.fullScreenCallContainer.updatePadding(
-                    top = targetTopPad,
-                    bottom = targetBottomPad
-                )
-            }
+            lastTopSystemBarInset = bars.top
+            lastBottomSystemBarInset = bars.bottom
+            applyFullScreenContainerPadding()
             val targetPillTopMargin = bars.top + (6f * density).toInt()
             val pillLp = binding.floating3dCallPill.layoutParams as? ViewGroup.MarginLayoutParams
             if (pillLp != null && pillLp.topMargin != targetPillTopMargin) {
@@ -529,10 +525,48 @@ class InCallActivity : AppCompatActivity() {
         syncMinimizedTopBarState(CallManager.uiState.value)
     }
 
+    private fun applyFullScreenContainerPadding() {
+        val density = resources.displayMetrics.density
+        val extraTopDp = if (isTopIncomingPopupReserved) INCOMING_TOP_POPUP_CLEARANCE_DP else 8f
+        val targetTopPad = lastTopSystemBarInset + (extraTopDp * density).toInt()
+        val targetBottomPad = lastBottomSystemBarInset + (14f * density).toInt()
+        if (binding.fullScreenCallContainer.paddingTop != targetTopPad ||
+            binding.fullScreenCallContainer.paddingBottom != targetBottomPad
+        ) {
+            binding.fullScreenCallContainer.updatePadding(
+                top = targetTopPad,
+                bottom = targetBottomPad
+            )
+        }
+    }
+
+    private fun updateTopIncomingPopupClearance(reserveSpace: Boolean) {
+        if (isTopIncomingPopupReserved != reserveSpace) {
+            isTopIncomingPopupReserved = reserveSpace
+            applyFullScreenContainerPadding()
+        }
+    }
+
+    private fun buildIncomingPillSubtitle(state: CallUiState): String {
+        val loc = state.callerLocation.trim()
+        val num = state.callerNumber.trim()
+        return when {
+            loc.isNotBlank() && num.isNotBlank() && !num.equals(loc, ignoreCase = true) -> "$loc • $num"
+            num.isNotBlank() -> num
+            loc.isNotBlank() -> loc
+            else -> getString(R.string.incall_incoming_shimmer)
+        }
+    }
+
     internal fun expandFromTopBar() {
         if (isFinishing || isDestroyed || !isMinimizedToTopBar) return
         isMinimizedToTopBar = false
-        binding.floating3dCallPill.hideImmediately()
+        val state = CallManager.uiState.value
+        val isRinging = state.hasActiveCall && state.callState == Call.STATE_RINGING
+        if (!isRinging) {
+            binding.floating3dCallPill.hideImmediately()
+        }
+        updateTopIncomingPopupClearance(isRinging)
 
         val density = resources.displayMetrics.density
         binding.fullScreenCallContainer.apply {
@@ -553,15 +587,18 @@ class InCallActivity : AppCompatActivity() {
     }
 
     private fun syncMinimizedTopBarState(state: CallUiState) {
-        if (!isMinimizedToTopBar || !state.hasActiveCall) return
+        if (!state.hasActiveCall) return
         val displayName = resolveCallerDisplayName(state)
         val isBtActive = (state.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
         if (state.callState == Call.STATE_RINGING) {
-            val subtitle = state.callerNumber.ifBlank {
-                state.callerLocation.ifBlank { getString(R.string.incall_incoming_shimmer) }
-            }
-            binding.floating3dCallPill.showIncomingCall(displayName, subtitle)
-        } else {
+            // Always show the 3D top-drop -> center-to-sides split incoming popup on incoming calls
+            binding.floating3dCallPill.showIncomingCall(
+                callerName = displayName,
+                callerLabelOrNumber = buildIncomingPillSubtitle(state)
+            )
+            updateTopIncomingPopupClearance(!isMinimizedToTopBar)
+        } else if (isMinimizedToTopBar) {
+            updateTopIncomingPopupClearance(false)
             binding.floating3dCallPill.morphToActiveCallBar(
                 callerName = displayName,
                 formattedTimer = formatDurationTimer(state),
@@ -569,6 +606,11 @@ class InCallActivity : AppCompatActivity() {
                 isSpeakerOn = state.isSpeakerOn,
                 isBluetooth = isBtActive
             )
+        } else {
+            updateTopIncomingPopupClearance(false)
+            if (binding.floating3dCallPill.currentMode != Floating3DCallPillView.PillMode.HIDDEN) {
+                binding.floating3dCallPill.hideImmediately()
+            }
         }
     }
 
@@ -787,6 +829,10 @@ class InCallActivity : AppCompatActivity() {
                 }
             }
             return
+        }
+
+        if (binding.floating3dCallPill.currentMode != Floating3DCallPillView.PillMode.HIDDEN) {
+            binding.floating3dCallPill.dismissWithReverseAnimation()
         }
 
         // Brief "Call Ended" (~500ms) state + smooth 3D scale-down & fade-out dismissal
@@ -1111,6 +1157,9 @@ class InCallActivity : AppCompatActivity() {
         binding.btnDismissCallerPopup.setOnClickListener {
             isCallerPopupDismissed = true
             binding.cardCallerIdPopup.visibility = View.GONE
+            if (binding.tvIncallLocation.text?.isNotBlank() == true) {
+                binding.tvIncallLocation.visibility = View.VISIBLE
+            }
         }
 
         val dtmfMap = mapOf(
@@ -1466,17 +1515,6 @@ class InCallActivity : AppCompatActivity() {
 
         val resolvedLocation = state.callerGeoLine.trim().ifBlank { state.callerLocation.trim() }
         val socialBadgeLine = state.callerSocialSummary.trim()
-        binding.tvIncallLocation.text = if (socialBadgeLine.isNotEmpty() && resolvedLocation.isNotEmpty()) {
-            "$resolvedLocation\n$socialBadgeLine"
-        } else {
-            resolvedLocation.ifBlank { socialBadgeLine }
-        }
-        binding.tvIncallLocation.visibility =
-            if (!state.isConference && (resolvedLocation.isNotBlank() || socialBadgeLine.isNotBlank())) {
-                View.VISIBLE
-            } else {
-                View.GONE
-            }
 
         val popupKey = "${state.callerNumber}|${state.callState == Call.STATE_RINGING}"
         if (popupKey != lastPopupCallerKey && state.callerNumber.isNotBlank()) {
@@ -1506,6 +1544,19 @@ class InCallActivity : AppCompatActivity() {
             binding.tvPopupCallerNumber.text =
                 "${state.callerNumber.ifBlank { getString(R.string.incall_unknown_caller) }} • $src$socialPart"
         }
+
+        // Avoid repeating location text directly above the dedicated Caller ID card to keep the center clean
+        binding.tvIncallLocation.text = if (socialBadgeLine.isNotEmpty() && resolvedLocation.isNotEmpty()) {
+            "$resolvedLocation\n$socialBadgeLine"
+        } else {
+            resolvedLocation.ifBlank { socialBadgeLine }
+        }
+        binding.tvIncallLocation.visibility =
+            if (!state.isConference && !showCallerPopup && (resolvedLocation.isNotBlank() || socialBadgeLine.isNotBlank())) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
 
         val isRinging = state.callState == Call.STATE_RINGING
         val isActive = state.callState == Call.STATE_ACTIVE
@@ -1539,6 +1590,9 @@ class InCallActivity : AppCompatActivity() {
         binding.layoutActiveControls.visibility = if (isRinging) View.GONE else View.VISIBLE
         binding.layoutIncomingControls.alpha = 1f
         binding.layoutActiveControls.alpha = 1f
+        // During incoming calls the top drop-down center-split Floating3DCallPillView is the primary
+        // Answer/Decline drag bar, so hide the duplicate bottom dock to prevent clutter/overlap.
+        binding.sidewaysDragDock.visibility = View.GONE
 
         if (isRinging) {
             if (lastRenderedCallState != Call.STATE_RINGING) {
@@ -1711,5 +1765,6 @@ class InCallActivity : AppCompatActivity() {
 
     companion object {
         const val CALL_ENDED_HOLD_MS = 500L
+        const val INCOMING_TOP_POPUP_CLEARANCE_DP = 106f
     }
 }
