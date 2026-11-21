@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.appcompat.app.AppCompatDelegate
 import com.example.data.DialerPreferences
 
@@ -16,12 +18,16 @@ class PulseDialApp : Application() {
         com.example.data.PulseDialCrashLogger.install(this)
         val prefs = DialerPreferences(this)
         prefs.ensureFirstLaunchRecorded()
-        AppCompatDelegate.setDefaultNightMode(prefs.displayThemeMode)
+        AppCompatDelegate.setDefaultNightMode(
+            com.example.ui.theme.ThemeStudioManager.resolveEffectiveNightMode(prefs)
+        )
         createNotificationChannels()
-        com.example.data.firebase.RealtimeDatabaseSync.init(this)
-        com.example.billing.SubscriptionEnforcementService.init(this)
-        com.example.data.firebase.RealtimeSyncManager.init(this)
-        com.example.recording.VoipCallRecorderManager.init(this)
+        Handler(Looper.getMainLooper()).post {
+            com.example.data.firebase.RealtimeDatabaseSync.init(this)
+            com.example.billing.SubscriptionEnforcementService.init(this)
+            com.example.data.firebase.RealtimeSyncManager.init(this)
+            com.example.recording.VoipCallRecorderManager.init(this)
+        }
     }
 
     private fun createNotificationChannels() {

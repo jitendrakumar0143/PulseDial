@@ -25,7 +25,9 @@ data class ResolvedCallIdentity(
     val phoneNumber: String,
     val location: String = "",
     val isUnknownNumber: Boolean = false,
-    val identitySource: String = ""
+    val identitySource: String = "",
+    val locationDetails: String = "",
+    val socialSummary: String = ""
 )
 
 data class ConferenceParticipantUi(
@@ -49,6 +51,8 @@ data class CallUiState(
     val callerName: String = "",
     val callerNumber: String = "",
     val callerLocation: String = "",
+    val callerGeoLine: String = "",
+    val callerSocialSummary: String = "",
     val isUnknownCaller: Boolean = false,
     val callerIdentitySource: String = "",
     val callState: Int = Call.STATE_NEW,
@@ -284,6 +288,14 @@ object CallManager {
                         CallerIdResolver.resolveLocation(primaryIdentity.phoneNumber)
                     }
                 },
+                callerGeoLine = if (isConference) {
+                    ""
+                } else {
+                    primaryIdentity.locationDetails.ifBlank {
+                        CallerIdResolver.resolveGeo(primaryIdentity.phoneNumber).formattedStructuredLine()
+                    }
+                },
+                callerSocialSummary = if (isConference) "" else primaryIdentity.socialSummary,
                 isUnknownCaller = !isConference && primaryIdentity.isUnknownNumber,
                 callerIdentitySource = if (isConference) {
                     "Conference Call"
@@ -337,7 +349,9 @@ object CallManager {
             phoneNumber = callerNumber,
             location = info.location,
             isUnknownNumber = callerName.isBlank() || info.isUnknownNumber,
-            identitySource = info.sourceLabel
+            identitySource = info.sourceLabel,
+            locationDetails = info.structuredLocationLine(),
+            socialSummary = info.socialBadgesSummary()
         )
         if (!trackedCalls.contains(call)) {
             trackedCalls.add(call)
@@ -367,7 +381,9 @@ object CallManager {
                 phoneNumber = callerNumber,
                 location = info.location,
                 isUnknownNumber = info.isUnknownNumber,
-                identitySource = info.sourceLabel
+                identitySource = info.sourceLabel,
+                locationDetails = info.structuredLocationLine(),
+                socialSummary = info.socialBadgesSummary()
             )
         }
         callIdentities[call] = resolved
@@ -615,6 +631,8 @@ object CallManager {
         setSpeakerEnabled(!_uiState.value.isSpeakerOn)
     }
 
+    fun isServiceAttached(): Boolean = serviceRef?.get() != null
+
     @Suppress("DEPRECATION")
     fun setSpeakerEnabled(enabled: Boolean) {
         val route = if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE
@@ -623,13 +641,15 @@ object CallManager {
 
     @Suppress("DEPRECATION")
     fun setAudioRoute(route: Int) {
-        val service = serviceRef?.get() ?: return
-        service.setAudioRoute(route)
-        _uiState.update {
-            it.copy(
-                audioRoute = route,
-                isSpeakerOn = (route and CallAudioState.ROUTE_SPEAKER) != 0
-            )
+        val service = serviceRef?.get()
+        service?.setAudioRoute(route)
+        if (service != null || _uiState.value.hasActiveCall) {
+            _uiState.update {
+                it.copy(
+                    audioRoute = route,
+                    isSpeakerOn = (route and CallAudioState.ROUTE_SPEAKER) != 0
+                )
+            }
         }
     }
 
@@ -734,7 +754,9 @@ object CallManager {
             phoneNumber = number,
             location = info.location,
             isUnknownNumber = info.isUnknownNumber,
-            identitySource = info.sourceLabel
+            identitySource = info.sourceLabel,
+            locationDetails = info.structuredLocationLine(),
+            socialSummary = info.socialBadgesSummary()
         ).also { callIdentities[call] = it }
     }
 
@@ -827,5 +849,10 @@ object CallManager {
                 state.topLevelCallCount >= 2 ||
                 state.totalTrackedCallCount >= 2 ||
                 state.conferenceParticipantCount >= 2)
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun publishStateForTesting(state: CallUiState) {
+        _uiState.value = state
     }
 }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="btn_pill_drag_answer" type="id" />
+    <item name="btn_pill_drag_decline" type="id" />
+    <item name="btn_pill_active_mute" type="id" />
+    <item name="btn_pill_active_speaker" type="id" />
+    <item name="btn_pill_active_end" type="id" />
+    <item name="btn_dock_drag_answer" type="id" />
+    <item name="btn_dock_drag_decline" type="id" />
+</resources>

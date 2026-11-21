@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Smoked Sapphire Glass Core: rgba(15, 18, 28, 0.72) -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:centerColor="#B80F121C"
+                android:endColor="#CC0B0F1A"
+                android:startColor="#C4161D30" />
+            <corners android:radius="32dp" />
+            <stroke
+                android:width="1.2dp"
+                android:color="#48E2E8F0" />
+        </shape>
+    </item>
+    <!-- Thin Metallic Top Specular Rim Highlight -->
+    <item
+        android:bottom="120dp"
+        android:left="14dp"
+        android:right="14dp"
+        android:top="1dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:endColor="#00FFFFFF"
+                android:startColor="#48FFFFFF" />
+            <corners
+                android:topLeftRadius="30dp"
+                android:topRightRadius="30dp" />
+        </shape>
+    </item>
+</layer-list>

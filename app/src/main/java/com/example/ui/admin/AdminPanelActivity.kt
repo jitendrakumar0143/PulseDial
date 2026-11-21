@@ -55,16 +55,22 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.tabs.TabLayout
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.auth
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
+import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import java.util.Date
 
 class AdminPanelActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAdminPanelBinding
     private lateinit var prefs: DialerPreferences
-    private lateinit var adminRepository: AdminRepository
-    private lateinit var paymentRepository: PaymentRepository
+    private val adminRepository: AdminRepository by lazy { AdminRepository(this) }
+    private val paymentRepository: PaymentRepository by lazy { PaymentRepository(this) }
 
     private lateinit var usersAdapter: AdminUsersAdapter
     private lateinit var expiringUsersAdapter: AdminExpiringUsersAdapter
@@ -104,7 +110,9 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private var currentPaymentFilter: AdminPaymentFilter = AdminPaymentFilter.ALL
     private var currentPaymentQuery: String = ""
-    private var rtdbAdminUsersCleanup: (() -> Unit)? = null
+    private var usersDatabaseRef: DatabaseReference? = null
+    private var usersValueEventListener: ValueEventListener? = null
+    private var usersRtdbSyncErrorMessage: String? = null
     private var rtdbAdminConfigCleanup: (() -> Unit)? = null
     private var rtdbAdminPaymentsCleanup: (() -> Unit)? = null
     private var rtdbAdminNavTabsCleanup: (() -> Unit)? = null
@@ -134,8 +142,7 @@ class AdminPanelActivity : AppCompatActivity() {
             return
         }
 
-        adminRepository = AdminRepository(this)
-        paymentRepository = PaymentRepository(this)
+        // Repositories are initialized lazily so AdminPanelActivity stays crash-free if FirebaseApp is not ready yet.
 
         applyInsets()
         setupToolbar(activeEmail)
@@ -151,18 +158,7 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun attachRtdbAdminListeners() {
-        rtdbAdminUsersCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAllUsersListener(
-            context = this,
-            onUpdate = { rtdbUsers ->
-                rtdbUsersById.clear()
-                rtdbUsers.forEach { user ->
-                    if (user.uid.isNotBlank()) {
-                        rtdbUsersById[user.uid] = user
-                    }
-                }
-                mergeAndPublishUsers()
-            }
-        )
+        attachUsersValueEventListener()
         rtdbAdminPaymentsCleanup = com.example.data.firebase.RealtimeDatabaseSync.attachAllPaymentRequestsListener(
             context = this,
             onUpdate = { rtdbRequests ->
@@ -251,9 +247,70 @@ class AdminPanelActivity : AppCompatActivity() {
         }
     }
 
+    private fun attachUsersValueEventListener() {
+        detachUsersValueEventListener()
+        val ref = RealtimeDatabaseSync.getUsersReference(this) ?: return
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (isFinishing || isDestroyed) return
+                usersRtdbSyncErrorMessage = null
+                binding.tvAdminUserDateSummary.setOnClickListener(null)
+                val parsedUsers = RealtimeDatabaseSync.parseUsersListSnapshot(snapshot)
+                handleUsersRtdbSnapshot(parsedUsers)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                if (isFinishing || isDestroyed) return
+                android.util.Log.w("AdminPanelActivity", "RTDB /users ValueEventListener cancelled: ${error.message}")
+                usersRtdbSyncErrorMessage = error.message
+                binding.tvAdminUserDateSummary.text =
+                    "RTDB /users sync error: ${error.message} — Tap to retry"
+                binding.tvAdminUserDateSummary.setOnClickListener {
+                    attachUsersValueEventListener()
+                }
+            }
+        }
+        usersDatabaseRef = ref
+        usersValueEventListener = listener
+        ref.addValueEventListener(listener)
+    }
+
+    private fun detachUsersValueEventListener() {
+        val ref = usersDatabaseRef
+        val listener = usersValueEventListener
+        if (ref != null && listener != null) {
+            runCatching { ref.removeEventListener(listener) }
+        }
+        usersDatabaseRef = null
+        usersValueEventListener = null
+    }
+
+    /**
+     * Reconciles live `/users` RTDB snapshots against cached Firestore users (removing any UID
+     * that was deleted from `/users`) and immediately publishes updated KPIs & filtered lists.
+     */
+    internal fun handleUsersRtdbSnapshot(rtdbUsers: List<UserEntitlement>) {
+        val previousRtdbIds = rtdbUsersById.keys.toSet()
+        val incomingIds = HashSet<String>(rtdbUsers.size)
+        rtdbUsersById.clear()
+        rtdbUsers.forEach { user ->
+            val uid = user.uid.trim()
+            if (uid.isNotEmpty()) {
+                incomingIds.add(uid)
+                rtdbUsersById[uid] = user
+            }
+        }
+        // Reconcile deletions: if a UID previously existed in RTDB and disappeared, purge stale copy
+        previousRtdbIds.forEach { oldUid ->
+            if (oldUid !in incomingIds) {
+                firestoreUsersById.remove(oldUid)
+            }
+        }
+        mergeAndPublishUsers()
+    }
+
     override fun onDestroy() {
-        rtdbAdminUsersCleanup?.invoke()
-        rtdbAdminUsersCleanup = null
+        detachUsersValueEventListener()
         rtdbAdminConfigCleanup?.invoke()
         rtdbAdminConfigCleanup = null
         rtdbAdminPaymentsCleanup?.invoke()
@@ -365,7 +422,7 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.btnRefreshExpiring.isEnabled = false
         val requestedFilter = currentSubscriberFilter
         lifecycleScope.launch {
-            if (Firebase.auth.currentUser == null) {
+            if (runCatching { Firebase.auth.currentUser }.getOrNull() == null) {
                 mergeAndPublishUsers()
                 binding.progressAdminExpiring.visibility = View.GONE
                 binding.btnRefreshExpiring.isEnabled = true
@@ -572,30 +629,7 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun revokeUserPro(user: UserEntitlement) {
-        lifecycleScope.launch {
-            val result = adminRepository.updateUserAdminDetails(
-                user = user,
-                isPremium = false,
-                isBlocked = user.isBlocked,
-                bonusTrialDays = user.bonusTrialDays,
-                adminNote = user.adminNote,
-                hideSubscriptionUI = user.hideSubscriptionUI,
-                subscriptionExpiresAt = null
-            )
-            result.onSuccess {
-                Toast.makeText(
-                    this@AdminPanelActivity,
-                    getString(R.string.admin_user_updated, user.displayName.ifBlank { user.email }),
-                    Toast.LENGTH_SHORT
-                ).show()
-            }.onFailure { err ->
-                Toast.makeText(
-                    this@AdminPanelActivity,
-                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
+        setUserPremiumStatus(user = user, targetPremium = false)
     }
 
     private fun setupUsersTab() {
@@ -633,6 +667,7 @@ class AdminPanelActivity : AppCompatActivity() {
             applyUserFilters()
         }
 
+        binding.chipDateFieldToggle.text = "📅 By: Registration Date"
         binding.chipDateFieldToggle.setOnClickListener {
             currentUserDateField = when (currentUserDateField) {
                 AdminUserDateField.JOIN_DATE -> AdminUserDateField.EXPIRY_DATE
@@ -640,7 +675,7 @@ class AdminPanelActivity : AppCompatActivity() {
                 AdminUserDateField.UPDATED_DATE -> AdminUserDateField.JOIN_DATE
             }
             binding.chipDateFieldToggle.text = when (currentUserDateField) {
-                AdminUserDateField.JOIN_DATE -> "📅 By: Join Date"
+                AdminUserDateField.JOIN_DATE -> "📅 By: Registration Date"
                 AdminUserDateField.EXPIRY_DATE -> "⏳ By: Expiry Date"
                 AdminUserDateField.UPDATED_DATE -> "🔄 By: Last Updated"
             }
@@ -1442,7 +1477,7 @@ class AdminPanelActivity : AppCompatActivity() {
         val desiredGlobalTheme = if (binding.switchLocalDarkTheme.isChecked) {
             AppConfig.THEME_DARK
         } else {
-            AppConfig.THEME_LIGHT
+            AppConfig.THEME_USER
         }
 
         val updatedConfig = AppConfig(
@@ -1479,8 +1514,7 @@ class AdminPanelActivity : AppCompatActivity() {
             AppCompatDelegate.MODE_NIGHT_NO
         }
         if (prefs.displayThemeMode != desiredNightMode) {
-            prefs.displayThemeMode = desiredNightMode
-            AppCompatDelegate.setDefaultNightMode(desiredNightMode)
+            com.example.data.firebase.SettingsManager(this).setThemeMode(desiredNightMode)
         }
 
         binding.btnSaveSettings.isEnabled = false
@@ -1523,7 +1557,7 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun observeAdminData() {
-        if (Firebase.auth.currentUser == null) return
+        if (runCatching { Firebase.auth.currentUser }.getOrNull() == null) return
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
@@ -1629,7 +1663,7 @@ class AdminPanelActivity : AppCompatActivity() {
             customEndMs = customDateEndMs
         )
         val fieldLabel = when (currentUserDateField) {
-            AdminUserDateField.JOIN_DATE -> "Join Date"
+            AdminUserDateField.JOIN_DATE -> "Registration Date"
             AdminUserDateField.EXPIRY_DATE -> "Expiry Date"
             AdminUserDateField.UPDATED_DATE -> "Last Updated"
         }
@@ -1640,10 +1674,33 @@ class AdminPanelActivity : AppCompatActivity() {
             AdminUserDateFilter.LAST_30_DAYS -> "Last 30 Days"
             AdminUserDateFilter.CUSTOM_RANGE -> binding.chipDateFilterCustom.text.toString()
         }
-        binding.tvAdminUserDateSummary.text =
+        val syncError = usersRtdbSyncErrorMessage
+        binding.tvAdminUserDateSummary.text = if (syncError != null) {
+            "RTDB /users sync error: $syncError — Tap to retry"
+        } else {
             "Showing ${filtered.size} of ${allUsers.size} users • Filter: $rangeLabel ($fieldLabel)"
+        }
         binding.tvAdminUsersEmpty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
+        lastFilteredUsers = filtered
         usersAdapter.submitList(filtered)
+    }
+
+    private var lastFilteredUsers: List<UserEntitlement> = emptyList()
+
+    internal fun getDisplayedUsersForTesting(): List<UserEntitlement> = lastFilteredUsers
+
+    internal fun applyRegistrationDateFilterForTesting(
+        dateFilter: AdminUserDateFilter,
+        customStartMs: Long = 0L,
+        customEndMs: Long = Long.MAX_VALUE
+    ) {
+        currentUserDateField = AdminUserDateField.JOIN_DATE
+        currentUserDateFilter = dateFilter
+        if (dateFilter == AdminUserDateFilter.CUSTOM_RANGE) {
+            customDateStartMs = customStartMs
+            customDateEndMs = customEndMs
+        }
+        applyUserFilters()
     }
 
     private fun applyPaymentFilters() {
@@ -1659,12 +1716,65 @@ class AdminPanelActivity : AppCompatActivity() {
     private fun toggleUserPro(user: UserEntitlement) {
         val status = AdminRepository.resolveUserAccountStatus(user, currentConfig.trialDays.toInt())
         val isUnexpiredPro = user.isPremiumUser && status != com.example.data.firebase.AdminUserAccountStatus.EXPIRED
-        val targetPremium = !isUnexpiredPro
+        setUserPremiumStatus(user = user, targetPremium = !isUnexpiredPro)
+    }
+
+    /**
+     * Immediately updates a user's `isPremium` status in Firebase RTDB `/users/{uid}` (and any
+     * matching email/device sibling nodes) for sub-1-second client propagation, optimistically
+     * refreshes the Admin list, and synchronizes with Firestore.
+     */
+    internal fun setUserPremiumStatus(
+        user: UserEntitlement,
+        targetPremium: Boolean,
+        subscriptionDays: Long = DialerPreferences.MONTHLY_SUBSCRIPTION_DAYS.toLong()
+    ) {
+        val uid = user.uid.trim()
+        if (uid.isEmpty()) return
+        val nowMs = maxOf(RealtimeDatabaseSync.currentServerNowMs(), System.currentTimeMillis())
+        val expiryMs: Long? = if (targetPremium) {
+            val baseMs = maxOf(nowMs, AdminRepository.resolveEffectiveExpiryMs(user))
+            baseMs + subscriptionDays.coerceIn(1L, 3650L) * DialerPreferences.ONE_DAY_MILLIS
+        } else {
+            null
+        }
+        val nextStatus = if (targetPremium) {
+            UserEntitlement.STATUS_ACTIVE
+        } else {
+            UserEntitlement.STATUS_EXPIRED
+        }
+
+        // 1. Direct atomic write to RTDB for <1s client-side reflection
+        RealtimeDatabaseSync.updateUserIsPremiumDirect(
+            uid = uid,
+            isPremium = targetPremium,
+            subscriptionExpiresAtMs = expiryMs,
+            subscriptionStatus = nextStatus,
+            email = user.email,
+            deviceHash = user.deviceHash,
+            context = this
+        )
+
+        // 2. Optimistic Admin UI update so admin immediately sees the updated status
+        val updatedUser = user.copy(
+            isPremiumUser = targetPremium,
+            isBlocked = if (targetPremium) false else user.isBlocked,
+            subscriptionStatus = nextStatus,
+            subscriptionExpiresAt = expiryMs?.let { Timestamp(Date(it)) },
+            updatedAt = Timestamp(Date(nowMs + 1_000L))
+        )
+        rtdbUsersById[uid] = updatedUser
+        if (firestoreUsersById.containsKey(uid)) {
+            firestoreUsersById[uid] = updatedUser
+        }
+        mergeAndPublishUsers()
+
+        // 3. Synchronize with Firestore in background
         lifecycleScope.launch {
             val result = if (targetPremium) {
                 adminRepository.renewUserMonthlySubscription(
                     user = user,
-                    extraDays = DialerPreferences.MONTHLY_SUBSCRIPTION_DAYS.toLong()
+                    extraDays = subscriptionDays
                 )
             } else {
                 adminRepository.updateUserAdminDetails(
@@ -1674,7 +1784,8 @@ class AdminPanelActivity : AppCompatActivity() {
                     bonusTrialDays = user.bonusTrialDays,
                     adminNote = user.adminNote,
                     hideSubscriptionUI = user.hideSubscriptionUI,
-                    subscriptionExpiresAt = null
+                    subscriptionExpiresAt = null,
+                    explicitSubscriptionStatus = UserEntitlement.STATUS_EXPIRED
                 )
             }
             result.onSuccess {
@@ -2110,10 +2221,15 @@ class AdminPanelActivity : AppCompatActivity() {
                 val nextName = nameInput.text.toString().trim()
                 val nextPhone = phoneInput.text.toString().trim()
                 val nowMs = System.currentTimeMillis()
-                val nextPremium = proCheck.isChecked && !blockCheck.isChecked &&
-                    (pendingExpiryMs <= 0L || pendingExpiryMs > nowMs)
-                val expiryTs = if (nextPremium && pendingExpiryMs > nowMs) {
-                    com.google.firebase.Timestamp(java.util.Date(pendingExpiryMs))
+                val nextBlocked = blockCheck.isChecked && !isTargetSuperAdmin
+                val nextPremium = proCheck.isChecked && !nextBlocked
+                val resolvedExpiryMs = if (nextPremium) {
+                    if (pendingExpiryMs > nowMs) pendingExpiryMs else nowMs + DialerPreferences.ONE_MONTH_MILLIS
+                } else {
+                    0L
+                }
+                val expiryTs = if (nextPremium && resolvedExpiryMs > nowMs) {
+                    Timestamp(Date(resolvedExpiryMs))
                 } else {
                     null
                 }
@@ -2122,18 +2238,37 @@ class AdminPanelActivity : AppCompatActivity() {
                 } else {
                     user.isAdmin
                 }
-                val nextStatusOverride = if (!nextPremium && !blockCheck.isChecked && trialExplicitlyExpired) {
-                    UserEntitlement.STATUS_EXPIRED
-                } else {
-                    null
+                val nextStatusOverride = when {
+                    nextBlocked -> UserEntitlement.STATUS_BLOCKED
+                    nextPremium -> UserEntitlement.STATUS_ACTIVE
+                    trialExplicitlyExpired || user.isPremiumUser -> UserEntitlement.STATUS_EXPIRED
+                    else -> null
                 }
+                val optimisticUser = user.copy(
+                    displayName = nextName.ifBlank { user.displayName },
+                    phoneNumber = nextPhone,
+                    isPremiumUser = nextPremium,
+                    isBlocked = nextBlocked,
+                    bonusTrialDays = bonus.coerceIn(0L, 3650L),
+                    autoCallRecording = autoRecordCheck.isChecked,
+                    hideSubscriptionUI = hideSubCheck.isChecked,
+                    adminNote = note,
+                    subscriptionExpiresAt = expiryTs,
+                    subscriptionStatus = nextStatusOverride ?: user.subscriptionStatus,
+                    updatedAt = Timestamp(Date(nowMs + 1_000L))
+                )
+                rtdbUsersById[user.uid] = optimisticUser
+                if (firestoreUsersById.containsKey(user.uid)) {
+                    firestoreUsersById[user.uid] = optimisticUser
+                }
+                mergeAndPublishUsers()
                 lifecycleScope.launch {
                     val result = adminRepository.updateFullUserManagement(
                         user = user,
                         displayName = nextName,
                         phoneNumber = nextPhone,
                         isPremium = nextPremium,
-                        isBlocked = blockCheck.isChecked && !isTargetSuperAdmin,
+                        isBlocked = nextBlocked,
                         bonusTrialDays = bonus.coerceIn(0L, 3650L),
                         autoCallRecording = autoRecordCheck.isChecked,
                         hideSubscriptionUI = hideSubCheck.isChecked,
@@ -2328,29 +2463,72 @@ class AdminPanelActivity : AppCompatActivity() {
             .setTitle(R.string.admin_delete_user_title)
             .setMessage(getString(R.string.admin_delete_user_message, label, identifier))
             .setPositiveButton(R.string.admin_delete_user_confirm) { _, _ ->
-                lifecycleScope.launch {
-                    val result = adminRepository.deleteUserByAdmin(user, actingEmail)
-                    result.onSuccess {
-                        val uid = user.userId.ifBlank { user.id }
-                        firestoreUsersById.remove(uid)
-                        rtdbUsersById.remove(uid)
-                        mergeAndPublishUsers()
-                        Toast.makeText(
-                            this@AdminPanelActivity,
-                            getString(R.string.admin_delete_user_success, label),
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }.onFailure { err ->
-                        Toast.makeText(
-                            this@AdminPanelActivity,
-                            getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
+                deleteUserAccount(user, actingEmail)
             }
             .setNegativeButton(R.string.dialog_close, null)
             .show()
+    }
+
+    /**
+     * Deletes a user record from RTDB `/users/{uid}` (and any matching email/device sibling nodes)
+     * immediately for sub-1-second client-side sync, removes them from local Admin state, and
+     * deletes the corresponding Firestore document.
+     */
+    internal fun deleteUserAccount(
+        user: UserEntitlement,
+        actingEmail: String = GoogleAuthHelper.resolveActiveEmail(this)
+    ): Boolean {
+        if (UpiPaymentHelper.isSuperAdminEmail(user.email)) {
+            Toast.makeText(this, R.string.admin_delete_super_admin_blocked, Toast.LENGTH_SHORT).show()
+            return false
+        }
+        val targetIsDelegatedAdmin = UpiPaymentHelper.isDelegatedAdminAuthorized(
+            user.isAdmin,
+            user.adminGrantedBy
+        )
+        if (targetIsDelegatedAdmin && !UpiPaymentHelper.isSuperAdminEmail(actingEmail)) {
+            Toast.makeText(
+                this,
+                "Only a Super Admin can delete another Admin user.",
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+        val uid = user.uid.trim()
+        if (uid.isEmpty()) return false
+        val label = user.displayName.ifBlank { user.email.ifBlank { uid } }
+
+        // 1. Immediate RTDB removal (primary + email/device siblings) for <1s client revocation
+        RealtimeDatabaseSync.deleteUserAndSiblingsInRtdb(
+            uid = uid,
+            email = user.email,
+            deviceHash = user.deviceHash,
+            context = this
+        )
+
+        // 2. Immediate Admin UI removal
+        firestoreUsersById.remove(uid)
+        rtdbUsersById.remove(uid)
+        mergeAndPublishUsers()
+
+        // 3. Synchronize Firestore deletion
+        lifecycleScope.launch {
+            val result = adminRepository.deleteUserByAdmin(user, actingEmail)
+            result.onSuccess {
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_delete_user_success, label),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { err ->
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+        return true
     }
 
     private fun handleApprovePayment(request: PaymentRequest) {

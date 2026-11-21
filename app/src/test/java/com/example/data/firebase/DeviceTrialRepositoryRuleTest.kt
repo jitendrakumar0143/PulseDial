@@ -41,7 +41,7 @@ class DeviceTrialRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertTrue(result.isSuccess)
         val verification = result.getOrThrow()
         assertEquals(TrialStatus.FREE_TRIAL_ACTIVE, verification.status)
-        assertTrue(verification.hasRecordingAccess)
+        assertFalse(verification.hasRecordingAccess)
         assertFalse(verification.isPremium)
         assertEquals(7, verification.daysRemaining)
     }

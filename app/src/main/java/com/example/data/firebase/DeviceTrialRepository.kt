@@ -112,8 +112,8 @@ class DeviceTrialRepository(
                 ?: return Result.failure(
                     IllegalStateException("User must be signed in with Google before verifying device trial.")
                 )
-            val nowMs = System.currentTimeMillis()
             val cleanPrefs = prefs!!
+            val nowMs = RealtimeDatabaseSync.currentServerNowMs(cleanPrefs.serverClockOffsetMs)
             val totalTrialDays = (cleanPrefs.configuredTrialDays + cleanPrefs.adminBonusTrialDays)
                 .coerceIn(1, 4000)
             val totalTrialMs = totalTrialDays.toLong() * DialerPreferences.ONE_DAY_MILLIS
@@ -134,7 +134,7 @@ class DeviceTrialRepository(
                 },
                 daysRemaining = cleanPrefs.getTrialDaysRemaining(nowMs),
                 isPremium = isPremium,
-                hasRecordingAccess = !cleanPrefs.adminBlockedUser && (isPremium || !trialExpired),
+                hasRecordingAccess = !cleanPrefs.adminBlockedUser && isPremium,
                 trialStartedAtMs = startMs,
                 serverNowMs = nowMs,
                 accountSwitchCount = cleanPrefs.accountSwitchCount,
@@ -404,7 +404,7 @@ class DeviceTrialRepository(
             shortDeviceTag = DeviceIdentityProvider.formatShortDeviceTag(deviceHash),
             daysRemaining = daysRemaining,
             isPremium = isPremium,
-            hasRecordingAccess = !isBlocked && (isPremium || !trialExpired),
+            hasRecordingAccess = !isBlocked && isPremium,
             trialStartedAtMs = effectiveStartMs,
             serverNowMs = serverNowMs,
             accountSwitchCount = deviceTrial.accountSwitchCount,
@@ -580,7 +580,7 @@ class DeviceTrialRepository(
             // 4. RTDB has a newer or equal update timestamp.
             val preferRtdb = when {
                 rtdbExplicitlyRevoked && rtdbUpdatedMs >= fsUpdatedMs -> true
-                fsExplicitlyRevoked && fsUpdatedMs > rtdbUpdatedMs -> false
+                fsExplicitlyRevoked && fsUpdatedMs > rtdbUpdatedMs + 10_000L -> false
                 rtdbActiveSub && !fsActiveSub -> true
                 fsActiveSub && !rtdbActiveSub -> false
                 rtdbActiveSub && fsActiveSub && rtdbExpMs != fsExpMs -> rtdbExpMs > fsExpMs

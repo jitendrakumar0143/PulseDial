@@ -15,11 +15,13 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.PulseDialApp
@@ -75,7 +77,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         val identitySource: String,
         var wasIncomingRinging: Boolean,
         var reachedActive: Boolean,
-        var followUpHandled: Boolean = false
+        var followUpHandled: Boolean = false,
+        val locationDetails: String = "",
+        val socialSummary: String = ""
     )
 
     private lateinit var prefs: DialerPreferences
@@ -196,17 +200,29 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             CallManager.setSpeakerEnabled(speakerOn)
         }
         proximitySpeakerController = proxController
+        var lastNotifSignature = ""
         serviceScope.launch {
             CallManager.uiState.collect { uiState ->
                 proxController.onCallUiStateChanged(uiState)
+                val sig = if (!uiState.hasActiveCall) {
+                    "NONE"
+                } else {
+                    "${uiState.callState}|${uiState.callerName}|${uiState.callerNumber}|${uiState.callerLocation}|${uiState.isMuted}|${uiState.isSpeakerOn}|${uiState.audioRoute}|${uiState.isRecording}|${uiState.activeSimLabel}|${uiState.connectTimeMillis}"
+                }
+                if (sig != lastNotifSignature) {
+                    lastNotifSignature = sig
+                    if (uiState.hasActiveCall && trackedCalls.isNotEmpty()) {
+                        refreshCallNotificationFromCurrentCalls()
+                    }
+                }
             }
         }
 
         serviceScope.launch {
             SubscriptionEnforcementService.state.collect { enforcementState ->
                 if (trackedCalls.isEmpty()) return@collect
-                val vipAllowed = !enforcementState.shouldRestrictUiToAccountTab &&
-                    subscriptionManager.isSubscriptionActive() &&
+                val vipAllowed = !enforcementState.isBlocked &&
+                    subscriptionManager.isPremiumActive() &&
                     !prefs.adminBlockedUser
                 if (!vipAllowed) {
                     stopCallAnnouncer()
@@ -353,7 +369,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             isUnknownNumber = instantInfo.isUnknownNumber,
             identitySource = instantInfo.sourceLabel,
             wasIncomingRinging = (initialState == Call.STATE_RINGING),
-            reachedActive = (initialState == Call.STATE_ACTIVE)
+            reachedActive = (initialState == Call.STATE_ACTIVE),
+            locationDetails = instantInfo.structuredLocationLine(),
+            socialSummary = instantInfo.socialBadgesSummary()
         )
         call.children.orEmpty().forEach { child ->
             resolveAndCacheCallMeta(child, getCompatState(child))
@@ -390,7 +408,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
                 displayName = enriched.displayName,
                 location = enriched.location,
                 isUnknownNumber = enriched.isUnknownNumber,
-                identitySource = enriched.sourceLabel
+                identitySource = enriched.sourceLabel,
+                locationDetails = enriched.structuredLocationLine(),
+                socialSummary = enriched.socialBadgesSummary()
             )
             broadcastTrackedCalls()
             refreshCallNotificationFromCurrentCalls()
@@ -471,7 +491,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
         } else {
             syncedAd
         }
-        val isPremium = prefs.isPremiumUser || subscriptionManager.isPremiumActive()
+        val isPremium = subscriptionManager.isPremiumActive()
         if (!ad.shouldDisplayFor(CustomPopupAd.TRIGGER_AFTER_CALL_END, isPremium)) return
 
         afterCallAdDispatchedForCurrentSession = true
@@ -531,13 +551,17 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             isUnknownNumber = info.isUnknownNumber,
             identitySource = info.sourceLabel,
             wasIncomingRinging = (getCompatState(call) == Call.STATE_RINGING),
-            reachedActive = (getCompatState(call) == Call.STATE_ACTIVE)
+            reachedActive = (getCompatState(call) == Call.STATE_ACTIVE),
+            locationDetails = info.structuredLocationLine(),
+            socialSummary = info.socialBadgesSummary()
         )).copy(
             number = newNumber,
             displayName = info.displayName,
             location = info.location,
             isUnknownNumber = info.isUnknownNumber,
-            identitySource = info.sourceLabel
+            identitySource = info.sourceLabel,
+            locationDetails = prev?.locationDetails?.takeIf { it.isNotBlank() } ?: info.structuredLocationLine(),
+            socialSummary = prev?.socialSummary.orEmpty().ifBlank { info.socialBadgesSummary() }
         )
     }
 
@@ -557,7 +581,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             isUnknownNumber = info.isUnknownNumber,
             identitySource = info.sourceLabel,
             wasIncomingRinging = (state == Call.STATE_RINGING),
-            reachedActive = (state == Call.STATE_ACTIVE)
+            reachedActive = (state == Call.STATE_ACTIVE),
+            locationDetails = info.structuredLocationLine(),
+            socialSummary = info.socialBadgesSummary()
         ).also { callMetadata[call] = it }
     }
 
@@ -568,7 +594,9 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             phoneNumber = meta.number,
             location = meta.location,
             isUnknownNumber = meta.isUnknownNumber,
-            identitySource = meta.identitySource
+            identitySource = meta.identitySource,
+            locationDetails = meta.locationDetails,
+            socialSummary = meta.socialSummary
         )
     }
 
@@ -593,8 +621,7 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
 
     private fun hasVipFeatureAccess(): Boolean {
         return !prefs.adminBlockedUser &&
-            !SubscriptionEnforcementService.shouldRestrictUi(applicationContext) &&
-            subscriptionManager.isSubscriptionActive()
+            subscriptionManager.isPremiumActive()
     }
 
     private fun muteRingerForShield() {
@@ -847,7 +874,8 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
     private fun triggerAutoRecordingIfPermitted() {
         if (prefs.autoCallRecording &&
             prefs.allowCallRecordingConfig &&
-            subscriptionManager.isSubscriptionActive() &&
+            !prefs.adminBlockedUser &&
+            subscriptionManager.isPremiumActive() &&
             SubscriptionEnforcementService.canStartCallRecording(applicationContext)
         ) {
             CallManager.startAutoRecordingIfEnabled(applicationContext)
@@ -896,6 +924,80 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val toggleMutePendingIntent = PendingIntent.getBroadcast(
+            this,
+            1005,
+            Intent(this, CallNotificationActionReceiver::class.java).apply {
+                action = CallNotificationActionReceiver.ACTION_TOGGLE_MUTE
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val toggleSpeakerPendingIntent = PendingIntent.getBroadcast(
+            this,
+            1006,
+            Intent(this, CallNotificationActionReceiver::class.java).apply {
+                action = CallNotificationActionReceiver.ACTION_TOGGLE_SPEAKER
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val ui = CallManager.uiState.value
+        val cleanSubtitle = if (number.isNotBlank()) number else getString(R.string.incall_unknown_caller)
+        val elapsedMs = if (ui.connectTimeMillis > 0L) {
+            (System.currentTimeMillis() - ui.connectTimeMillis).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val chronometerBase = SystemClock.elapsedRealtime() - elapsedMs
+        val isTimerRunning = ui.callState == Call.STATE_ACTIVE && ui.connectTimeMillis > 0L
+
+        val simLabel = ui.activeSimLabel.ifBlank { getString(R.string.incall_sim_badge_fallback) }
+        val isBtActive = (ui.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
+        val isHeadsetActive = (ui.audioRoute and CallAudioState.ROUTE_WIRED_HEADSET) != 0
+        val audioLabel = getString(
+            when {
+                isBtActive -> R.string.incall_audio_bluetooth
+                isHeadsetActive -> R.string.incall_audio_headset
+                ui.isSpeakerOn -> R.string.incall_speaker_on
+                else -> R.string.incall_audio_earpiece
+            }
+        )
+        val recLabel = getString(if (ui.isRecording) R.string.incall_rec_badge else R.string.incall_rec_off)
+        val locSuffix = ui.callerLocation.trim().takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty()
+        val detailsSummary = "$simLabel • $audioLabel • $recLabel$locSuffix"
+
+        val compactViews = RemoteViews(packageName, R.layout.notification_call_3d_compact).apply {
+            setTextViewText(R.id.tv_notif_compact_name, name)
+            setTextViewText(R.id.tv_notif_compact_meta, "$cleanSubtitle • $simLabel • $audioLabel")
+            setChronometer(R.id.chrono_notif_compact_timer, chronometerBase, null, isTimerRunning)
+        }
+        val popupViews = RemoteViews(packageName, R.layout.notification_call_3d_popup).apply {
+            setTextViewText(R.id.tv_notif_popup_caller, name)
+            setTextViewText(R.id.tv_notif_popup_number, cleanSubtitle)
+            setTextViewText(R.id.tv_notif_popup_details, detailsSummary)
+            setChronometer(R.id.chrono_notif_call_timer, chronometerBase, null, isTimerRunning)
+            if (isRinging) {
+                setTextViewText(R.id.btn_notif_mute, getString(R.string.incall_answer))
+                setOnClickPendingIntent(R.id.btn_notif_mute, answerPendingIntent)
+                setTextViewText(R.id.btn_notif_speaker, audioLabel)
+                setOnClickPendingIntent(R.id.btn_notif_speaker, toggleSpeakerPendingIntent)
+                setTextViewText(R.id.btn_notif_end, getString(R.string.incall_decline))
+                setOnClickPendingIntent(R.id.btn_notif_end, declinePendingIntent)
+            } else {
+                setTextViewText(
+                    R.id.btn_notif_mute,
+                    getString(if (ui.isMuted) R.string.incall_unmute else R.string.incall_mute)
+                )
+                setOnClickPendingIntent(R.id.btn_notif_mute, toggleMutePendingIntent)
+                setTextViewText(
+                    R.id.btn_notif_speaker,
+                    getString(if (ui.isSpeakerOn) R.string.incall_speaker_on else R.string.incall_speaker)
+                )
+                setOnClickPendingIntent(R.id.btn_notif_speaker, toggleSpeakerPendingIntent)
+                setTextViewText(R.id.btn_notif_end, getString(R.string.incall_end_call))
+                setOnClickPendingIntent(R.id.btn_notif_end, hangUpPendingIntent)
+            }
+        }
 
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, channelId)
@@ -904,37 +1006,44 @@ class CustomInCallService : InCallService(), TextToSpeech.OnInitListener {
             Notification.Builder(this)
         }
 
-        val cleanSubtitle = if (number.isNotBlank()) number else getString(R.string.incall_unknown_caller)
         builder.setSmallIcon(R.drawable.ic_call)
             .setContentTitle(name)
-            .setContentText(cleanSubtitle)
+            .setContentText("$cleanSubtitle • $detailsSummary")
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_CALL)
             .setContentIntent(pendingIntent)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val callerPerson = Person.Builder()
-                .setName(name.ifBlank { cleanSubtitle })
-                .setIcon(Icon.createWithResource(this, R.drawable.ic_call))
-                .setImportant(true)
-                .build()
-            val callStyle = if (isRinging) {
-                Notification.CallStyle.forIncomingCall(
-                    callerPerson,
-                    declinePendingIntent,
-                    answerPendingIntent
-                )
-            } else {
-                Notification.CallStyle.forOngoingCall(
-                    callerPerson,
-                    hangUpPendingIntent
-                )
-            }
-            builder.setStyle(callStyle)
-        }
+            .setShowWhen(true)
+            .setWhen(if (ui.connectTimeMillis > 0L) ui.connectTimeMillis else System.currentTimeMillis())
 
         if (isRinging) {
             builder.setFullScreenIntent(pendingIntent, true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val callerPerson = Person.Builder()
+                    .setName(name.ifBlank { cleanSubtitle })
+                    .setIcon(Icon.createWithResource(this, R.drawable.ic_call))
+                    .setImportant(true)
+                    .build()
+                builder.setStyle(
+                    Notification.CallStyle.forIncomingCall(
+                        callerPerson,
+                        declinePendingIntent,
+                        answerPendingIntent
+                    )
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                builder.setCustomHeadsUpContentView(compactViews)
+                builder.setCustomBigContentView(popupViews)
+            }
+        } else {
+            if (isTimerRunning) {
+                builder.setUsesChronometer(true)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                builder.setStyle(Notification.DecoratedCustomViewStyle())
+                builder.setCustomContentView(compactViews)
+                builder.setCustomBigContentView(popupViews)
+            }
         }
 
         runCatching {

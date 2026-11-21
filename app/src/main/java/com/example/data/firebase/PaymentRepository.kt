@@ -301,8 +301,8 @@ class PaymentRepository(
         val cleanNote = reviewNote.trim().take(240)
 
         return try {
+            val nowMs = RealtimeDatabaseSync.currentServerNowMs()
             if (runCatching { auth.currentUser }.getOrNull() == null) {
-                val nowMs = System.currentTimeMillis()
                 val nextExpiresAtMs = nowMs + DialerPreferences.ONE_MONTH_MILLIS
                 if (utrKey.isNotBlank()) {
                     RealtimeDatabaseSync.markUtrApproved(
@@ -321,15 +321,17 @@ class PaymentRepository(
                 val rtdbApproveMap = mapOf(
                     "isPremium" to true,
                     "isPremiumUser" to true,
+                    "isBlocked" to false,
                     "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
                     "subscriptionExpiresAtMs" to nextExpiresAtMs,
-                    "updatedAtMs" to nowMs
+                    "updatedAtMs" to maxOf(nowMs, System.currentTimeMillis())
                 )
                 RealtimeDatabaseSync.pushUserFields(request.userId, rtdbApproveMap)
                 RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
                     email = request.userEmail,
                     primaryUid = request.userId,
-                    fields = rtdbApproveMap
+                    fields = rtdbApproveMap,
+                    deviceHash = request.deviceHash
                 )
                 return Result.success(Unit)
             }
@@ -349,12 +351,15 @@ class PaymentRepository(
                     IllegalStateException("UTR can only be approved once. This request was already approved.")
                 )
             }
-            val userSnap = userRef.snapshots().first()
-            val deviceSnap = deviceRef.snapshots().first()
+            val userSnap = runCatching { userRef.snapshots().first() }.getOrNull()
+            val deviceSnap = if (request.deviceHash.length == 64) {
+                runCatching { deviceRef.snapshots().first() }.getOrNull()
+            } else {
+                null
+            }
 
-            val nowMs = System.currentTimeMillis()
-            val existingUserExpMs = userSnap.getTimestamp("subscriptionExpiresAt")?.toDate()?.time ?: 0L
-            val existingDeviceExpMs = deviceSnap.getTimestamp("subscriptionExpiresAt")?.toDate()?.time ?: 0L
+            val existingUserExpMs = userSnap?.getTimestamp("subscriptionExpiresAt")?.toDate()?.time ?: 0L
+            val existingDeviceExpMs = deviceSnap?.getTimestamp("subscriptionExpiresAt")?.toDate()?.time ?: 0L
             val renewalBaseMs = maxOf(nowMs, existingUserExpMs, existingDeviceExpMs)
             val nextExpiresAt = Timestamp(Date(renewalBaseMs + DialerPreferences.ONE_MONTH_MILLIS))
 
@@ -375,18 +380,21 @@ class PaymentRepository(
             val rtdbApproveMap = mapOf(
                 "isPremium" to true,
                 "isPremiumUser" to true,
+                "isBlocked" to false,
                 "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
                 "subscriptionExpiresAtMs" to nextExpiresAt.toDate().time,
-                "updatedAtMs" to System.currentTimeMillis()
+                "updatedAtMs" to maxOf(nowMs, System.currentTimeMillis())
             )
             RealtimeDatabaseSync.pushUserFields(request.userId, rtdbApproveMap)
             RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
                 email = request.userEmail,
                 primaryUid = request.userId,
-                fields = rtdbApproveMap
+                fields = rtdbApproveMap,
+                deviceHash = request.deviceHash
             )
 
             val batch = db.batch()
+            var hasBatchWrites = false
             if (utrKey.isNotBlank()) {
                 val utrLockRef = db.collection(COLLECTION_APPROVED_UTRS).document(utrKey)
                 batch.set(
@@ -400,30 +408,49 @@ class PaymentRepository(
                         "approvedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            batch.update(
-                reqRef,
-                mapOf(
-                    "status" to PaymentRequest.STATUS_APPROVED,
-                    "reviewedByUid" to adminUid,
-                    "reviewNote" to cleanNote,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-            if (userSnap.exists()) {
+            if (currentReqSnap?.exists() == true) {
                 batch.update(
-                    userRef,
+                    reqRef,
                     mapOf(
-                        "isPremiumUser" to true,
-                        "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
-                        "subscriptionProductId" to UpiPaymentHelper.UPI_PLAN_ID,
-                        "purchaseToken" to request.upiTxnId.ifBlank { request.txnRef }.take(512),
-                        "subscriptionExpiresAt" to nextExpiresAt,
+                        "status" to PaymentRequest.STATUS_APPROVED,
+                        "reviewedByUid" to adminUid,
+                        "reviewNote" to cleanNote,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            if (deviceSnap.exists()) {
+            val userApprovePayload = mapOf(
+                "isPremiumUser" to true,
+                "isBlocked" to false,
+                "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                "subscriptionProductId" to UpiPaymentHelper.UPI_PLAN_ID,
+                "purchaseToken" to request.upiTxnId.ifBlank { request.txnRef }.take(512),
+                "subscriptionExpiresAt" to nextExpiresAt,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (userSnap?.exists() == true) {
+                batch.update(userRef, userApprovePayload)
+                hasBatchWrites = true
+            }
+            val cleanEmail = request.userEmail.trim()
+            if (cleanEmail.isNotEmpty()) {
+                val emailMatches = runCatching {
+                    db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                        .whereEqualTo("email", cleanEmail)
+                        .snapshots()
+                        .first()
+                }.getOrNull()
+                emailMatches?.documents?.forEach { doc ->
+                    if (doc.id != request.userId) {
+                        batch.update(doc.reference, userApprovePayload)
+                        hasBatchWrites = true
+                    }
+                }
+            }
+            if (deviceSnap?.exists() == true) {
                 batch.update(
                     deviceRef,
                     mapOf(
@@ -432,14 +459,20 @@ class PaymentRepository(
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            batch.commit().awaitTask()
+            if (hasBatchWrites) {
+                batch.commit().awaitTask()
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             val firestoreError = generateSequence<Throwable>(e) { it.cause }
                 .filterIsInstance<FirebaseFirestoreException>()
                 .firstOrNull()
             if (firestoreError == null && e is CancellationException) throw e
+            if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                return Result.success(Unit)
+            }
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.UPDATE, reqRef.path, auth)
             Result.failure(actualError)
@@ -466,6 +499,7 @@ class PaymentRepository(
         val cleanNote = reviewNote.trim().take(240)
 
         return try {
+            val nowMs = RealtimeDatabaseSync.currentServerNowMs()
             RealtimeDatabaseSync.updatePaymentRequestStatus(
                 requestId = request.id,
                 status = PaymentRequest.STATUS_REJECTED,
@@ -477,44 +511,68 @@ class PaymentRepository(
                 "isPremiumUser" to false,
                 "subscriptionStatus" to UserEntitlement.STATUS_EXPIRED,
                 "subscriptionExpiresAtMs" to null,
-                "updatedAtMs" to System.currentTimeMillis()
+                "updatedAtMs" to maxOf(nowMs, System.currentTimeMillis())
             )
             RealtimeDatabaseSync.pushUserFields(request.userId, rtdbRejectMap)
             RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
                 email = request.userEmail,
                 primaryUid = request.userId,
-                fields = rtdbRejectMap
+                fields = rtdbRejectMap,
+                deviceHash = request.deviceHash
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
-            val userSnap = userRef.snapshots().first()
-            val deviceSnap = deviceRef.snapshots().first()
+            val currentReqSnap = runCatching { reqRef.snapshots().first() }.getOrNull()
+            val userSnap = runCatching { userRef.snapshots().first() }.getOrNull()
+            val deviceSnap = if (request.deviceHash.length == 64) {
+                runCatching { deviceRef.snapshots().first() }.getOrNull()
+            } else {
+                null
+            }
 
             val batch = db.batch()
-            batch.update(
-                reqRef,
-                mapOf(
-                    "status" to PaymentRequest.STATUS_REJECTED,
-                    "reviewedByUid" to adminUid,
-                    "reviewNote" to cleanNote,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-            if (userSnap.exists()) {
+            var hasBatchWrites = false
+            if (currentReqSnap?.exists() == true) {
                 batch.update(
-                    userRef,
+                    reqRef,
                     mapOf(
-                        "isPremiumUser" to false,
-                        "subscriptionStatus" to UserEntitlement.STATUS_REJECTED,
-                        "subscriptionProductId" to "",
-                        "purchaseToken" to "",
-                        "subscriptionExpiresAt" to null,
+                        "status" to PaymentRequest.STATUS_REJECTED,
+                        "reviewedByUid" to adminUid,
+                        "reviewNote" to cleanNote,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            if (deviceSnap.exists()) {
+            val userRejectPayload = mapOf(
+                "isPremiumUser" to false,
+                "subscriptionStatus" to UserEntitlement.STATUS_REJECTED,
+                "subscriptionProductId" to "",
+                "purchaseToken" to "",
+                "subscriptionExpiresAt" to null,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (userSnap?.exists() == true) {
+                batch.update(userRef, userRejectPayload)
+                hasBatchWrites = true
+            }
+            val cleanEmail = request.userEmail.trim()
+            if (cleanEmail.isNotEmpty()) {
+                val emailMatches = runCatching {
+                    db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                        .whereEqualTo("email", cleanEmail)
+                        .snapshots()
+                        .first()
+                }.getOrNull()
+                emailMatches?.documents?.forEach { doc ->
+                    if (doc.id != request.userId) {
+                        batch.update(doc.reference, userRejectPayload)
+                        hasBatchWrites = true
+                    }
+                }
+            }
+            if (deviceSnap?.exists() == true) {
                 batch.update(
                     deviceRef,
                     mapOf(
@@ -523,14 +581,20 @@ class PaymentRepository(
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            batch.commit().awaitTask()
+            if (hasBatchWrites) {
+                batch.commit().awaitTask()
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             val firestoreError = generateSequence<Throwable>(e) { it.cause }
                 .filterIsInstance<FirebaseFirestoreException>()
                 .firstOrNull()
             if (firestoreError == null && e is CancellationException) throw e
+            if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                return Result.success(Unit)
+            }
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.UPDATE, reqRef.path, auth)
             Result.failure(actualError)

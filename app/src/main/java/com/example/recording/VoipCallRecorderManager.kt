@@ -91,7 +91,7 @@ object VoipCallRecorderManager {
                         !shouldRecordVoipSource(
                             prefs = prefs,
                             source = activeSrc,
-                            subscriptionActive = sub.isSubscriptionActive() && !state.shouldRestrictUiToAccountTab,
+                            subscriptionActive = sub.isPremiumActive() && !state.isBlocked,
                             policyAllowed = prefs.allowCallRecordingConfig && state.isRecordingAllowed,
                             adminBlocked = prefs.adminBlockedUser,
                             cellularCallActive = CallManager.uiState.value.hasActiveCall
@@ -113,7 +113,7 @@ object VoipCallRecorderManager {
                     if (!shouldRecordVoipSource(
                             prefs = prefs,
                             source = activeSrc,
-                            subscriptionActive = sub.isSubscriptionActive(),
+                            subscriptionActive = sub.isPremiumActive(),
                             policyAllowed = prefs.allowCallRecordingConfig,
                             adminBlocked = prefs.adminBlockedUser,
                             cellularCallActive = CallManager.uiState.value.hasActiveCall
@@ -237,8 +237,8 @@ object VoipCallRecorderManager {
             val stillEntitled = shouldRecordVoipSource(
                 prefs = prefs,
                 source = currentActiveSrc,
-                subscriptionActive = sub.isSubscriptionActive() &&
-                    !SubscriptionEnforcementService.shouldRestrictUi(ctx),
+                subscriptionActive = sub.isPremiumActive() &&
+                    !prefs.adminBlockedUser,
                 policyAllowed = prefs.allowCallRecordingConfig,
                 adminBlocked = prefs.adminBlockedUser,
                 cellularCallActive = false
@@ -277,8 +277,8 @@ object VoipCallRecorderManager {
         val allowed = shouldRecordVoipSource(
             prefs = prefs,
             source = candidateSource,
-            subscriptionActive = sub.isSubscriptionActive() &&
-                !SubscriptionEnforcementService.shouldRestrictUi(ctx),
+            subscriptionActive = sub.isPremiumActive() &&
+                !prefs.adminBlockedUser,
             policyAllowed = prefs.allowCallRecordingConfig,
             adminBlocked = prefs.adminBlockedUser,
             cellularCallActive = false

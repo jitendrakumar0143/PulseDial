@@ -22,11 +22,16 @@ import com.example.data.ContactsRepository
 import com.example.data.DialerPreferences
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.databinding.BottomSheetDialpadBinding
+import com.example.telecom.CallerIdResolver
+import com.example.telecom.CallerIdentityInfo
 import com.example.telecom.DialerHelper
 import com.example.telecom.DualSimManager
 import com.example.telecom.SimCardInfo
+import com.example.ui.history.CallDetailActivity
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -46,6 +51,8 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
     private var isAddCallMode: Boolean = false
     private var availableSims: List<SimCardInfo> = emptyList()
     private var selectedSimAccountId: String? = null
+    private var liveLookupJob: Job? = null
+    private var lastResolvedIdentity: CallerIdentityInfo? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -237,6 +244,17 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
                 )
             }
         }
+
+        binding.chipLookupCallerId.setOnClickListener {
+            val number = rawInput.trim()
+            if (number.isNotEmpty()) {
+                val resolvedName = lastResolvedIdentity?.displayName?.takeIf {
+                    !it.equals("Unknown Caller", ignoreCase = true)
+                }
+                startActivity(CallDetailActivity.createIntent(requireContext(), number, resolvedName))
+                dismiss()
+            }
+        }
     }
 
     override fun onResume() {
@@ -331,6 +349,51 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
         binding.etDialpadInput.setText(formatted)
         updateT9Suggestions()
         updateActionChips()
+        updateLiveCallerIdPreview()
+    }
+
+    private fun updateLiveCallerIdPreview() {
+        liveLookupJob?.cancel()
+        val number = rawInput.trim()
+        val digitCount = number.count { it.isDigit() }
+        if (digitCount < 3 || number.contains("*") || number.contains("#")) {
+            lastResolvedIdentity = null
+            binding.tvDialpadCallerIdPreview.visibility = View.GONE
+            return
+        }
+
+        val instant = CallerIdResolver.resolveInstant(number)
+        renderDialpadCallerIdPreview(instant)
+
+        if (digitCount >= 7) {
+            val appCtx = context?.applicationContext ?: return
+            liveLookupJob = viewLifecycleOwner.lifecycleScope.launch {
+                delay(180L)
+                val enriched = CallerIdResolver.resolveWithDeviceAsync(appCtx, number)
+                if (_binding != null && rawInput.trim() == number) {
+                    renderDialpadCallerIdPreview(enriched)
+                }
+            }
+        }
+    }
+
+    private fun renderDialpadCallerIdPreview(info: CallerIdentityInfo) {
+        lastResolvedIdentity = info
+        val namePart = info.displayName.takeIf {
+            it.isNotBlank() &&
+                !it.equals("Unknown Caller", ignoreCase = true) &&
+                !it.equals("Private / Hidden Number", ignoreCase = true)
+        }
+        val geoPart = if (info.geo.hasLocation) info.structuredLocationLine() else ""
+        val socialPart = info.socialBadgesSummary()
+        val preview = listOfNotNull(namePart, geoPart.takeIf { it.isNotBlank() }, socialPart.takeIf { it.isNotBlank() })
+            .joinToString(" • ")
+        if (preview.isNotBlank()) {
+            binding.tvDialpadCallerIdPreview.text = preview
+            binding.tvDialpadCallerIdPreview.visibility = View.VISIBLE
+        } else {
+            binding.tvDialpadCallerIdPreview.visibility = View.GONE
+        }
     }
 
     private fun updateT9Suggestions() {
@@ -345,13 +408,16 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
 
     private fun updateActionChips() {
         val clipboardNumber = readClipboardPhoneNumber()
+        val digitsCount = rawInput.count { it.isDigit() }
         val showPaste = rawInput.isEmpty() && !clipboardNumber.isNullOrBlank()
-        val showSaveContact = rawInput.filter { it.isDigit() }.length >= 3
+        val showSaveContact = digitsCount >= 3
+        val showLookup = digitsCount >= 4 && !rawInput.contains("*") && !rawInput.contains("#")
 
         binding.chipPasteNumber.visibility = if (showPaste) View.VISIBLE else View.GONE
         binding.chipAddContact.visibility = if (showSaveContact) View.VISIBLE else View.GONE
+        binding.chipLookupCallerId.visibility = if (showLookup) View.VISIBLE else View.GONE
         binding.layoutDialpadChips.visibility =
-            if (showPaste || showSaveContact) View.VISIBLE else View.GONE
+            if (showPaste || showSaveContact || showLookup) View.VISIBLE else View.GONE
     }
 
     private fun readClipboardPhoneNumber(): String? {
@@ -364,6 +430,8 @@ class DialpadBottomSheetFragment : BottomSheetDialogFragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        liveLookupJob?.cancel()
+        liveLookupJob = null
         toneGenerator?.release()
         toneGenerator = null
         _binding = null

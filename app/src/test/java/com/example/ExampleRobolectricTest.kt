@@ -51,16 +51,16 @@ class ExampleRobolectricTest {
         prefs.firstLaunchTime = startTime
         prefs.isPremiumUser = false
 
-        // Day 0 -> 7 days remaining, access granted
+        // Day 0 -> 7 days remaining, recording stays strictly Premium-only
         assertFalse(prefs.isTrialExpired(startTime))
         assertEquals(7, prefs.getTrialDaysRemaining(startTime))
-        assertTrue(prefs.hasRecordingAccess(startTime))
+        assertFalse(prefs.hasRecordingAccess(startTime))
 
-        // Day 5 -> 2 days remaining, access granted
+        // Day 5 -> 2 days remaining, recording stays strictly Premium-only
         val dayFive = startTime + (5L * DialerPreferences.ONE_DAY_MILLIS)
         assertFalse(prefs.isTrialExpired(dayFive))
         assertEquals(2, prefs.getTrialDaysRemaining(dayFive))
-        assertTrue(prefs.hasRecordingAccess(dayFive))
+        assertFalse(prefs.hasRecordingAccess(dayFive))
 
         // Day 8 -> expired, recording locked for free user
         val dayEight = startTime + (8L * DialerPreferences.ONE_DAY_MILLIS)
@@ -227,9 +227,9 @@ class ExampleRobolectricTest {
         subscriptionManager.firstLaunchTime = baseTime
         subscriptionManager.isPaidUser = false
 
-        // Within 7-day trial -> active and features unlocked
+        // Within 7-day trial -> trial active, premium features strictly locked for unpaid user
         assertTrue(subscriptionManager.isSubscriptionActive(baseTime))
-        assertFalse(subscriptionManager.isFeatureLocked(baseTime))
+        assertTrue(subscriptionManager.isFeatureLocked(baseTime))
         assertEquals(7, subscriptionManager.getTrialDaysRemaining(baseTime))
 
         val daySix = baseTime + (6L * com.example.billing.SubscriptionManager.ONE_DAY_MILLIS)
@@ -1289,7 +1289,7 @@ class ExampleRobolectricTest {
         val threeDaysAgo = nowMs - 3L * DialerPreferences.ONE_DAY_MILLIS
         val eightDaysAgo = nowMs - 8L * DialerPreferences.ONE_DAY_MILLIS
 
-        // 1. Active 7-day trial (3 days used -> 4 days remaining)
+        // 1. Non-premium user during trial: normal calling & contacts allowed, recording strictly Premium-only
         val activeTrialState = com.example.billing.SubscriptionEnforcementService.evaluateNodeState(
             uid = "u_enf_1",
             subscriptionStatus = "trial",
@@ -1301,11 +1301,11 @@ class ExampleRobolectricTest {
         assertFalse(activeTrialState.isTrialExpired)
         assertEquals(4, activeTrialState.trialDaysRemaining)
         assertTrue(activeTrialState.isSubscriptionActive)
-        assertTrue(activeTrialState.isRecordingAllowed)
+        assertFalse(activeTrialState.isRecordingAllowed)
         assertFalse(activeTrialState.shouldRestrictUiToAccountTab)
-        assertEquals("Free Trial Active (4 days left)", activeTrialState.statusBannerText)
+        assertEquals("Free Plan — Upgrade to Pro for Recording, Dark Mode & 3D Themes", activeTrialState.statusBannerText)
 
-        // 2. Expired 7-day trial (8 days used, isPremium = false -> restricted)
+        // 2. Non-premium user after 7 days: normal calling & contacts stay usable, recording stays locked
         val expiredTrialState = com.example.billing.SubscriptionEnforcementService.evaluateNodeState(
             uid = "u_enf_1",
             subscriptionStatus = "trial",
@@ -1318,8 +1318,8 @@ class ExampleRobolectricTest {
         assertEquals(0, expiredTrialState.trialDaysRemaining)
         assertFalse(expiredTrialState.isSubscriptionActive)
         assertFalse(expiredTrialState.isRecordingAllowed)
-        assertTrue(expiredTrialState.shouldRestrictUiToAccountTab)
-        assertEquals("Trial Expired - Upgrade to Pro (₹299/month)", expiredTrialState.statusBannerText)
+        assertFalse(expiredTrialState.shouldRestrictUiToAccountTab)
+        assertEquals("Free Plan — Upgrade to Pro for Recording, Dark Mode & 3D Themes", expiredTrialState.statusBannerText)
 
         // 3. Pending UTR approval
         val pendingState = com.example.billing.SubscriptionEnforcementService.evaluateNodeState(
@@ -1362,7 +1362,7 @@ class ExampleRobolectricTest {
         assertFalse(revokedState.isPremium)
         assertFalse(revokedState.isSubscriptionActive)
         assertFalse(revokedState.isRecordingAllowed)
-        assertTrue(revokedState.shouldRestrictUiToAccountTab)
+        assertFalse(revokedState.shouldRestrictUiToAccountTab)
         assertFalse(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(context, nowMs))
 
         // 6. Admin blocks user: /users/{uid}/isBlocked = true
@@ -1377,6 +1377,7 @@ class ExampleRobolectricTest {
         assertTrue(blockedState.isBlocked)
         assertFalse(blockedState.isSubscriptionActive)
         assertFalse(blockedState.isRecordingAllowed)
+        assertTrue(blockedState.shouldRestrictUiToAccountTab)
         assertEquals("Account Blocked by Admin", blockedState.statusBannerText)
     }
 
@@ -1596,7 +1597,7 @@ class ExampleRobolectricTest {
         assertFalse(revokedViaPremiumFlag.isPremium)
         assertFalse(revokedViaPremiumFlag.isSubscriptionActive)
         assertFalse(revokedViaPremiumFlag.isRecordingAllowed)
-        assertTrue(revokedViaPremiumFlag.shouldRestrictUiToAccountTab)
+        assertFalse(revokedViaPremiumFlag.shouldRestrictUiToAccountTab)
 
         // 3. Re-grant Pro, then revoke via single-node /users/{uid}/subscriptionStatus -> "expired"
         com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
@@ -1613,7 +1614,7 @@ class ExampleRobolectricTest {
         assertFalse(revokedViaStatusNode.isPremium)
         assertFalse(revokedViaStatusNode.isSubscriptionActive)
         assertFalse(revokedViaStatusNode.isRecordingAllowed)
-        assertTrue(revokedViaStatusNode.shouldRestrictUiToAccountTab)
+        assertFalse(revokedViaStatusNode.shouldRestrictUiToAccountTab)
 
         com.example.billing.SubscriptionEnforcementService.stopMonitoring()
     }
@@ -1948,7 +1949,7 @@ class ExampleRobolectricTest {
             repeat(25) { step ->
                 val checkNow = nowMs + (step + 1) * 50L
                 assertFalse(com.example.billing.SubscriptionEnforcementService.shouldRestrictUi(app, checkNow))
-                assertTrue(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(app, checkNow))
+                assertFalse(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(app, checkNow))
             }
             assertEquals("No redundant StateFlow emissions should occur when nothing materially changed", initialEmissions, emissions)
 
@@ -2798,18 +2799,22 @@ class ExampleRobolectricTest {
         assertEquals(null, com.example.data.SimNumberHelper.cleanPhoneNumber("0000000000"))
         assertEquals(null, com.example.data.SimNumberHelper.resolveDeviceSimNumber(app))
 
-        // 2. CallerIdResolver resolves unknown caller name, helpline, and location
+        // 2. CallerIdResolver resolves unknown caller name, helpline, and deterministic structured location (zero randomness)
         val unknownMobile = com.example.telecom.CallerIdResolver.resolveInstant("+91 98765 43210")
         assertTrue(unknownMobile.isUnknownNumber)
         assertEquals("Unknown Caller", unknownMobile.displayName)
-        assertEquals("Delhi NCR, India", unknownMobile.location)
+        assertEquals("Chandigarh, Punjab 160001, India", unknownMobile.location)
+        assertEquals("Chandigarh", unknownMobile.city)
+        assertEquals("Punjab", unknownMobile.state)
+        assertEquals("160001", unknownMobile.postalCode)
+        assertEquals("India", unknownMobile.country)
 
         val cyberHelpline = com.example.telecom.CallerIdResolver.resolveInstant("1930")
         assertTrue(cyberHelpline.isUnknownNumber)
         assertEquals("Cyber Crime Helpline (1930)", cyberHelpline.displayName)
 
-        assertEquals("Mumbai • Maharashtra, India", com.example.telecom.CallerIdResolver.resolveLocation("02226543210"))
-        assertEquals("USA / Canada (+1)", com.example.telecom.CallerIdResolver.resolveLocation("+14155552671"))
+        assertEquals("Mumbai, Maharashtra 400001, India", com.example.telecom.CallerIdResolver.resolveLocation("02226543210"))
+        assertEquals("San Francisco, California 94102, United States", com.example.telecom.CallerIdResolver.resolveLocation("+14155552671"))
 
         // 3. In-Call XML contains caller location label & Caller ID popup card with dismiss control
         val inCallRoot = android.view.LayoutInflater.from(themedContext).inflate(R.layout.activity_in_call, null)
@@ -3617,9 +3622,403 @@ class ExampleRobolectricTest {
         prefs.userEmail = "spoofed@gmail.com"
         assertFalse(com.example.data.firebase.GoogleAuthHelper.isUserAuthenticated(app))
 
+        // 8. Verify Enhanced 3D Color Mixing, Incoming Call 3D Popup, Slide-to-Answer & Top Pull-Down 3D Call Info Popup
+        com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+        com.example.data.firebase.RealtimeSyncManager.stop()
+        prefs.adminBlockedUser = false
+        prefs.isPremiumUser = true
+        prefs.subscriptionExpiresAtMs = System.currentTimeMillis() + DialerPreferences.ONE_MONTH_MILLIS
+        prefs.selectedThemePaletteId = com.example.ui.theme.AppThemePalette.CYBER_NEON_3D.id
+        assertTrue(cyber.create3DGlassCardDrawable(24f) != null)
+        assertEquals(
+            com.example.ui.theme.AppThemePalette.CYBER_NEON_3D,
+            com.example.ui.theme.ThemeStudioManager.resolveInCall3DPalette(prefs)
+        )
+        prefs.isPremiumUser = false
+        prefs.subscriptionExpiresAtMs = 0L
+        assertEquals(
+            com.example.ui.theme.AppThemePalette.AURORA_3D_MIX,
+            com.example.ui.theme.ThemeStudioManager.resolveInCall3DPalette(prefs)
+        )
+
+        val inCallRoot = inflater.inflate(R.layout.activity_in_call, null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.layout_top_pull_handle) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.card_top_3d_popup_drawer) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_drawer_live_timer) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_drawer_sim_info) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_drawer_audio_route) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_drawer_mic_status) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.tv_drawer_recording_status) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.view_incoming_pulse_outer) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.view_incoming_pulse_inner) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.layout_slide_to_answer_track) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.btn_slide_answer_thumb) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.card_incoming_actions_dock) != null)
+        assertTrue(inCallRoot.findViewById<android.view.View>(R.id.card_active_controls_deck) != null)
+
+        val notifCompact = inflater.inflate(R.layout.notification_call_3d_compact, null)
+        assertTrue(notifCompact.findViewById<android.widget.Chronometer>(R.id.chrono_notif_compact_timer) != null)
+        assertTrue(notifCompact.findViewById<android.widget.TextView>(R.id.tv_notif_compact_name) != null)
+
+        val notifPopup = inflater.inflate(R.layout.notification_call_3d_popup, null)
+        assertTrue(notifPopup.findViewById<android.widget.Chronometer>(R.id.chrono_notif_call_timer) != null)
+        assertTrue(notifPopup.findViewById<android.widget.TextView>(R.id.tv_notif_popup_details) != null)
+        assertTrue(notifPopup.findViewById<android.widget.Button>(R.id.btn_notif_mute) != null)
+        assertTrue(notifPopup.findViewById<android.widget.Button>(R.id.btn_notif_speaker) != null)
+        assertTrue(notifPopup.findViewById<android.widget.Button>(R.id.btn_notif_end) != null)
+
+        assertEquals(
+            "com.example.telecom.ACTION_TOGGLE_MUTE",
+            com.example.telecom.CallNotificationActionReceiver.ACTION_TOGGLE_MUTE
+        )
+        assertEquals(
+            "com.example.telecom.ACTION_TOGGLE_SPEAKER",
+            com.example.telecom.CallNotificationActionReceiver.ACTION_TOGGLE_SPEAKER
+        )
+
         shadowAccountManager.removeAllAccounts()
     }
+
+    @Test
+    fun `admin premium grant heals clock skew and tamper flags, free tier stays light without recording, and premium dark mode persists across syncs`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val prefs = DialerPreferences(app)
+        val nowMs = System.currentTimeMillis()
+
+        // 1. Free user: strictly simple light theme, no recording, no 3D themes, no dark mode — calling/contacts remain open
+        prefs.applyEnforcementBatch(
+            isPremium = false,
+            isBlocked = false,
+            subscriptionExpiresAtMs = 0L,
+            bonusTrialDays = 0
+        )
+        prefs.displayThemeMode = androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+        prefs.selectedThemePaletteId = com.example.ui.theme.AppThemePalette.CYBER_NEON_3D.id
+
+        assertFalse(prefs.isPremiumActive(nowMs))
+        assertFalse(prefs.hasRecordingAccess(nowMs))
+        assertFalse(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(app, nowMs))
+        assertFalse(com.example.ui.theme.ThemeStudioManager.isUserEntitledToPremiumThemes(prefs))
+        assertEquals(
+            com.example.ui.theme.AppThemePalette.EMERALD_PULSE,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectivePalette(prefs)
+        )
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectiveNightMode(prefs)
+        )
+
+        // 2. Simulate sticky future clock skew + tamperDetected + trialBlockedByDevice before Admin approves Premium
+        prefs.tamperDetected = true
+        prefs.trialBlockedByDevice = true
+        prefs.lastSeenTimeMs = nowMs + 60L * DialerPreferences.ONE_DAY_MILLIS
+
+        val grantedState = com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+            context = app,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            isPremium = true,
+            isBlocked = false,
+            installDateMs = nowMs - 15L * DialerPreferences.ONE_DAY_MILLIS,
+            subscriptionExpiresAtMs = nowMs + DialerPreferences.ONE_MONTH_MILLIS,
+            nowMs = nowMs
+        )
+        assertTrue(grantedState.isPremium)
+        assertTrue(grantedState.isRecordingAllowed)
+        assertFalse(prefs.tamperDetected)
+        assertFalse(prefs.trialBlockedByDevice)
+        assertTrue(prefs.isPremiumActive(nowMs))
+        assertTrue(prefs.hasRecordingAccess(nowMs))
+        assertTrue(com.example.billing.SubscriptionEnforcementService.canStartCallRecording(app, nowMs))
+        assertTrue(com.example.ui.theme.ThemeStudioManager.isUserEntitledToPremiumThemes(prefs))
+
+        // 3. Premium user enables Dark Mode: must NOT revert to Light Mode on AppConfig or stale cloud entitlement syncs
+        val settingsManager = com.example.data.firebase.SettingsManager(
+            db = null,
+            auth = null,
+            prefs = prefs
+        )
+        settingsManager.setThemeMode(androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES)
+        assertTrue(prefs.hasLocalThemeCustomization)
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectiveNightMode(prefs)
+        )
+
+        // Simulate global AppConfig sync attempting to force light theme
+        prefs.applyAppConfig(
+            com.example.data.firebase.AppConfig(
+                forceThemeMode = com.example.data.firebase.AppConfig.THEME_LIGHT
+            )
+        )
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES,
+            prefs.displayThemeMode
+        )
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectiveNightMode(prefs)
+        )
+
+        // Simulate stale RTDB/Firestore entitlement snapshot containing themeMode = "light"
+        val staleLightEntitlement = com.example.data.firebase.UserEntitlement(
+            userId = "u_prem_dark",
+            isPremiumUser = true,
+            subscriptionStatus = com.example.data.firebase.UserEntitlement.STATUS_ACTIVE,
+            subscriptionExpiresAt = com.google.firebase.Timestamp(java.util.Date(nowMs + DialerPreferences.ONE_MONTH_MILLIS)),
+            themeMode = com.example.data.firebase.UserEntitlement.THEME_LIGHT
+        )
+        com.example.data.firebase.SettingsManager.applyRtdbUserEntitlement(staleLightEntitlement, prefs)
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES,
+            prefs.displayThemeMode
+        )
+        assertEquals(
+            androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES,
+            com.example.ui.theme.ThemeStudioManager.resolveEffectiveNightMode(prefs)
+        )
+    }
+
+    @Test
+    fun `floating 3D call pill supports 3-stage incoming animation, 55 percent sideways drag controls, active call bar, and reverse dismiss`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedCtx = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val inflater = android.view.LayoutInflater.from(themedCtx)
+
+        // 1. Verify both InCallActivity and MainActivity layouts inflate with Floating3DCallPillView
+        val inCallRoot = inflater.inflate(R.layout.activity_in_call, null)
+        val inCallPill = inCallRoot.findViewById<com.example.ui.incall.Floating3DCallPillView>(R.id.floating_3d_call_pill)
+        assertTrue(inCallPill != null)
+
+        val mainRoot = inflater.inflate(R.layout.activity_main, null)
+        val mainPill = mainRoot.findViewById<com.example.ui.incall.Floating3DCallPillView>(R.id.floating_3d_call_pill)
+        assertTrue(mainPill != null)
+
+        // 2. Verify exact spec constants & responsive 94% width calculation
+        assertEquals(76f, com.example.ui.incall.Floating3DCallPillView.PILL_HEIGHT_DP)
+        assertEquals(64f, com.example.ui.incall.Floating3DCallPillView.COLLAPSED_WIDTH_DP)
+        assertEquals(38f, com.example.ui.incall.Floating3DCallPillView.PILL_CORNER_RADIUS_DP)
+        assertEquals(52f, com.example.ui.incall.Floating3DCallPillView.JEWEL_BUTTON_SIZE_DP)
+        assertEquals(0.94f, com.example.ui.incall.Floating3DCallPillView.MAX_WIDTH_FRACTION)
+        assertEquals(450L, com.example.ui.incall.Floating3DCallPillView.STAGE_1_DROP_MS)
+        assertEquals(1050L, com.example.ui.incall.Floating3DCallPillView.STAGE_2_UNFOLD_MS)
+        assertEquals(0.55f, com.example.ui.incall.Floating3DCallPillView.DRAG_TRIGGER_THRESHOLD)
+
+        val pill = com.example.ui.incall.Floating3DCallPillView(themedCtx)
+        val expectedWidth400 = pill.computeExpandedWidthPx(400)
+        assertEquals(376f, expectedWidth400, 1.5f)
+
+        // Measure and layout on a compact 400px phone width
+        pill.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(400, android.view.View.MeasureSpec.AT_MOST),
+            android.view.View.MeasureSpec.makeMeasureSpec(300, android.view.View.MeasureSpec.AT_MOST)
+        )
+        pill.layout(0, 0, pill.measuredWidth, pill.measuredHeight)
+
+        var answered = 0
+        var declined = 0
+        var muteToggled = 0
+        var speakerToggled = 0
+        var ended = 0
+        var dismissed = 0
+
+        pill.listener = object : com.example.ui.incall.Floating3DCallPillView.CallPillListener {
+            override fun onAnswerCall() { answered++ }
+            override fun onDeclineCall() { declined++ }
+            override fun onToggleMute() { muteToggled++ }
+            override fun onToggleSpeaker() { speakerToggled++ }
+            override fun onEndCall() { ended++ }
+            override fun onDismissAnimationComplete() { dismissed++ }
+        }
+
+        // 3. Stage 1 -> Stage 2 -> Stage 3 incoming choreography
+        pill.showIncomingCall("Aarav Sharma", "+91 98765 43210")
+        assertEquals(android.view.View.VISIBLE, pill.visibility)
+        assertEquals(
+            com.example.ui.incall.Floating3DCallPillView.PillMode.STAGE_1_DROP,
+            pill.currentMode
+        )
+
+        // 4. Sideways drag-to-answer (Green right) and 55% threshold status text switching
+        pill.applyDragProgressForTestOrGesture(
+            com.example.ui.incall.Floating3DCallPillView.DragSide.ANSWER_GREEN,
+            0.30f
+        )
+        assertEquals(themedCtx.getString(R.string.incall_pill_slide_to_answer), pill.lastStatusMessage)
+
+        pill.applyDragProgressForTestOrGesture(
+            com.example.ui.incall.Floating3DCallPillView.DragSide.ANSWER_GREEN,
+            0.60f
+        )
+        assertEquals(themedCtx.getString(R.string.incall_pill_release_to_answer), pill.lastStatusMessage)
+        pill.completeDragAction(com.example.ui.incall.Floating3DCallPillView.DragSide.ANSWER_GREEN)
+        assertEquals(1, answered)
+
+        // 5. Sideways drag-to-decline (Red left) and 55% threshold status text switching
+        pill.applyDragProgressForTestOrGesture(
+            com.example.ui.incall.Floating3DCallPillView.DragSide.DECLINE_RED,
+            0.35f
+        )
+        assertEquals(themedCtx.getString(R.string.incall_pill_slide_to_decline), pill.lastStatusMessage)
+
+        pill.applyDragProgressForTestOrGesture(
+            com.example.ui.incall.Floating3DCallPillView.DragSide.DECLINE_RED,
+            0.62f
+        )
+        assertEquals(themedCtx.getString(R.string.incall_pill_release_to_decline), pill.lastStatusMessage)
+        pill.completeDragAction(com.example.ui.incall.Floating3DCallPillView.DragSide.DECLINE_RED)
+        assertEquals(1, declined)
+
+        // 6. Tap-to-nudge hint flashes "Drag sideways"
+        pill.triggerTapToNudgeHint(com.example.ui.incall.Floating3DCallPillView.DragSide.ANSWER_GREEN)
+        assertEquals(themedCtx.getString(R.string.incall_pill_drag_sideways), pill.lastStatusMessage)
+
+        // 7. Active "On Call" compact bar morph + Mute / Speaker / End Call callbacks
+        pill.morphToActiveCallBar(
+            callerName = "Aarav Sharma",
+            formattedTimer = "01:24",
+            isMuted = false,
+            isSpeakerOn = true,
+            isBluetooth = false
+        )
+        assertEquals(
+            com.example.ui.incall.Floating3DCallPillView.PillMode.ACTIVE_CALL,
+            pill.currentMode
+        )
+        pill.findViewById<android.view.View>(R.id.btn_pill_active_mute).performClick()
+        pill.findViewById<android.view.View>(R.id.btn_pill_active_speaker).performClick()
+        pill.findViewById<android.view.View>(R.id.btn_pill_active_end).performClick()
+        assertEquals(1, muteToggled)
+        assertEquals(1, speakerToggled)
+        assertEquals(1, ended)
+
+        // 8. Reverse dismiss animation starts cleanly into DISMISSING state
+        var finishCallbackFired = false
+        pill.dismissWithReverseAnimation { finishCallbackFired = true }
+        assertEquals(
+            com.example.ui.incall.Floating3DCallPillView.PillMode.DISMISSING,
+            pill.currentMode
+        )
+        pill.hideImmediately()
+        assertEquals(
+            com.example.ui.incall.Floating3DCallPillView.PillMode.HIDDEN,
+            pill.currentMode
+        )
+        assertEquals(android.view.View.GONE, pill.visibility)
+        // Avoid unused local warning
+        assertFalse(finishCallbackFired && dismissed < 0)
+    }
+
+    @Test
+    fun `full-screen 3D smoked-sapphire incoming and active call UI inflates all sections and runs sideways drag dock physics`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val themedCtx = android.view.ContextThemeWrapper(app, R.style.Theme_PulseDial)
+        val inflater = android.view.LayoutInflater.from(themedCtx)
+
+        val root = inflater.inflate(R.layout.activity_in_call, null)
+
+        // 1. Aurora Backdrop (with dynamic Record/Hold ambient states), Minimized Top Bar, Header Minimize & Smart Status Pill
+        val aurora = root.findViewById<com.example.ui.incall.AuroraSilkBackdropView>(R.id.aurora_backdrop)
+        assertTrue(aurora != null)
+        aurora!!.setRecordingAmbient(true)
+        assertTrue(aurora.isRecordingAmbientActive)
+        aurora.setHoldAmbient(true)
+        assertTrue(aurora.isHoldAmbientActive)
+        aurora.setRecordingAmbient(false)
+        aurora.setHoldAmbient(false)
+        assertFalse(aurora.isRecordingAmbientActive)
+        assertFalse(aurora.isHoldAmbientActive)
+
+        assertTrue(root.findViewById<com.example.ui.incall.Floating3DCallPillView>(R.id.floating_3d_call_pill) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_minimize) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.layout_smart_status_pill) != null)
+        assertTrue(root.findViewById<android.widget.TextView>(R.id.tv_incall_hd_badge) != null)
+        assertTrue(root.findViewById<android.widget.TextView>(R.id.tv_smart_sim_network_badge) != null)
+        assertTrue(root.findViewById<com.example.ui.incall.LiveSignalBarsView>(R.id.view_live_signal_bars) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.card_live_rec_pill) != null)
+        assertTrue(root.findViewById<android.widget.TextView>(R.id.tv_live_rec_timer) != null)
+
+        // 2. Center Caller Showcase: 116dp Voice-Reactive Liquid Avatar + Muted/Hold States + "Call on Hold" Badge + Live Waveform
+        val avatarView = root.findViewById<com.example.ui.incall.LiquidPlatinumAvatarView>(R.id.view_liquid_platinum_avatar)
+        assertTrue(avatarView != null)
+        assertEquals(116f, com.example.ui.incall.LiquidPlatinumAvatarView.AVATAR_CORE_SIZE_DP)
+        avatarView!!.setCallVisualState(ringing = false, active = true, muted = true, onHold = false)
+        assertTrue(avatarView.isActiveState)
+        assertTrue(avatarView.isMutedState)
+        assertFalse(avatarView.isOnHoldState)
+        avatarView.setCallVisualState(ringing = false, active = true, muted = false, onHold = true)
+        assertTrue(avatarView.isOnHoldState)
+        assertFalse(avatarView.isMutedState)
+        assertTrue(root.findViewById<android.widget.TextView>(R.id.tv_avatar_hold_badge) != null)
+        assertTrue(root.findViewById<com.example.ui.incall.LiveCallWaveformView>(R.id.view_live_call_waveform) != null)
+
+        // 3. Quick-Action Pills (Message + Silence) & Frosted Quick-Reply Tray
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incoming_quick_decline) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incoming_silence) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.card_quick_reply_tray) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.layout_quick_reply_list) != null)
+
+        // 4. Bottom 3D Sideways Drag Dock exact specs & 55% drag physics + tap-to-nudge
+        val dock = root.findViewById<com.example.ui.incall.SidewaysCallDragDockView>(R.id.sideways_drag_dock)
+        assertTrue(dock != null)
+        assertEquals(76f, com.example.ui.incall.SidewaysCallDragDockView.DOCK_HEIGHT_DP)
+        assertEquals(0.90f, com.example.ui.incall.SidewaysCallDragDockView.DOCK_WIDTH_FRACTION)
+        assertEquals(38f, com.example.ui.incall.SidewaysCallDragDockView.DOCK_CORNER_RADIUS_DP)
+        assertEquals(56f, com.example.ui.incall.SidewaysCallDragDockView.JEWEL_SIZE_DP)
+        assertEquals(0.55f, com.example.ui.incall.SidewaysCallDragDockView.DRAG_TRIGGER_THRESHOLD)
+        assertEquals(360f, dock.computeDockWidthPx(400), 1.5f)
+
+        dock.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(400, android.view.View.MeasureSpec.AT_MOST),
+            android.view.View.MeasureSpec.makeMeasureSpec(300, android.view.View.MeasureSpec.AT_MOST)
+        )
+        dock.layout(0, 0, dock.measuredWidth, dock.measuredHeight)
+
+        var dockAnswered = 0
+        var dockDeclined = 0
+        dock.listener = object : com.example.ui.incall.SidewaysCallDragDockView.DragDockListener {
+            override fun onAnswerCall() { dockAnswered++ }
+            override fun onDeclineCall() { dockDeclined++ }
+        }
+
+        dock.applyDragProgressForTestOrGesture(com.example.ui.incall.SidewaysCallDragDockView.DragSide.ANSWER_GREEN, 0.30f)
+        assertEquals(themedCtx.getString(R.string.incall_pill_slide_to_answer), dock.lastStatusMessage)
+        dock.applyDragProgressForTestOrGesture(com.example.ui.incall.SidewaysCallDragDockView.DragSide.ANSWER_GREEN, 0.60f)
+        assertEquals(themedCtx.getString(R.string.incall_pill_release_to_answer), dock.lastStatusMessage)
+        dock.completeDragAction(com.example.ui.incall.SidewaysCallDragDockView.DragSide.ANSWER_GREEN)
+        assertEquals(1, dockAnswered)
+
+        dock.applyDragProgressForTestOrGesture(com.example.ui.incall.SidewaysCallDragDockView.DragSide.DECLINE_RED, 0.35f)
+        assertEquals(themedCtx.getString(R.string.incall_pill_slide_to_decline), dock.lastStatusMessage)
+        dock.applyDragProgressForTestOrGesture(com.example.ui.incall.SidewaysCallDragDockView.DragSide.DECLINE_RED, 0.62f)
+        assertEquals(themedCtx.getString(R.string.incall_pill_release_to_decline), dock.lastStatusMessage)
+        dock.completeDragAction(com.example.ui.incall.SidewaysCallDragDockView.DragSide.DECLINE_RED)
+        assertEquals(1, dockDeclined)
+
+        dock.triggerTapToNudgeHint(com.example.ui.incall.SidewaysCallDragDockView.DragSide.ANSWER_GREEN)
+        assertEquals(themedCtx.getString(R.string.incall_pill_drag_sideways), dock.lastStatusMessage)
+
+        // 5. Sculpted 3D Smoked-Sapphire Control Dock + Speaker Ripple + Slide-Up DTMF Keypad w/ Backspace + Audio Output Sheet + Ruby-Glass End Call Pedestal
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_mute) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_keypad) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_speaker) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.view_speaker_ripple) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_add_call) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_hold_swap) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_record) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.tv_record_grid_rec_badge) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_keypad_close) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_dtmf_backspace) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.card_audio_output_sheet) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_audio_route_speaker) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_audio_route_earpiece) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_audio_route_bluetooth) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.view_end_call_breathing_glow) != null)
+        assertTrue(root.findViewById<android.view.View>(R.id.btn_incall_end) != null)
+        assertEquals(500L, com.example.ui.incall.InCallActivity.CALL_ENDED_HOLD_MS)
+    }
 }
+
+
 
 
 

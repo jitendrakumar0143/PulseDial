@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.provider.CallLog
 import android.text.format.DateUtils
 import android.view.View
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,7 +19,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.R
 import com.example.billing.SubscriptionManager
@@ -26,19 +30,22 @@ import com.example.data.CallLogEntry
 import com.example.data.ContactEntry
 import com.example.data.ContactsRepository
 import com.example.data.DialerPreferences
-import com.example.data.firebase.GoogleAuthHelper
+import com.example.data.firebase.CallerDirectoryProfile
+import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.data.firebase.SettingsManager
 import com.example.databinding.ActivityCallDetailBinding
+import com.example.telecom.CallerIdResolver
+import com.example.telecom.CallerIdentityInfo
 import com.example.telecom.DialerHelper
+import com.example.telecom.PhoneGeoDatabase
 import com.example.ui.MainActivity
 import com.example.ui.common.NumberHistoryAdapter
 import com.example.ui.common.SaveContactHelper
+import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.launch
 
 class CallDetailActivity : AppCompatActivity() {
@@ -52,6 +59,7 @@ class CallDetailActivity : AppCompatActivity() {
     private var phoneNumber: String = ""
     private var initialName: String? = null
     private var matchedContact: ContactEntry? = null
+    private var resolvedIdentity: CallerIdentityInfo? = null
     private var callHistoryList: List<CallLogEntry> = emptyList()
     private var pendingDeleteAction: (() -> Unit)? = null
 
@@ -227,15 +235,216 @@ class CallDetailActivity : AppCompatActivity() {
         binding.btnDeleteAllHistory.setOnClickListener {
             confirmDeleteAllHistory()
         }
+
+        // One-Tap Play-Compliant Social & Web Lookup Actions
+        binding.chipLookupWhatsapp.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_WHATSAPP, getString(R.string.caller_id_social_whatsapp))
+        }
+        binding.chipLookupTelegram.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_TELEGRAM, getString(R.string.caller_id_social_telegram))
+        }
+        binding.chipLookupFacebook.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_FACEBOOK, getString(R.string.caller_id_social_facebook))
+        }
+        binding.chipLookupInstagram.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_INSTAGRAM, getString(R.string.caller_id_social_instagram))
+        }
+        binding.chipLookupWeb.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_GOOGLE, getString(R.string.caller_id_social_web))
+        }
+        binding.btnVerifyCallerIdentity.setOnClickListener {
+            showVerifyCallerIdentityDialog()
+        }
+    }
+
+    private fun openSocialLookup(platform: String, label: String) {
+        val url = CallerIdResolver.buildSocialLookupUrl(platform, phoneNumber)
+        val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        val launched = runCatching {
+            startActivity(viewIntent)
+            true
+        }.getOrDefault(false)
+        if (!launched) {
+            Toast.makeText(
+                this,
+                getString(R.string.caller_id_lookup_open_failed, label),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun renderCallerIdentificationCard(identity: CallerIdentityInfo) {
+        resolvedIdentity = identity
+        val na = getString(R.string.caller_id_not_available)
+
+        binding.tvCallerIdSourceBadge.text = identity.sourceLabel.ifBlank { na }
+        val carrierLine = listOf(identity.carrier.trim(), identity.lineType.trim())
+            .filter { it.isNotEmpty() }
+            .joinToString(" • ")
+        binding.tvCallerIdCarrier.text = if (carrierLine.isNotEmpty()) {
+            "${getString(R.string.caller_id_label_carrier)}: $carrierLine"
+        } else {
+            "${getString(R.string.caller_id_label_carrier)}: $na"
+        }
+
+        binding.tvCallerIdCity.text = identity.city.ifBlank { na }
+        binding.tvCallerIdState.text = identity.state.ifBlank { na }
+        binding.tvCallerIdZip.text = identity.postalCode.ifBlank { na }
+        val countryDisplay = buildString {
+            append(identity.country.ifBlank { na })
+            if (identity.countryCode.isNotBlank() && identity.country.isNotBlank()) {
+                append(" (${identity.countryCode})")
+            }
+        }
+        binding.tvCallerIdCountry.text = countryDisplay
+
+        binding.chipGroupDetectedSocials.removeAllViews()
+        if (identity.socialProfiles.isEmpty()) {
+            binding.chipGroupDetectedSocials.visibility = View.GONE
+            binding.tvNoDetectedSocials.visibility = View.VISIBLE
+        } else {
+            binding.chipGroupDetectedSocials.visibility = View.VISIBLE
+            binding.tvNoDetectedSocials.visibility = View.GONE
+            identity.socialProfiles.forEach { profile ->
+                val chip = Chip(this).apply {
+                    val nameSuffix = profile.profileName.trim()
+                        .takeIf { it.isNotEmpty() && !it.equals(identity.displayName, ignoreCase = true) }
+                        ?.let { " ($it)" }
+                        .orEmpty()
+                    text = "${profile.platform} ✓$nameSuffix"
+                    isClickable = false
+                    isCheckable = false
+                }
+                binding.chipGroupDetectedSocials.addView(chip)
+            }
+        }
+    }
+
+    private fun showVerifyCallerIdentityDialog() {
+        val current = resolvedIdentity ?: CallerIdResolver.resolveInstant(phoneNumber, matchedContact?.name, initialName)
+        val density = resources.displayMetrics.density
+        val padH = (20f * density).toInt()
+        val padTop = (8f * density).toInt()
+        val spacing = (8f * density).toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padH, padTop, padH, 0)
+        }
+
+        val subtitleView = TextView(this).apply {
+            text = getString(R.string.caller_id_verify_dialog_subtitle)
+            setPadding(0, 0, 0, spacing)
+        }
+        container.addView(subtitleView)
+
+        fun createField(hintRes: Int, initialValue: String): TextInputEditText {
+            val til = TextInputLayout(this).apply {
+                hint = getString(hintRes)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = spacing }
+            }
+            val edit = TextInputEditText(til.context).apply {
+                setText(initialValue)
+                setSingleLine(true)
+            }
+            til.addView(edit)
+            container.addView(til)
+            return edit
+        }
+
+        val prefillName = if (current.isUnknownNumber && current.displayName.startsWith("Unknown")) {
+            ""
+        } else {
+            current.displayName
+        }
+        val etName = createField(R.string.caller_id_verify_hint_name, prefillName)
+        val etCity = createField(R.string.caller_id_verify_hint_city, current.city)
+        val etState = createField(R.string.caller_id_verify_hint_state, current.state)
+        val etZip = createField(
+            R.string.caller_id_verify_hint_zip,
+            current.postalCode.takeUnless { it.equals("N/A", ignoreCase = true) }.orEmpty()
+        )
+        val etCountry = createField(R.string.caller_id_verify_hint_country, current.country)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.caller_id_verify_dialog_title)
+            .setView(container)
+            .setPositiveButton(R.string.caller_id_verify_save) { _, _ ->
+                val verifiedName = etName.text?.toString()?.trim().orEmpty()
+                if (verifiedName.isEmpty()) {
+                    Toast.makeText(this, R.string.caller_id_verify_name_required, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val verifiedCity = etCity.text?.toString()?.trim().orEmpty()
+                val verifiedState = etState.text?.toString()?.trim().orEmpty()
+                val verifiedZip = etZip.text?.toString()?.trim().orEmpty()
+                val verifiedCountry = etCountry.text?.toString()?.trim().orEmpty()
+                val e164Key = PhoneGeoDatabase.toE164Digits(phoneNumber)
+
+                val profile = CallerDirectoryProfile(
+                    phoneKey = e164Key,
+                    displayName = verifiedName,
+                    city = verifiedCity,
+                    state = verifiedState,
+                    postalCode = verifiedZip,
+                    country = verifiedCountry,
+                    countryCode = current.countryCode,
+                    socialPlatforms = listOf("Verified Directory"),
+                    sourceLabel = "Verified Caller Directory"
+                )
+                CallerIdResolver.cacheVerifiedCallerProfile(profile)
+                RealtimeDatabaseSync.saveVerifiedCallerProfile(
+                    context = applicationContext,
+                    rawNumber = phoneNumber,
+                    displayName = verifiedName,
+                    city = verifiedCity,
+                    state = verifiedState,
+                    postalCode = verifiedZip,
+                    country = verifiedCountry,
+                    countryCode = current.countryCode,
+                    socialPlatforms = listOf("Verified Directory"),
+                    submittedByUid = RealtimeSyncManager.syncState.value.uid.orEmpty()
+                )
+                Toast.makeText(
+                    this,
+                    getString(R.string.caller_id_verify_saved_toast, verifiedName),
+                    Toast.LENGTH_SHORT
+                ).show()
+                loadDetailsAndHistory()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
     }
 
     private fun loadDetailsAndHistory() {
+        // Immediate deterministic offline render first (zero wait, zero randomness)
+        renderCallerIdentificationCard(
+            CallerIdResolver.resolveInstant(
+                rawNumber = phoneNumber,
+                savedContactName = matchedContact?.name,
+                telecomDisplayName = initialName
+            )
+        )
+
         lifecycleScope.launch {
             matchedContact = repository.lookupContactByNumber(phoneNumber)
             callHistoryList = repository.getCallHistoryForNumber(phoneNumber)
+            val identity = CallerIdResolver.resolveWithDeviceAsync(
+                context = applicationContext,
+                rawNumber = phoneNumber,
+                telecomDisplayName = initialName
+            )
             if (isFinishing || isDestroyed) return@launch
 
+            renderCallerIdentificationCard(identity)
+
             val displayName = matchedContact?.name
+                ?: identity.displayName.takeIf {
+                    it.isNotBlank() && !it.equals("Unknown Caller", ignoreCase = true)
+                }
                 ?: initialName?.takeIf { it.isNotBlank() }
                 ?: getString(R.string.detail_unsaved_number)
 

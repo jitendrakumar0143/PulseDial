@@ -270,6 +270,15 @@
         app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav_menu" />
 
+    <!-- Ultra-Premium 3D Floating Dynamic Island Incoming & Active Call Popup -->
+    <com.example.ui.incall.Floating3DCallPillView
+        android:id="@+id/floating_3d_call_pill"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:elevation="20dp"
+        android:visibility="gone" />
+
     <!-- Full-Screen "Account Blocked by Admin" Real-Time Overlay -->
     <FrameLayout
         android:id="@+id/blocked_overlay_container"

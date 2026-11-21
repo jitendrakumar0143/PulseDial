@@ -3,6 +3,7 @@ package com.example.ui.history
 import android.provider.CallLog
 import android.text.format.DateUtils
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
@@ -11,6 +12,9 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.R
 import com.example.data.CallLogEntry
 import com.example.databinding.ItemCallLogBinding
+import com.example.telecom.CallerIdResolver
+import com.example.telecom.CallerIdentityInfo
+import com.example.telecom.PhoneGeoDatabase
 import com.example.ui.common.ContactThumbnailLoader
 
 class CallLogAdapter(
@@ -18,6 +22,15 @@ class CallLogAdapter(
     private val onCallClick: (CallLogEntry) -> Unit,
     private val onBlockClick: (CallLogEntry) -> Unit
 ) : ListAdapter<CallLogEntry, CallLogAdapter.CallLogViewHolder>(DiffCallback) {
+
+    private var resolvedIdentities: Map<String, CallerIdentityInfo> = emptyMap()
+
+    fun updateResolvedIdentities(identities: Map<String, CallerIdentityInfo>) {
+        resolvedIdentities = identities
+        if (itemCount > 0) {
+            notifyItemRangeChanged(0, itemCount)
+        }
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CallLogViewHolder {
         val binding = ItemCallLogBinding.inflate(LayoutInflater.from(parent.context), parent, false)
@@ -34,7 +47,18 @@ class CallLogAdapter(
 
         fun bind(entry: CallLogEntry) {
             val ctx = binding.root.context
-            val title = entry.name ?: entry.number
+            val key = PhoneGeoDatabase.toE164Digits(entry.number)
+            val identity = resolvedIdentities[key] ?: CallerIdResolver.resolveInstant(
+                rawNumber = entry.number,
+                savedContactName = entry.name
+            )
+            val resolvedRealName = entry.name?.takeIf { it.isNotBlank() }
+                ?: identity.displayName.takeIf {
+                    it.isNotBlank() &&
+                        !it.equals("Unknown Caller", ignoreCase = true) &&
+                        !it.equals("Private / Hidden Number", ignoreCase = true)
+                }
+            val title = resolvedRealName ?: entry.number
             binding.tvCallerName.text = title
             binding.tvAvatarInitial.text = title.firstOrNull()?.uppercaseChar()?.toString() ?: "#"
             ContactThumbnailLoader.bindAvatar(
@@ -67,7 +91,7 @@ class CallLogAdapter(
                 ""
             }
             val typeLabel = ctx.getString(labelRes)
-            val subNumber = if (entry.name != null) "${entry.number} • " else ""
+            val subNumber = if (resolvedRealName != null) "${entry.number} • " else ""
             val shieldBadge = if (entry.name == null &&
                 com.example.data.DialerPreferences(ctx).isRejectedByShield(entry.number)
             ) {
@@ -76,6 +100,18 @@ class CallLogAdapter(
                 ""
             }
             binding.tvCallMeta.text = "$subNumber$typeLabel • $relTime$durationText$shieldBadge"
+
+            val geoLine = if (identity.geo.hasLocation) identity.structuredLocationLine() else ""
+            val socialLine = identity.socialBadgesSummary()
+            val locationAndSocial = listOf(geoLine, socialLine)
+                .filter { it.isNotBlank() && it != CallerIdResolver.UNKNOWN_LOCATION }
+                .joinToString(" • ")
+            if (locationAndSocial.isNotEmpty()) {
+                binding.tvCallerLocationLine.text = locationAndSocial
+                binding.tvCallerLocationLine.visibility = View.VISIBLE
+            } else {
+                binding.tvCallerLocationLine.visibility = View.GONE
+            }
 
             binding.root.setOnClickListener { onRowClick(entry) }
             binding.btnCallBack.setOnClickListener { onCallClick(entry) }

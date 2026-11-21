@@ -19,9 +19,13 @@ import com.example.data.CallLogEntry
 import com.example.data.ContactsRepository
 import com.example.data.firebase.SettingsManager
 import com.example.databinding.FragmentHistoryBinding
+import com.example.telecom.CallerIdResolver
+import com.example.telecom.CallerIdentityInfo
 import com.example.telecom.DialerHelper
+import com.example.telecom.PhoneGeoDatabase
 import com.example.ui.MainActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -41,6 +45,8 @@ class HistoryFragment : Fragment() {
 
     private var skipNextResumeReload = false
     private var allRecentCalls: List<CallLogEntry> = emptyList()
+    private var resolvedCallersMap: MutableMap<String, CallerIdentityInfo> = mutableMapOf()
+    private var enrichmentJob: Job? = null
     private var homeDialInput: String = ""
     private var isHomeKeypadExpanded: Boolean = false
 
@@ -253,6 +259,37 @@ class HistoryFragment : Fragment() {
             binding.tilHistorySearch.visibility = View.VISIBLE
             binding.recyclerHistory.visibility = View.VISIBLE
             applyCallLogFilter(binding.etHistorySearch.text?.toString().orEmpty())
+            enrichRecentCallersAsync(allRecentCalls)
+        }
+    }
+
+    private fun enrichRecentCallersAsync(calls: List<CallLogEntry>) {
+        enrichmentJob?.cancel()
+        val appCtx = context?.applicationContext ?: return
+        val uniqueNumbers = calls.asSequence()
+            .map { it.number.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { PhoneGeoDatabase.toE164Digits(it) }
+            .take(25)
+            .toList()
+        if (uniqueNumbers.isEmpty()) return
+
+        enrichmentJob = viewLifecycleOwner.lifecycleScope.launch {
+            val updated = HashMap(resolvedCallersMap)
+            var changed = false
+            for (number in uniqueNumbers) {
+                val key = PhoneGeoDatabase.toE164Digits(number)
+                if (key.isEmpty()) continue
+                val info = CallerIdResolver.resolveWithDeviceAsync(appCtx, number)
+                if (updated[key] != info) {
+                    updated[key] = info
+                    changed = true
+                }
+            }
+            if (changed && _binding != null) {
+                resolvedCallersMap = updated
+                callLogAdapter.updateResolvedIdentities(updated)
+            }
         }
     }
 

@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Material 3 Light Palette: Deep Navy + Electric Teal -->
-    <color name="md_theme_primary">#0F766E</color>
+    <!-- Material 3 Light Palette: Crisp Alabaster + Deep Ink + Studio Emerald Teal -->
+    <color name="md_theme_primary">#0D736A</color>
     <color name="md_theme_onPrimary">#FFFFFF</color>
-    <color name="md_theme_primaryContainer">#CCFBF1</color>
-    <color name="md_theme_onPrimaryContainer">#042F2E</color>
+    <color name="md_theme_primaryContainer">#DDF7F2</color>
+    <color name="md_theme_onPrimaryContainer">#062D2A</color>
 
     <color name="md_theme_secondary">#1E3A5F</color>
     <color name="md_theme_onSecondary">#FFFFFF</color>
-    <color name="md_theme_secondaryContainer">#DBEAFE</color>
-    <color name="md_theme_onSecondaryContainer">#0D1B2A</color>
+    <color name="md_theme_secondaryContainer">#DCEBFE</color>
+    <color name="md_theme_onSecondaryContainer">#0B192C</color>
 
-    <color name="md_theme_tertiary">#D97706</color>
+    <color name="md_theme_tertiary">#C26A06</color>
     <color name="md_theme_onTertiary">#FFFFFF</color>
     <color name="md_theme_tertiaryContainer">#FEF3C7</color>
-    <color name="md_theme_onTertiaryContainer">#451A03</color>
+    <color name="md_theme_onTertiaryContainer">#421A03</color>
 
-    <color name="md_theme_background">#F6F8FB</color>
-    <color name="md_theme_onBackground">#0F172A</color>
+    <color name="md_theme_background">#F4F7FB</color>
+    <color name="md_theme_onBackground">#0B1220</color>
     <color name="md_theme_surface">#FFFFFF</color>
-    <color name="md_theme_onSurface">#0F172A</color>
+    <color name="md_theme_onSurface">#0B1220</color>
     <color name="md_theme_surfaceVariant">#E2E8F0</color>
-    <color name="md_theme_onSurfaceVariant">#475569</color>
-    <color name="md_theme_surfaceContainer">#F1F5F9</color>
+    <color name="md_theme_onSurfaceVariant">#334155</color>
+    <color name="md_theme_surfaceContainer">#EDF2F7</color>
     <color name="md_theme_outline">#CBD5E1</color>
 
     <color name="md_theme_error">#DC2626</color>
@@ -44,4 +44,70 @@
     <color name="premium_accent_gold">#F59E0B</color>
     <color name="premium_badge_bg">#FEF3C7</color>
     <color name="premium_badge_text">#92400E</color>
+
+    <!-- 3D Mix Theme Overlay Colors (Studio Obsidian Surfaces + Ultra-Crisp High-Contrast Text) -->
+    <color name="incall_on_surface_white">#FFFFFF</color>
+
+    <!-- Cyber Neon 3D -->
+    <color name="theme3d_cyber_primary">#8B5CF6</color>
+    <color name="theme3d_cyber_onPrimary">#FFFFFF</color>
+    <color name="theme3d_cyber_primaryContainer">#271454</color>
+    <color name="theme3d_cyber_onPrimaryContainer">#FFFFFF</color>
+    <color name="theme3d_cyber_secondary">#06B6D4</color>
+    <color name="theme3d_cyber_onSecondary">#FFFFFF</color>
+    <color name="theme3d_cyber_secondaryContainer">#12394A</color>
+    <color name="theme3d_cyber_onSecondaryContainer">#E2F1F8</color>
+    <color name="theme3d_cyber_tertiary">#EC4899</color>
+    <color name="theme3d_cyber_onTertiary">#FFFFFF</color>
+    <color name="theme3d_cyber_tertiaryContainer">#6E173B</color>
+    <color name="theme3d_cyber_onTertiaryContainer">#FCE7F3</color>
+    <color name="theme3d_cyber_background">#090418</color>
+    <color name="theme3d_cyber_surface">#130D2B</color>
+    <color name="theme3d_cyber_surfaceVariant">#1E1640</color>
+    <color name="theme3d_cyber_surfaceContainer">#100A24</color>
+    <color name="theme3d_cyber_outline">#38BDF8</color>
+    <color name="theme3d_cyber_text_primary">#FFFFFF</color>
+    <color name="theme3d_cyber_text_secondary">#D4DFEE</color>
+
+    <!-- Aurora 3D Mix -->
+    <color name="theme3d_aurora_primary">#10B981</color>
+    <color name="theme3d_aurora_onPrimary">#FFFFFF</color>
+    <color name="theme3d_aurora_primaryContainer">#09382E</color>
+    <color name="theme3d_aurora_onPrimaryContainer">#FFFFFF</color>
+    <color name="theme3d_aurora_secondary">#6366F1</color>
+    <color name="theme3d_aurora_onSecondary">#FFFFFF</color>
+    <color name="theme3d_aurora_secondaryContainer">#1B1F4A</color>
+    <color name="theme3d_aurora_onSecondaryContainer">#E2E8F0</color>
+    <color name="theme3d_aurora_tertiary">#F43F5E</color>
+    <color name="theme3d_aurora_onTertiary">#FFFFFF</color>
+    <color name="theme3d_aurora_tertiaryContainer">#70142F</color>
+    <color name="theme3d_aurora_onTertiaryContainer">#FFE4E6</color>
+    <color name="theme3d_aurora_background">#041317</color>
+    <color name="theme3d_aurora_surface">#0D1E28</color>
+    <color name="theme3d_aurora_surfaceVariant">#142B38</color>
+    <color name="theme3d_aurora_surfaceContainer">#0A1922</color>
+    <color name="theme3d_aurora_outline">#34D399</color>
+    <color name="theme3d_aurora_text_primary">#FFFFFF</color>
+    <color name="theme3d_aurora_text_secondary">#D2E2E8</color>
+
+    <!-- Royal Gold VIP -->
+    <color name="theme3d_gold_primary">#D97706</color>
+    <color name="theme3d_gold_onPrimary">#FFFFFF</color>
+    <color name="theme3d_gold_primaryContainer">#4A2908</color>
+    <color name="theme3d_gold_onPrimaryContainer">#FFFFFF</color>
+    <color name="theme3d_gold_secondary">#B45309</color>
+    <color name="theme3d_gold_onSecondary">#FFFFFF</color>
+    <color name="theme3d_gold_secondaryContainer">#2D1C0B</color>
+    <color name="theme3d_gold_onSecondaryContainer">#F3ECE1</color>
+    <color name="theme3d_gold_tertiary">#F59E0B</color>
+    <color name="theme3d_gold_onTertiary">#1A140C</color>
+    <color name="theme3d_gold_tertiaryContainer">#6B3B08</color>
+    <color name="theme3d_gold_onTertiaryContainer">#FEF3C7</color>
+    <color name="theme3d_gold_background">#0E0A05</color>
+    <color name="theme3d_gold_surface">#1A140C</color>
+    <color name="theme3d_gold_surfaceVariant">#261E13</color>
+    <color name="theme3d_gold_surfaceContainer">#140F09</color>
+    <color name="theme3d_gold_outline">#FBBF24</color>
+    <color name="theme3d_gold_text_primary">#FFFFFF</color>
+    <color name="theme3d_gold_text_secondary">#E2DDD3</color>
 </resources>

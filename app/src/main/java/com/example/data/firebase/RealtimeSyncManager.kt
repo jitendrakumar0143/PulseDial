@@ -44,6 +44,7 @@ sealed interface RealtimeSyncEvent {
     data class PaymentDisapproved(val reason: String) : RealtimeSyncEvent
     data object AccountBlocked : RealtimeSyncEvent
     data object AccountUnblocked : RealtimeSyncEvent
+    data object AccountDeletedByAdmin : RealtimeSyncEvent
     data object RecordingDisabledByAdmin : RealtimeSyncEvent
     data object GlobalSettingsUpdated : RealtimeSyncEvent
     data class LiveBroadcastTriggered(val broadcast: LiveBroadcast) : RealtimeSyncEvent
@@ -136,17 +137,7 @@ object RealtimeSyncManager {
         val prevAllowRecording = prefs.allowCallRecordingConfig
         prefs.applyAppConfig(config)
 
-        val desiredNightMode = when (config.forceThemeMode) {
-            AppConfig.THEME_DARK -> AppCompatDelegate.MODE_NIGHT_YES
-            AppConfig.THEME_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
-            else -> null
-        }
-        if (desiredNightMode != null &&
-            android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
-            AppCompatDelegate.getDefaultNightMode() != desiredNightMode
-        ) {
-            AppCompatDelegate.setDefaultNightMode(desiredNightMode)
-        }
+        com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
 
         if (!config.allowCallRecording) {
             CallManager.stopRecordingIfNeeded()
@@ -164,7 +155,10 @@ object RealtimeSyncManager {
         bumpState(appConfig = config)
     }
 
-    private fun applyIncomingPaymentRequests(requests: List<PaymentRequest>) {
+    private fun applyIncomingPaymentRequests(
+        requests: List<PaymentRequest>,
+        prefs: DialerPreferences? = appContext?.let { DialerPreferences(it) }
+    ) {
         if (hasReceivedInitialPayments) {
             requests.forEach { req ->
                 val prevStatus = knownPaymentStatuses[req.id]
@@ -183,6 +177,63 @@ object RealtimeSyncManager {
         knownPaymentStatuses.clear()
         requests.forEach { knownPaymentStatuses[it.id] = it.status }
         hasReceivedInitialPayments = true
+
+        // Self-healing reconciliation: if the user has an Approved payment request within the active
+        // 30-day cycle and was NOT blocked or explicitly revoked afterwards, ensure Premium is unlocked
+        // even if the Admin approved a request created under a sibling/fallback UID.
+        val ctx = appContext
+        val uid = activeUid
+        val latestApproved = requests.firstOrNull { it.status == PaymentRequest.STATUS_APPROVED }
+        if (ctx != null && uid != null && prefs != null && latestApproved != null) {
+            val serverNow = RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
+            val approvedAtMs = latestApproved.updatedAt?.toDate()?.time
+                ?: latestApproved.createdAt?.toDate()?.time
+                ?: 0L
+            val inferredExpiryMs = if (approvedAtMs > 0L) {
+                approvedAtMs + DialerPreferences.ONE_MONTH_MILLIS
+            } else {
+                0L
+            }
+            val currentUser = latestUser
+            val userBlocked = currentUser?.isBlocked == true ||
+                currentUser?.subscriptionStatus == UserEntitlement.STATUS_BLOCKED ||
+                prefs.adminBlockedUser
+            val userUpdatedMs = currentUser?.updatedAt?.toDate()?.time ?: 0L
+            val revokedAfterApproval = currentUser != null && (
+                currentUser.subscriptionStatus == UserEntitlement.STATUS_EXPIRED ||
+                    currentUser.subscriptionStatus == UserEntitlement.STATUS_REJECTED ||
+                    currentUser.subscriptionStatus.equals("revoked", ignoreCase = true)
+                ) && approvedAtMs > 0L && userUpdatedMs > approvedAtMs + 10_000L
+
+            if (!userBlocked && !revokedAfterApproval && inferredExpiryMs > serverNow && !prefs.isPremiumActive(serverNow)) {
+                val targetExpiryMs = maxOf(
+                    currentUser?.subscriptionExpiresAt?.toDate()?.time ?: 0L,
+                    inferredExpiryMs
+                )
+                com.example.billing.SubscriptionEnforcementService.applyNodeUpdate(
+                    context = ctx,
+                    subscriptionStatus = UserEntitlement.STATUS_ACTIVE,
+                    isPremium = true,
+                    isBlocked = false,
+                    subscriptionExpiresAtMs = targetExpiryMs,
+                    nowMs = serverNow
+                )
+                RealtimeDatabaseSync.pushUserFields(
+                    uid,
+                    mapOf(
+                        "uid" to uid,
+                        "userId" to uid,
+                        "isPremium" to true,
+                        "isPremiumUser" to true,
+                        "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                        "subscriptionExpiresAtMs" to targetExpiryMs,
+                        "isBlocked" to false,
+                        "updatedAtMs" to serverNow
+                    )
+                )
+                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+            }
+        }
 
         bumpState(myPaymentRequests = requests)
     }
@@ -235,7 +286,7 @@ object RealtimeSyncManager {
         val mergedUser = DeviceTrialRepository.mergeEntitlementSources(
             firestoreUser = latestFirestoreUser,
             rtdbUser = latestRtdbUser,
-            nowMs = System.currentTimeMillis()
+            nowMs = RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
         ) ?: user
         latestUser = mergedUser
 
@@ -294,10 +345,12 @@ object RealtimeSyncManager {
             }
         }
 
+        val activeEmail = GoogleAuthHelper.resolveActiveEmail(ctx).ifBlank { prefs.userEmail }
+
         // 0. Live Firebase Realtime Database ValueEventListeners (`onValue`)
         rtdbServerTimeOffsetCleanup = RealtimeDatabaseSync.attachServerTimeOffsetListener(ctx) { offsetMs ->
             rtdbServerTimeOffsetMs = offsetMs
-            prefs.serverClockOffsetMs = offsetMs
+            prefs.recalibrateClockFromServer(offsetMs)
         }
         rtdbConfigCleanup = RealtimeDatabaseSync.attachAppConfigListener(
             context = ctx,
@@ -310,6 +363,16 @@ object RealtimeSyncManager {
             context = ctx,
             uid = uid,
             currentFallback = { latestUser },
+            onUserDeleted = {
+                Log.w(TAG, "RTDB /users/$uid was deleted by Admin — reverting client to Free Plan")
+                latestRtdbUser = null
+                latestFirestoreUser = null
+                latestUser = null
+                com.example.billing.SubscriptionEnforcementService.handleUserDeletedByAdmin(ctx)
+                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+                bumpState(userEntitlement = null)
+                _events.tryEmit(RealtimeSyncEvent.AccountDeletedByAdmin)
+            },
             onUpdate = { rtdbUser, rawMap ->
                 handleIncomingUserUpdate(
                     user = rtdbUser,
@@ -323,12 +386,28 @@ object RealtimeSyncManager {
         rtdbPaymentsCleanup = RealtimeDatabaseSync.attachUserPaymentRequestsListener(
             context = ctx,
             uid = uid,
+            userEmail = activeEmail,
             onUpdate = { rtdbRequests ->
                 if (rtdbRequests.isNotEmpty() || _syncState.value.myPaymentRequests.isEmpty()) {
-                    applyIncomingPaymentRequests(rtdbRequests)
+                    applyIncomingPaymentRequests(rtdbRequests, prefs)
                 }
             }
         )
+        // Reconcile any Admin-granted Premium stored under a sibling UID with the same email or deviceHash
+        RealtimeDatabaseSync.syncEntitlementFromMatchingEmailOrDeviceInRtdb(
+            context = ctx,
+            activeUid = uid,
+            email = activeEmail,
+            deviceHash = deviceHash
+        ) { matchedUser ->
+            if (activeUid == uid) {
+                handleIncomingUserUpdate(
+                    user = matchedUser,
+                    snapshot = null,
+                    prefs = prefs
+                )
+            }
+        }
         rtdbNavTabsCleanup = RealtimeDatabaseSync.attachNavigationTabsListener(
             context = ctx,
             onUpdate = { tabs ->
@@ -470,7 +549,7 @@ object RealtimeSyncManager {
                 if (requests.isEmpty() && _syncState.value.myPaymentRequests.isNotEmpty()) {
                     return@addSnapshotListener
                 }
-                applyIncomingPaymentRequests(requests)
+                applyIncomingPaymentRequests(requests, prefs)
             }
 
         // 5. Live /app_config/navigation_tabs dynamic bottom navigation push stream
@@ -583,7 +662,8 @@ object RealtimeSyncManager {
 
         val nowMs = System.currentTimeMillis()
         val liveServerOffsetMs = rtdbServerTimeOffsetMs
-        val serverNow = liveServerOffsetMs?.let { nowMs + it } ?: nowMs
+        val serverNow = liveServerOffsetMs?.let { nowMs + it }
+            ?: RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
 
         val effectivePremium = !blocked && rawPremium &&
             (effectiveExpiresAtMs <= 0L || serverNow < effectiveExpiresAtMs)
@@ -623,7 +703,7 @@ object RealtimeSyncManager {
                 prefs.firstLaunchTime = earliest
             }
             if (device?.lastVerifiedAt != null || liveServerOffsetMs != null) {
-                prefs.serverClockOffsetMs = serverNow - nowMs
+                prefs.recalibrateClockFromServer(serverNow - nowMs, nowMs)
             }
             if (serverNow > prefs.lastSeenTimeMs) {
                 prefs.lastSeenTimeMs = serverNow
@@ -633,9 +713,11 @@ object RealtimeSyncManager {
                 device.ownerUid.isNotBlank() &&
                 user != null &&
                 device.ownerUid != user.userId
-            prefs.trialBlockedByDevice = claimedOther && prefs.isTrialExpired(nowMs)
+            prefs.trialBlockedByDevice = !effectivePremium && claimedOther && prefs.isTrialExpired(nowMs)
             device?.let { prefs.accountSwitchCount = it.accountSwitchCount }
         }
+
+        com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
 
         if (blocked || !prefs.hasRecordingAccess() || !prefs.allowCallRecordingConfig) {
             CallManager.stopRecordingIfNeeded()
@@ -676,8 +758,24 @@ object RealtimeSyncManager {
         val uid = activeUid ?: return
         val prefs = DialerPreferences(ctx)
         val deviceHash = DeviceIdentityProvider.getDeviceHash(ctx)
+        val activeEmail = GoogleAuthHelper.resolveActiveEmail(ctx).ifBlank { prefs.userEmail }
         scope.launch(Dispatchers.IO) {
             runCatching {
+                // Reconcile any Admin grant written to a sibling email/deviceHash UID first
+                RealtimeDatabaseSync.syncEntitlementFromMatchingEmailOrDeviceInRtdb(
+                    context = ctx,
+                    activeUid = uid,
+                    email = activeEmail,
+                    deviceHash = deviceHash
+                ) { matchedUser ->
+                    if (activeUid == uid) {
+                        handleIncomingUserUpdate(
+                            user = matchedUser,
+                            snapshot = null,
+                            prefs = prefs
+                        )
+                    }
+                }
                 // Fetch RTDB first so active Admin grants in RTDB are loaded before Firestore sync
                 val rtdbConfig = RealtimeDatabaseSync.fetchAppConfigOnce(ctx, latestConfig)
                 val rtdbUserResult = RealtimeDatabaseSync.fetchUserSnapshotOnce(ctx, uid, latestRtdbUser ?: latestUser)

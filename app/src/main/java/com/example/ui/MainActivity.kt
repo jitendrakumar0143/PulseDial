@@ -9,9 +9,12 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.telecom.Call
+import android.telecom.CallAudioState
 import android.telecom.TelecomManager
 import android.view.Menu
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -21,6 +24,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
 import androidx.credentials.CredentialManager
 import androidx.fragment.app.Fragment
@@ -53,7 +57,11 @@ import com.example.ui.contacts.ContactsFragment
 import com.example.ui.custom.CustomAnnouncementFragment
 import com.example.ui.dialpad.DialpadBottomSheetFragment
 import com.example.ui.favorites.FavoritesFragment
+import com.example.telecom.CallManager
+import com.example.telecom.CallUiState
 import com.example.ui.history.HistoryFragment
+import com.example.ui.incall.Floating3DCallPillView
+import com.example.ui.incall.InCallActivity
 import com.example.ui.settings.SettingsFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.firebase.Firebase
@@ -89,6 +97,7 @@ class MainActivity : AppCompatActivity() {
     private var activeTrialExpiredDialog: AlertDialog? = null
     private var bannerDismissedTextKey: String? = null
     private var lastTriggeredAppOpenAdKey: String? = null
+    private var lastAppliedChromeKey: String? = null
 
     private val authStateListener = FirebaseAuth.AuthStateListener { _ ->
         if (!isFinishing && !isDestroyed) {
@@ -233,47 +242,70 @@ class MainActivity : AppCompatActivity() {
         setupBottomNavigation()
         setupDialpadFab()
         refreshPremiumMainChrome()
-        com.example.billing.SubscriptionEnforcementService.init(this)
-        RealtimeSyncManager.init(this)
         observeRealtimeSync()
+        setupFloatingCallPillOverlay()
         renderAuthState(GoogleAuthHelper.isUserAuthenticated(this))
         handleIncomingIntent(intent)
-        runSecurityIntegrityCheckInBackground()
+        binding.root.post {
+            if (!isFinishing && !isDestroyed) {
+                com.example.billing.SubscriptionEnforcementService.init(this)
+                RealtimeSyncManager.init(this)
+                runSecurityIntegrityCheckInBackground()
+            }
+        }
     }
 
-    fun refreshPremiumMainChrome() {
-        com.example.ui.theme.ThemeStudioManager.applyPremiumMainActivityChrome(
-            context = this,
-            prefs = prefs,
-            vipAccentBar = binding.viewVip3dTopAccentBar,
-            vipBadgeView = binding.tvVipProHeaderBadge,
-            fabDialpad = binding.fabDialpad,
-            bottomNav = binding.bottomNavigation,
-            mainRoot = binding.mainRoot,
-            appBarLayout = binding.appBarLayout,
-            topAppBar = binding.topAppBar
-        )
+    fun refreshPremiumMainChrome(force: Boolean = false) {
+        val isPremium = com.example.ui.theme.ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
+        val palette = com.example.ui.theme.ThemeStudioManager.resolveEffectivePalette(prefs)
+        val nightMode = com.example.ui.theme.ThemeStudioManager.resolveEffectiveNightMode(prefs)
+        val chromeKey = "$isPremium|${palette.id}|$nightMode"
+        if (force || lastAppliedChromeKey != chromeKey) {
+            lastAppliedChromeKey = chromeKey
+            com.example.ui.theme.ThemeStudioManager.applyPremiumMainActivityChrome(
+                context = this,
+                prefs = prefs,
+                vipAccentBar = binding.viewVip3dTopAccentBar,
+                vipBadgeView = binding.tvVipProHeaderBadge,
+                fabDialpad = binding.fabDialpad,
+                bottomNav = binding.bottomNavigation,
+                mainRoot = binding.mainRoot,
+                appBarLayout = binding.appBarLayout,
+                topAppBar = binding.topAppBar
+            )
+        }
         val currentFragView = supportFragmentManager.findFragmentById(R.id.nav_host_container)?.view
-        com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(currentFragView, prefs)
+        if (force || lastAppliedChromeKey == chromeKey) {
+            if (force) {
+                com.example.ui.theme.ThemeStudioManager.invalidateHierarchyThemeTag(currentFragView)
+            }
+            com.example.ui.theme.ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(currentFragView, prefs)
+        }
     }
 
     override fun onStart() {
         super.onStart()
-        Firebase.auth.addAuthStateListener(authStateListener)
+        runCatching { Firebase.auth.addAuthStateListener(authStateListener) }
     }
 
     override fun onResume() {
         super.onResume()
         refreshPremiumMainChrome()
-        refreshAuthGateDeviceAccountButton()
         val isAuthenticated = GoogleAuthHelper.isUserAuthenticated(this)
         if (isAuthenticated) {
-            RealtimeSyncManager.refreshFromCloudNow()
+            binding.root.post {
+                if (!isFinishing && !isDestroyed) {
+                    RealtimeSyncManager.refreshFromCloudNow()
+                }
+            }
             triggerSimAutoFillInBackground()
             runSecurityIntegrityCheckInBackground()
             enforcePaywallIfExpired()
-        } else if (lastRenderedAuthState == true) {
-            renderAuthState(false)
+        } else {
+            refreshAuthGateDeviceAccountButton()
+            if (lastRenderedAuthState == true) {
+                renderAuthState(false)
+            }
         }
     }
 
@@ -309,10 +341,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
-        Firebase.auth.removeAuthStateListener(authStateListener)
+        runCatching { Firebase.auth.removeAuthStateListener(authStateListener) }
     }
 
     override fun onDestroy() {
+        if (::binding.isInitialized) {
+            binding.floating3dCallPill.hideImmediately()
+        }
         runCatching { activeBroadcastDialog?.dismiss() }
         activeBroadcastDialog = null
         runCatching { activeTrialExpiredDialog?.dismiss() }
@@ -336,16 +371,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshAuthGateDeviceAccountButton() {
         if (!::binding.isInitialized) return
-        val deviceEmails = GoogleAuthHelper.getDeviceSignedInGoogleEmails(this)
-        binding.btnGoogleSignIn.text = if (deviceEmails.size == 1) {
-            getString(R.string.auth_gate_btn_google_with_email, deviceEmails.first())
-        } else {
-            getString(R.string.auth_gate_btn_google)
+        lifecycleScope.launch {
+            val deviceEmails = withContext(Dispatchers.IO) {
+                GoogleAuthHelper.getDeviceSignedInGoogleEmails(this@MainActivity)
+            }
+            if (isFinishing || isDestroyed || !::binding.isInitialized) return@launch
+            binding.btnGoogleSignIn.text = if (deviceEmails.size == 1) {
+                getString(R.string.auth_gate_btn_google_with_email, deviceEmails.first())
+            } else {
+                getString(R.string.auth_gate_btn_google)
+            }
         }
     }
 
     private fun setupAuthGate() {
-        refreshAuthGateDeviceAccountButton()
         binding.btnGoogleSignIn.setOnClickListener {
             setAuthLoading(true, null)
             GoogleAuthHelper.onGoogleSignInClicked(
@@ -507,8 +546,12 @@ class MainActivity : AppCompatActivity() {
         updateFabVisibility(activeTabId)
         GoogleAuthHelper.resolveActiveUid(this)?.let { uid ->
             lastSyncedUid = uid
-            com.example.billing.SubscriptionEnforcementService.startMonitoringUser(uid, this)
-            RealtimeSyncManager.startForUser(uid)
+            binding.root.post {
+                if (!isFinishing && !isDestroyed && lastSyncedUid == uid) {
+                    com.example.billing.SubscriptionEnforcementService.startMonitoringUser(uid, this)
+                    RealtimeSyncManager.startForUser(uid)
+                }
+            }
         }
         triggerSimAutoFillInBackground()
     }
@@ -562,6 +605,14 @@ class MainActivity : AppCompatActivity() {
                                 refreshPremiumMainChrome()
                             }
                             com.example.billing.SubscriptionRestrictionEvent.SubscriptionUnlocked -> {
+                                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+                                updateBlockedOverlayState()
+                                refreshPremiumMainChrome()
+                                updateFabVisibility(activeTabId)
+                                refreshCurrentFragment()
+                            }
+                            com.example.billing.SubscriptionRestrictionEvent.UserDeletedByAdmin -> {
+                                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
                                 updateBlockedOverlayState()
                                 refreshPremiumMainChrome()
                                 updateFabVisibility(activeTabId)
@@ -594,6 +645,10 @@ class MainActivity : AppCompatActivity() {
                     RealtimeSyncManager.events.collect { event ->
                         when (event) {
                             RealtimeSyncEvent.PaymentApproved -> {
+                                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+                                updateBlockedOverlayState()
+                                refreshPremiumMainChrome()
+                                refreshCurrentFragment()
                                 Toast.makeText(
                                     this@MainActivity,
                                     R.string.realtime_payment_approved_toast,
@@ -621,6 +676,17 @@ class MainActivity : AppCompatActivity() {
                                     this@MainActivity,
                                     R.string.realtime_account_unblocked_toast,
                                     Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                            RealtimeSyncEvent.AccountDeletedByAdmin -> {
+                                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+                                updateBlockedOverlayState()
+                                refreshPremiumMainChrome()
+                                refreshCurrentFragment()
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    R.string.realtime_account_deleted_toast,
+                                    Toast.LENGTH_LONG
                                 ).show()
                             }
                             RealtimeSyncEvent.RecordingDisabledByAdmin -> {
@@ -896,15 +962,133 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyEdgeToEdgeInsets() {
-        ViewCompat.setOnApplyWindowInsetsListener(binding.appBarLayout) { view, insets ->
+        val extraTopPx = (6f * resources.displayMetrics.density).toInt()
+        ViewCompat.setOnApplyWindowInsetsListener(binding.mainRoot) { _, insets ->
             val topInset = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
-            view.updatePadding(top = topInset)
+            val bottomInset = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+
+            if (binding.appBarLayout.paddingTop != topInset) {
+                binding.appBarLayout.updatePadding(top = topInset)
+            }
+            val targetPillTopMargin = topInset + extraTopPx
+            val pillLp = binding.floating3dCallPill.layoutParams as? ViewGroup.MarginLayoutParams
+            if (pillLp != null && pillLp.topMargin != targetPillTopMargin) {
+                binding.floating3dCallPill.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                    topMargin = targetPillTopMargin
+                }
+            }
+            if (binding.bottomNavigation.paddingBottom != bottomInset) {
+                binding.bottomNavigation.updatePadding(bottom = bottomInset)
+            }
             insets
         }
-        ViewCompat.setOnApplyWindowInsetsListener(binding.bottomNavigation) { view, insets ->
-            val bottomInset = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
-            view.updatePadding(bottom = bottomInset)
-            insets
+    }
+
+    private fun setupFloatingCallPillOverlay() {
+        binding.floating3dCallPill.listener = object : Floating3DCallPillView.CallPillListener {
+            override fun onAnswerCall() {
+                CallManager.answerCall()
+            }
+
+            override fun onDeclineCall() {
+                binding.floating3dCallPill.dismissWithReverseAnimation()
+                CallManager.declineOrEndCall()
+            }
+
+            override fun onToggleMute() {
+                CallManager.toggleMute()
+            }
+
+            override fun onToggleSpeaker() {
+                CallManager.toggleSpeaker()
+            }
+
+            override fun onEndCall() {
+                binding.floating3dCallPill.dismissWithReverseAnimation()
+                CallManager.declineOrEndCall()
+            }
+
+            override fun onPillTappedWhileActive() {
+                runCatching {
+                    val intent = Intent(this@MainActivity, InCallActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    }
+                    startActivity(intent)
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    CallManager.uiState.collect { state ->
+                        if (!state.hasActiveCall) {
+                            if (binding.floating3dCallPill.currentMode != Floating3DCallPillView.PillMode.HIDDEN) {
+                                binding.floating3dCallPill.dismissWithReverseAnimation()
+                            }
+                            return@collect
+                        }
+                        val displayName = resolveCallPillDisplayName(state)
+                        val isBtActive = (state.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
+                        if (state.callState == Call.STATE_RINGING) {
+                            val subtitle = state.callerNumber.ifBlank {
+                                state.callerLocation.ifBlank { getString(R.string.incall_status_ringing) }
+                            }
+                            binding.floating3dCallPill.showIncomingCall(displayName, subtitle)
+                        } else {
+                            binding.floating3dCallPill.morphToActiveCallBar(
+                                callerName = displayName,
+                                formattedTimer = formatCallPillDuration(state),
+                                isMuted = state.isMuted,
+                                isSpeakerOn = state.isSpeakerOn,
+                                isBluetooth = isBtActive
+                            )
+                        }
+                    }
+                }
+                launch {
+                    while (isActive) {
+                        val state = CallManager.uiState.value
+                        if (state.hasActiveCall && state.callState != Call.STATE_RINGING) {
+                            val isBtActive = (state.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
+                            binding.floating3dCallPill.updateActiveCallState(
+                                callerName = resolveCallPillDisplayName(state),
+                                formattedTimer = formatCallPillDuration(state),
+                                isMuted = state.isMuted,
+                                isSpeakerOn = state.isSpeakerOn,
+                                isBluetooth = isBtActive
+                            )
+                        }
+                        delay(1000L)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveCallPillDisplayName(state: CallUiState): String {
+        return when {
+            state.isConference && state.conferenceParticipantCount > 0 ->
+                getString(R.string.incall_conference_title, state.conferenceParticipantCount)
+            state.isConference ->
+                getString(R.string.incall_conference_title_generic)
+            else -> state.callerName.ifBlank { getString(R.string.incall_unknown_caller) }
+        }
+    }
+
+    private fun formatCallPillDuration(state: CallUiState): String {
+        if (state.connectTimeMillis <= 0L) {
+            return getString(R.string.incall_connecting_timer)
+        }
+        val elapsedSeconds = ((System.currentTimeMillis() - state.connectTimeMillis) / 1000L)
+            .coerceAtLeast(0L)
+        val hours = elapsedSeconds / 3600L
+        val mins = (elapsedSeconds % 3600L) / 60L
+        val secs = elapsedSeconds % 60L
+        return if (hours > 0L) {
+            String.format("%02d:%02d:%02d", hours, mins, secs)
+        } else {
+            String.format("%02d:%02d", mins, secs)
         }
     }
 
@@ -1066,7 +1250,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resolveIsPremiumForAds(): Boolean {
-        return prefs.isPremiumUser || subscriptionManager.isPremiumActive()
+        return subscriptionManager.isPremiumActive()
     }
 
     private fun maybeShowCustomPopupAd(ad: CustomPopupAd, trigger: String) {

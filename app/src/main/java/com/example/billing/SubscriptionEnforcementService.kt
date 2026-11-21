@@ -43,9 +43,9 @@ data class SubscriptionEnforcementState(
     val trialDaysRemaining: Int = DialerPreferences.TRIAL_DAYS,
     val isTrialExpired: Boolean = false,
     val isSubscriptionActive: Boolean = true,
-    val isRecordingAllowed: Boolean = true,
+    val isRecordingAllowed: Boolean = false,
     val shouldRestrictUiToAccountTab: Boolean = false,
-    val statusBannerText: String = "Free Trial Active (7 days left)",
+    val statusBannerText: String = "Free Plan — Calling & Contacts Active",
     val lastEvaluatedAtMs: Long = 0L
 )
 
@@ -58,6 +58,7 @@ sealed interface SubscriptionRestrictionEvent {
     data class TrialExpiredRedirectToPayment(val message: String) : SubscriptionRestrictionEvent
     data object SubscriptionUnlocked : SubscriptionRestrictionEvent
     data object AccountBlockedByAdmin : SubscriptionRestrictionEvent
+    data object UserDeletedByAdmin : SubscriptionRestrictionEvent
 }
 
 /**
@@ -208,6 +209,22 @@ object SubscriptionEnforcementService {
                     context = ctx,
                     bonusTrialDays = newBonusDays
                 )
+            },
+            onUserDeleted = {
+                Log.w(TAG, "RTDB /users/$uid deleted by Admin — revoking premium immediately")
+                handleUserDeletedByAdmin(ctx)
+            },
+            onFullSnapshot = { status, prem, blocked, installMs, expMs, bonusDays ->
+                Log.d(TAG, "RTDB atomic /users/$uid -> status=$status, isPremium=$prem, blocked=$blocked, exp=$expMs")
+                applyNodeUpdate(
+                    context = ctx,
+                    subscriptionStatus = status,
+                    isPremium = prem,
+                    isBlocked = blocked,
+                    installDateMs = installMs,
+                    subscriptionExpiresAtMs = expMs,
+                    bonusTrialDays = bonusDays
+                )
             }
         )
 
@@ -241,6 +258,61 @@ object SubscriptionEnforcementService {
     }
 
     /**
+     * Immediately revokes premium entitlements, stops active call recording, enforces
+     * free-tier light theme, and emits [SubscriptionRestrictionEvent.UserDeletedByAdmin]
+     * when the user's `/users/{uid}` node is deleted by Admin in RTDB.
+     */
+    fun handleUserDeletedByAdmin(
+        context: Context? = appContext,
+        nowMs: Long = -1L
+    ): SubscriptionEnforcementState {
+        val ctx = context?.applicationContext ?: appContext
+        val prefs = ctx?.let { DialerPreferences(it) }
+        val resolvedNowMs = if (nowMs > 0L) {
+            nowMs
+        } else {
+            RealtimeDatabaseSync.currentServerNowMs(prefs?.serverClockOffsetMs ?: 0L)
+        }
+        liveIsPremium = false
+        liveSubscriptionStatus = UserEntitlement.STATUS_EXPIRED
+        liveExpiresAtMs = 0L
+        liveIsBlocked = false
+        liveBonusTrialDays = 0
+        hasLiveNodeState = true
+
+        CallManager.stopRecordingIfNeeded()
+
+        val evaluated = if (prefs != null) {
+            prefs.applyEnforcementBatch(
+                isPremium = false,
+                isBlocked = false,
+                subscriptionExpiresAtMs = 0L,
+                bonusTrialDays = 0,
+                hideSubscriptionUi = false,
+                delegatedAdmin = false,
+                adminGrantedBy = ""
+            )
+            com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+            recalculateAndEnforce(prefs, resolvedNowMs)
+        } else {
+            evaluateNodeState(
+                uid = activeUid,
+                subscriptionStatus = UserEntitlement.STATUS_EXPIRED,
+                isPremium = false,
+                isBlocked = false,
+                installDateMs = liveInstallDateMs,
+                subscriptionExpiresAtMs = 0L,
+                bonusTrialDays = 0,
+                trialDaysConfig = DialerPreferences.TRIAL_DAYS,
+                allowCallRecordingConfig = false,
+                nowMs = resolvedNowMs
+            ).also { _state.value = it }
+        }
+        _restrictionEvents.tryEmit(SubscriptionRestrictionEvent.UserDeletedByAdmin)
+        return evaluated
+    }
+
+    /**
      * Applies live updates from `/users/{uid}/subscriptionStatus` and `/users/{uid}/isPremium`,
      * updates local `DialerPreferences` with HMAC integrity, and immediately enforces
      * UI and Call Recording restrictions.
@@ -253,10 +325,15 @@ object SubscriptionEnforcementService {
         installDateMs: Long? = null,
         subscriptionExpiresAtMs: Long? = null,
         bonusTrialDays: Int? = null,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = -1L
     ): SubscriptionEnforcementState {
         val ctx = context?.applicationContext ?: appContext
         val prefs = ctx?.let { DialerPreferences(it) }
+        val resolvedNowMs = if (nowMs > 0L) {
+            nowMs
+        } else {
+            RealtimeDatabaseSync.currentServerNowMs(prefs?.serverClockOffsetMs ?: 0L)
+        }
 
         val cleanIncomingStatus = subscriptionStatus?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
         if (cleanIncomingStatus != null) {
@@ -264,10 +341,10 @@ object SubscriptionEnforcementService {
             if (isPremium == null) {
                 when (cleanIncomingStatus) {
                     UserEntitlement.STATUS_ACTIVE -> liveIsPremium = true
-                    UserEntitlement.STATUS_TRIAL,
                     UserEntitlement.STATUS_EXPIRED,
                     UserEntitlement.STATUS_REJECTED,
-                    UserEntitlement.STATUS_BLOCKED -> liveIsPremium = false
+                    UserEntitlement.STATUS_BLOCKED,
+                    "revoked" -> liveIsPremium = false
                 }
             }
         }
@@ -292,7 +369,7 @@ object SubscriptionEnforcementService {
         if (subscriptionExpiresAtMs != null) {
             liveExpiresAtMs = subscriptionExpiresAtMs
         } else if ((isPremium == true || cleanIncomingStatus == UserEntitlement.STATUS_ACTIVE) &&
-            liveExpiresAtMs in 1L..nowMs
+            liveExpiresAtMs in 1L..resolvedNowMs
         ) {
             // Clear stale expired timestamp from a previous cycle while awaiting the new expiry node
             liveExpiresAtMs = 0L
@@ -306,7 +383,7 @@ object SubscriptionEnforcementService {
             val effectiveBlocked = liveIsBlocked || liveSubscriptionStatus == UserEntitlement.STATUS_BLOCKED
             val effectivePremium = !effectiveBlocked && (
                 liveIsPremium || liveSubscriptionStatus == UserEntitlement.STATUS_ACTIVE
-                ) && (liveExpiresAtMs <= 0L || nowMs < liveExpiresAtMs)
+                ) && (liveExpiresAtMs <= 0L || resolvedNowMs < liveExpiresAtMs)
 
             prefs.applyEnforcementBatch(
                 isPremium = effectivePremium,
@@ -315,7 +392,7 @@ object SubscriptionEnforcementService {
                 installDateMs = liveInstallDateMs.takeIf { it > 0L },
                 bonusTrialDays = liveBonusTrialDays
             )
-            return recalculateAndEnforce(prefs, nowMs)
+            return recalculateAndEnforce(prefs, resolvedNowMs)
         }
 
         val evaluated = evaluateNodeState(
@@ -328,7 +405,7 @@ object SubscriptionEnforcementService {
             bonusTrialDays = liveBonusTrialDays,
             trialDaysConfig = DialerPreferences.TRIAL_DAYS,
             allowCallRecordingConfig = true,
-            nowMs = nowMs
+            nowMs = resolvedNowMs
         )
         val previous = _state.value
         val materiallyChanged = previous.lastEvaluatedAtMs == 0L ||
@@ -387,17 +464,16 @@ object SubscriptionEnforcementService {
             )
 
         val isSubscriptionActive = !effectiveBlocked && (effectivePremium || !isTrialExpired)
-        val isRecordingAllowed = isSubscriptionActive && allowCallRecordingConfig
-        val shouldRestrictUi = !isSubscriptionActive
+        val isRecordingAllowed = effectivePremium && allowCallRecordingConfig
+        val shouldRestrictUi = effectiveBlocked
 
         val bannerText = when {
             effectiveBlocked -> "Account Blocked by Admin"
             effectivePremium -> "Pro Plan Active"
             cleanStatus == UserEntitlement.STATUS_PENDING_APPROVAL ->
                 "Verification Pending... Admin is checking your UTR"
-            isMonthlyExpired -> "Monthly Subscription Expired - Renew ₹299/month"
-            isTrialExpired -> "Trial Expired - Upgrade to Pro (₹299/month)"
-            else -> "Free Trial Active ($daysRemaining days left)"
+            isMonthlyExpired -> "Subscription Expired — Free Plan (Calling & Contacts)"
+            else -> "Free Plan — Upgrade to Pro for Recording, Dark Mode & 3D Themes"
         }
 
         return SubscriptionEnforcementState(
@@ -422,14 +498,19 @@ object SubscriptionEnforcementService {
 
     private fun recalculateAndEnforce(
         prefs: DialerPreferences,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = -1L
     ): SubscriptionEnforcementState {
+        val resolvedNowMs = if (nowMs > 0L) {
+            nowMs
+        } else {
+            RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
+        }
         val previous = _state.value
         val installMs = if (liveInstallDateMs > 0L) liveInstallDateMs else prefs.firstLaunchTime
         val effectivePremiumSignal = if (hasLiveNodeState) {
             liveIsPremium
         } else {
-            liveIsPremium || prefs.isPremiumActive(nowMs)
+            liveIsPremium || prefs.isPremiumActive(resolvedNowMs)
         }
         val effectiveBlockedSignal = if (hasLiveNodeState) {
             liveIsBlocked
@@ -446,7 +527,7 @@ object SubscriptionEnforcementService {
             bonusTrialDays = if (hasLiveNodeState) liveBonusTrialDays else prefs.adminBonusTrialDays,
             trialDaysConfig = prefs.configuredTrialDays,
             allowCallRecordingConfig = prefs.allowCallRecordingConfig,
-            nowMs = nowMs
+            nowMs = resolvedNowMs
         )
 
         val materiallyChanged = previous.lastEvaluatedAtMs == 0L ||
@@ -489,12 +570,17 @@ object SubscriptionEnforcementService {
      */
     fun canStartCallRecording(
         context: Context? = appContext,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = -1L
     ): Boolean {
         val ctx = context?.applicationContext ?: appContext
         val prefs = ctx?.let { DialerPreferences(it) }
+        val resolvedNowMs = if (nowMs > 0L) {
+            nowMs
+        } else {
+            RealtimeDatabaseSync.currentServerNowMs(prefs?.serverClockOffsetMs ?: 0L)
+        }
         val current = if (prefs != null) {
-            recalculateAndEnforce(prefs, nowMs)
+            recalculateAndEnforce(prefs, resolvedNowMs)
         } else {
             _state.value
         }
@@ -509,17 +595,22 @@ object SubscriptionEnforcementService {
     }
 
     /**
-     * Returns true if the UI should restrict access to non-Account tabs and redirect
-     * the user to the Account payment tab.
+     * Returns true only when the account is blocked by Admin.
+     * Non-premium users retain full access to normal calling, contacts, and simple Light theme.
      */
     fun shouldRestrictUi(
         context: Context? = appContext,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = -1L
     ): Boolean {
         val ctx = context?.applicationContext ?: appContext
         val prefs = ctx?.let { DialerPreferences(it) }
+        val resolvedNowMs = if (nowMs > 0L) {
+            nowMs
+        } else {
+            RealtimeDatabaseSync.currentServerNowMs(prefs?.serverClockOffsetMs ?: 0L)
+        }
         val current = if (prefs != null) {
-            recalculateAndEnforce(prefs, nowMs)
+            recalculateAndEnforce(prefs, resolvedNowMs)
         } else {
             _state.value
         }

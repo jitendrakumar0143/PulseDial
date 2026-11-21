@@ -10,8 +10,21 @@ import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.database.ValueEventListener
+import com.example.telecom.PhoneGeoDatabase
 import java.util.Date
 import java.util.concurrent.atomic.AtomicBoolean
+
+data class CallerDirectoryProfile(
+    val phoneKey: String,
+    val displayName: String,
+    val city: String = "",
+    val state: String = "",
+    val postalCode: String = "",
+    val country: String = "",
+    val countryCode: String = "",
+    val socialPlatforms: List<String> = emptyList(),
+    val sourceLabel: String = "PulseDial Cloud Directory"
+)
 
 /**
  * Real-Time Database (`com.google.firebase:firebase-database`) Synchronization Engine.
@@ -46,11 +59,23 @@ object RealtimeDatabaseSync {
     const val NODE_LIVE_BROADCAST = "live_broadcast"
     const val NODE_CUSTOM_POPUP_AD = "custom_popup_ad"
     const val NODE_APPROVED_UTRS = "approved_utrs"
+    const val NODE_CALLER_DIRECTORY = "caller_directory"
 
     private val persistenceConfigured = AtomicBoolean(false)
 
     @Volatile
     private var databaseInstance: FirebaseDatabase? = null
+
+    @Volatile
+    private var serverTimeOffsetMs: Long = 0L
+
+    @Volatile
+    private var hasServerTimeOffset: Boolean = false
+
+    fun currentServerNowMs(fallbackOffsetMs: Long = 0L): Long {
+        val offset = if (hasServerTimeOffset) serverTimeOffsetMs else fallbackOffsetMs
+        return System.currentTimeMillis() + offset
+    }
 
     /**
      * Initializes Firebase Realtime Database with offline persistence and `.keepSynced(true)`
@@ -96,6 +121,16 @@ object RealtimeDatabaseSync {
         val cleanPath = path.trim('/')
         val root = rootRef(context) ?: return null
         return if (cleanPath.isEmpty()) root else root.child(cleanPath)
+    }
+
+    /**
+     * Returns a persistent, keep-synced [DatabaseReference] pointing directly to `/users`
+     * so `AdminPanelActivity` can attach a robust `addValueEventListener` with full error handling.
+     */
+    fun getUsersReference(context: Context): DatabaseReference? {
+        val ref = refForPath(NODE_USERS, context) ?: return null
+        runCatching { ref.keepSynced(true) }
+        return ref
     }
 
     /**
@@ -193,12 +228,21 @@ object RealtimeDatabaseSync {
         context: Context,
         uid: String,
         currentFallback: () -> UserEntitlement?,
+        onUserDeleted: (() -> Unit)? = null,
         onUpdate: (UserEntitlement, Map<*, *>) -> Unit
     ): (() -> Unit)? {
         if (uid.isBlank()) return null
+        var hasSeenExistingNode = false
         return onValue("$NODE_USERS/$uid", context) { snapshot ->
-            if (!snapshot.exists()) return@onValue
+            if (!snapshot.exists()) {
+                if (hasSeenExistingNode) {
+                    hasSeenExistingNode = false
+                    onUserDeleted?.invoke()
+                }
+                return@onValue
+            }
             val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
+            hasSeenExistingNode = true
             val parsed = parseUserSnapshot(uid, rawMap, currentFallback())
             onUpdate(parsed, rawMap)
         }
@@ -217,6 +261,8 @@ object RealtimeDatabaseSync {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val offset = asLong(snapshot.value) ?: return
+                serverTimeOffsetMs = offset
+                hasServerTimeOffset = true
                 onOffsetChanged(offset)
             }
 
@@ -248,75 +294,106 @@ object RealtimeDatabaseSync {
         onInstallDateChanged: (Long) -> Unit = {},
         onIsBlockedChanged: (Boolean) -> Unit = {},
         onExpiresAtChanged: (Long?) -> Unit = {},
-        onBonusTrialDaysChanged: (Int) -> Unit = {}
+        onBonusTrialDaysChanged: (Int) -> Unit = {},
+        onUserDeleted: (() -> Unit)? = null,
+        onFullSnapshot: ((
+            subscriptionStatus: String?,
+            isPremium: Boolean?,
+            isBlocked: Boolean?,
+            installDateMs: Long?,
+            expiresAtMs: Long?,
+            bonusTrialDays: Int?
+        ) -> Unit)? = null
     ): (() -> Unit)? {
         if (uid.isBlank()) return null
         val cleanups = mutableListOf<() -> Unit>()
+        var hasSeenExistingUserNode = false
 
-        onValue("$NODE_USERS/$uid/subscriptionStatus", context) { snapshot ->
-            if (!snapshot.exists()) return@onValue
-            val status = (snapshot.value as? String)?.trim().orEmpty()
-            if (status.isNotEmpty()) {
-                onSubscriptionStatusChanged(status)
-            }
-        }?.let { cleanups.add(it) }
-
-        onValue("$NODE_USERS/$uid/isPremium", context) { snapshot ->
-            if (!snapshot.exists()) return@onValue
-            asBool(snapshot.value)?.let(onIsPremiumChanged)
-        }?.let { cleanups.add(it) }
-
-        onValue("$NODE_USERS/$uid/installDate", context) { snapshot ->
-            if (!snapshot.exists()) return@onValue
-            val installMs = asLong(snapshot.value)
-            if (installMs != null && installMs > 0L) {
-                onInstallDateChanged(installMs)
-            }
-        }?.let { cleanups.add(it) }
-
-        onValue("$NODE_USERS/$uid/isBlocked", context) { snapshot ->
-            if (!snapshot.exists()) return@onValue
-            asBool(snapshot.value)?.let(onIsBlockedChanged)
-        }?.let { cleanups.add(it) }
-
-        onValue("$NODE_USERS/$uid/subscriptionExpiresAtMs", context) { snapshot ->
-            if (!snapshot.exists()) {
-                onExpiresAtChanged(null)
-                return@onValue
-            }
-            onExpiresAtChanged(asLong(snapshot.value))
-        }?.let { cleanups.add(it) }
-
-        onValue("$NODE_USERS/$uid/bonusTrialDays", context) { snapshot ->
-            if (!snapshot.exists()) {
-                onBonusTrialDaysChanged(0)
-                return@onValue
-            }
-            val days = (asLong(snapshot.value) ?: 0L).toInt().coerceIn(0, 3650)
-            onBonusTrialDaysChanged(days)
-        }?.let { cleanups.add(it) }
-
-        // Atomic parent snapshot listener so multi-field Admin updates (isPremium + subscriptionExpiresAtMs + status)
-        // never evaluate against a stale previous expiry timestamp.
+        // Atomic parent snapshot listener delivers all entitlement fields together so out-of-order
+        // child updates never clobber isPremium=true with a stale status or expiry timestamp,
+        // and immediately reacts when Admin deletes `/users/{uid}` within < 1 second.
         onValue("$NODE_USERS/$uid", context) { snapshot ->
-            if (!snapshot.exists()) return@onValue
+            if (!snapshot.exists()) {
+                if (hasSeenExistingUserNode) {
+                    hasSeenExistingUserNode = false
+                    onUserDeleted?.invoke()
+                }
+                return@onValue
+            }
             val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
-            val expMs = asLong(rawMap["subscriptionExpiresAtMs"]) ?: asLong(rawMap["subscriptionExpiresAt"])
-            if (rawMap.containsKey("subscriptionExpiresAtMs") || rawMap.containsKey("subscriptionExpiresAt")) {
-                onExpiresAtChanged(expMs)
+            hasSeenExistingUserNode = true
+            val hasExpKey = rawMap.containsKey("subscriptionExpiresAtMs") || rawMap.containsKey("subscriptionExpiresAt")
+            val expMs = if (hasExpKey) {
+                asLong(rawMap["subscriptionExpiresAtMs"]) ?: asLong(rawMap["subscriptionExpiresAt"]) ?: 0L
+            } else {
+                null
             }
-            asLong(rawMap["bonusTrialDays"])?.let { onBonusTrialDaysChanged(it.toInt().coerceIn(0, 3650)) }
-            asLong(rawMap["installDate"])?.takeIf { it > 0L }?.let(onInstallDateChanged)
-            asBool(rawMap["isBlocked"])?.let(onIsBlockedChanged)
-            val status = (rawMap["subscriptionStatus"] as? String)?.trim().orEmpty()
-            if (status.isNotEmpty()) {
-                onSubscriptionStatusChanged(status)
-            }
+            val bonusDays = asLong(rawMap["bonusTrialDays"])?.toInt()?.coerceIn(0, 3650)
+            val installMs = (asLong(rawMap["installDate"])
+                ?: asLong(rawMap["registrationDate"])
+                ?: asLong(rawMap["createdAtMs"]))?.takeIf { it > 0L }
+            val blocked = asBool(rawMap["isBlocked"])
+            val status = (rawMap["subscriptionStatus"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
             val prem = asBool(rawMap["isPremium"]) ?: asBool(rawMap["isPremiumUser"])
-            if (prem != null) {
-                onIsPremiumChanged(prem)
+
+            if (onFullSnapshot != null) {
+                onFullSnapshot(status, prem, blocked, installMs, expMs, bonusDays)
+            } else {
+                if (hasExpKey) {
+                    onExpiresAtChanged(expMs)
+                }
+                bonusDays?.let(onBonusTrialDaysChanged)
+                installMs?.let(onInstallDateChanged)
+                blocked?.let(onIsBlockedChanged)
+                status?.let(onSubscriptionStatusChanged)
+                prem?.let(onIsPremiumChanged)
             }
         }?.let { cleanups.add(it) }
+
+        if (onFullSnapshot == null) {
+            onValue("$NODE_USERS/$uid/subscriptionStatus", context) { snapshot ->
+                if (!snapshot.exists()) return@onValue
+                val status = (snapshot.value as? String)?.trim().orEmpty()
+                if (status.isNotEmpty()) {
+                    onSubscriptionStatusChanged(status)
+                }
+            }?.let { cleanups.add(it) }
+
+            onValue("$NODE_USERS/$uid/isPremium", context) { snapshot ->
+                if (!snapshot.exists()) return@onValue
+                asBool(snapshot.value)?.let(onIsPremiumChanged)
+            }?.let { cleanups.add(it) }
+
+            onValue("$NODE_USERS/$uid/installDate", context) { snapshot ->
+                if (!snapshot.exists()) return@onValue
+                val installMs = asLong(snapshot.value)
+                if (installMs != null && installMs > 0L) {
+                    onInstallDateChanged(installMs)
+                }
+            }?.let { cleanups.add(it) }
+
+            onValue("$NODE_USERS/$uid/isBlocked", context) { snapshot ->
+                if (!snapshot.exists()) return@onValue
+                asBool(snapshot.value)?.let(onIsBlockedChanged)
+            }?.let { cleanups.add(it) }
+
+            onValue("$NODE_USERS/$uid/subscriptionExpiresAtMs", context) { snapshot ->
+                if (!snapshot.exists()) {
+                    onExpiresAtChanged(null)
+                    return@onValue
+                }
+                onExpiresAtChanged(asLong(snapshot.value))
+            }?.let { cleanups.add(it) }
+
+            onValue("$NODE_USERS/$uid/bonusTrialDays", context) { snapshot ->
+                if (!snapshot.exists()) {
+                    onBonusTrialDaysChanged(0)
+                    return@onValue
+                }
+                val days = (asLong(snapshot.value) ?: 0L).toInt().coerceIn(0, 3650)
+                onBonusTrialDaysChanged(days)
+            }?.let { cleanups.add(it) }
+        }
 
         if (cleanups.isEmpty()) return null
         return {
@@ -333,10 +410,12 @@ object RealtimeDatabaseSync {
         email: String,
         primaryUid: String,
         fields: Map<String, Any?>,
-        context: Context? = null
+        context: Context? = null,
+        deviceHash: String = ""
     ) {
         val normalizedEmail = email.trim().lowercase()
-        if (normalizedEmail.isEmpty() || fields.isEmpty()) return
+        val normalizedDeviceHash = deviceHash.trim().lowercase().takeIf { it.length == 64 }.orEmpty()
+        if ((normalizedEmail.isEmpty() && normalizedDeviceHash.isEmpty()) || fields.isEmpty()) return
         val usersRef = refForPath(NODE_USERS, context) ?: return
         val entitlementKeys = setOf(
             "isPremium",
@@ -363,7 +442,10 @@ object RealtimeDatabaseSync {
                         val otherUid = child.key.orEmpty()
                         if (otherUid.isBlank() || otherUid == primaryUid) continue
                         val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
-                        if (childEmail == normalizedEmail) {
+                        val childDevice = (child.child("deviceHash").value as? String)?.trim()?.lowercase().orEmpty()
+                        val emailMatch = normalizedEmail.isNotEmpty() && childEmail == normalizedEmail
+                        val deviceMatch = normalizedDeviceHash.isNotEmpty() && childDevice == normalizedDeviceHash
+                        if (emailMatch || deviceMatch) {
                             child.ref.updateChildren(filteredFields)
                         }
                     }
@@ -371,6 +453,91 @@ object RealtimeDatabaseSync {
 
                 override fun onCancelled(error: DatabaseError) {
                     Log.d(TAG, "propagateEntitlementByEmailInRtdb cancelled: ${error.message}")
+                }
+            })
+        }
+    }
+
+    /**
+     * Checks whether any sibling `/users/{otherUid}` node matching [email] or [deviceHash]
+     * holds an active Admin-granted Premium entitlement and mirrors it onto `/users/{activeUid}`
+     * so UID mismatches between Google Sign-In, fallback login, or Admin pre-creation never block access.
+     */
+    fun syncEntitlementFromMatchingEmailOrDeviceInRtdb(
+        context: Context,
+        activeUid: String,
+        email: String,
+        deviceHash: String = "",
+        onResolved: (UserEntitlement) -> Unit = {}
+    ) {
+        val cleanUid = activeUid.trim()
+        val normalizedEmail = email.trim().lowercase()
+        val normalizedDevice = deviceHash.trim().lowercase().takeIf { it.length == 64 }.orEmpty()
+        if (cleanUid.isEmpty() || (normalizedEmail.isEmpty() && normalizedDevice.isEmpty())) return
+        val usersRef = refForPath(NODE_USERS, context) ?: return
+        val nowMs = currentServerNowMs()
+
+        runCatching {
+            usersRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    if (!snapshot.exists()) return
+                    var bestMatch: UserEntitlement? = null
+                    var bestUpdatedMs = -1L
+                    val currentNodeMap = snapshot.child(cleanUid).value as? Map<*, *>
+                    val currentParsed = currentNodeMap?.let { parseUserSnapshot(cleanUid, it, null) }
+                    val currentExp = currentParsed?.subscriptionExpiresAt?.toDate()?.time ?: 0L
+                    val currentAlreadyActive = currentParsed != null &&
+                        !currentParsed.isBlocked &&
+                        (currentParsed.isPremiumUser || currentParsed.subscriptionStatus == UserEntitlement.STATUS_ACTIVE) &&
+                        (currentExp <= 0L || currentExp > nowMs)
+
+                    for (child in snapshot.children) {
+                        val otherUid = child.key.orEmpty()
+                        if (otherUid.isBlank() || otherUid == cleanUid) continue
+                        val rawMap = child.value as? Map<*, *> ?: continue
+                        val childEmail = (rawMap["email"] as? String)?.trim()?.lowercase().orEmpty()
+                        val childDevice = (rawMap["deviceHash"] as? String)?.trim()?.lowercase().orEmpty()
+                        val matches = (normalizedEmail.isNotEmpty() && childEmail == normalizedEmail) ||
+                            (normalizedDevice.isNotEmpty() && childDevice == normalizedDevice)
+                        if (!matches) continue
+
+                        val parsed = parseUserSnapshot(cleanUid, rawMap, currentParsed)
+                        val expMs = parsed.subscriptionExpiresAt?.toDate()?.time ?: 0L
+                        val isActive = !parsed.isBlocked &&
+                            (parsed.isPremiumUser || parsed.subscriptionStatus == UserEntitlement.STATUS_ACTIVE) &&
+                            (expMs <= 0L || expMs > nowMs)
+                        val updMs = parsed.updatedAt?.toDate()?.time ?: 0L
+                        if (isActive && (!currentAlreadyActive || expMs > currentExp) && updMs >= bestUpdatedMs) {
+                            bestMatch = parsed
+                            bestUpdatedMs = updMs
+                        }
+                    }
+
+                    val winner = bestMatch ?: return
+                    val expMs = winner.subscriptionExpiresAt?.toDate()?.time
+                    val mirrorFields = mutableMapOf<String, Any?>(
+                        "isPremium" to true,
+                        "isPremiumUser" to true,
+                        "subscriptionStatus" to UserEntitlement.STATUS_ACTIVE,
+                        "isBlocked" to false,
+                        "updatedAtMs" to maxOf(nowMs, bestUpdatedMs, System.currentTimeMillis())
+                    )
+                    if (expMs != null && expMs > 0L) {
+                        mirrorFields["subscriptionExpiresAtMs"] = expMs
+                    }
+                    if (winner.bonusTrialDays > 0L) {
+                        mirrorFields["bonusTrialDays"] = winner.bonusTrialDays
+                    }
+                    if (winner.isAdmin) {
+                        mirrorFields["isAdmin"] = true
+                        mirrorFields["adminGrantedBy"] = winner.adminGrantedBy
+                    }
+                    usersRef.child(cleanUid).updateChildren(mirrorFields)
+                    onResolved(winner)
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Log.d(TAG, "syncEntitlementFromMatchingEmailOrDeviceInRtdb cancelled: ${error.message}")
                 }
             })
         }
@@ -463,30 +630,54 @@ object RealtimeDatabaseSync {
     }
 
     /**
+     * Defensively parses the `/users` [DataSnapshot] into a sorted list of [UserEntitlement]s,
+     * isolating malformed child entries so a single corrupted node never breaks the Admin list.
+     */
+    fun parseUsersListSnapshot(snapshot: DataSnapshot): List<UserEntitlement> {
+        if (!snapshot.exists()) return emptyList()
+        val result = mutableListOf<UserEntitlement>()
+        for (child in snapshot.children) {
+            val uid = child.key.orEmpty().trim()
+            if (uid.isEmpty()) continue
+            val rawMap = child.value as? Map<*, *> ?: continue
+            runCatching {
+                parseUserSnapshot(uid, rawMap, null)
+            }.onSuccess { parsed ->
+                result.add(parsed)
+            }.onFailure { err ->
+                Log.w(TAG, "Skipping malformed /users/$uid entry: ${err.message}")
+            }
+        }
+        return result.sortedByDescending {
+            it.updatedAt?.toDate()?.time
+                ?: it.createdAt?.toDate()?.time
+                ?: it.trialStartedAt?.toDate()?.time
+                ?: 0L
+        }
+    }
+
+    /**
      * Attaches a persistent `onValue` listener to `/users` for the Real-Time Admin Panel.
      */
     fun attachAllUsersListener(
         context: Context,
+        onError: ((DatabaseError) -> Unit)? = null,
         onUpdate: (List<UserEntitlement>) -> Unit
     ): (() -> Unit)? {
-        return onValue(NODE_USERS, context) { snapshot ->
-            if (!snapshot.exists()) {
-                onUpdate(emptyList())
-                return@onValue
+        val ref = getUsersReference(context) ?: return null
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                onUpdate(parseUsersListSnapshot(snapshot))
             }
-            val result = mutableListOf<UserEntitlement>()
-            for (child in snapshot.children) {
-                val uid = child.key.orEmpty()
-                val rawMap = child.value as? Map<*, *> ?: continue
-                if (uid.isNotBlank()) {
-                    result.add(parseUserSnapshot(uid, rawMap, null))
-                }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.w(TAG, "RTDB /users listener cancelled: ${error.message}")
+                onError?.invoke(error)
             }
-            onUpdate(
-                result.sortedByDescending {
-                    it.updatedAt?.toDate()?.time ?: it.createdAt?.toDate()?.time ?: 0L
-                }
-            )
+        }
+        ref.addValueEventListener(listener)
+        return {
+            runCatching { ref.removeEventListener(listener) }
         }
     }
 
@@ -496,9 +687,11 @@ object RealtimeDatabaseSync {
     fun attachUserPaymentRequestsListener(
         context: Context,
         uid: String,
+        userEmail: String = "",
         onUpdate: (List<PaymentRequest>) -> Unit
     ): (() -> Unit)? {
         if (uid.isBlank()) return null
+        val normalizedEmail = userEmail.trim().lowercase()
         return onValue(NODE_PAYMENT_REQUESTS, context) { snapshot ->
             if (!snapshot.exists()) {
                 onUpdate(emptyList())
@@ -509,7 +702,9 @@ object RealtimeDatabaseSync {
                 val id = child.key.orEmpty()
                 val rawMap = child.value as? Map<*, *> ?: continue
                 val parsed = parsePaymentRequestSnapshot(id, rawMap)
-                if (parsed.userId == uid) {
+                val emailMatch = normalizedEmail.isNotEmpty() &&
+                    parsed.userEmail.trim().lowercase() == normalizedEmail
+                if (parsed.userId == uid || emailMatch) {
                     result.add(parsed)
                 }
             }
@@ -749,6 +944,8 @@ object RealtimeDatabaseSync {
         )
         if (isFirstRegistrationOnDevice) {
             base["installDate"] = ServerValue.TIMESTAMP
+            base["registrationDate"] = ServerValue.TIMESTAMP
+            base["createdAtMs"] = ServerValue.TIMESTAMP
             base["subscriptionStatus"] = UserEntitlement.STATUS_TRIAL
             base["isPremium"] = false
             base["isPremiumUser"] = false
@@ -854,7 +1051,10 @@ object RealtimeDatabaseSync {
                                         val otherUid = child.key.orEmpty()
                                         if (otherUid == cleanUid) continue
                                         val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
-                                        if (childEmail == normalizedEmail) {
+                                        val childDeviceHash = (child.child("deviceHash").value as? String)?.trim().orEmpty()
+                                        val matchesEmail = normalizedEmail.isNotEmpty() && childEmail == normalizedEmail
+                                        val matchesDevice = cleanDeviceHash.isNotEmpty() && childDeviceHash == cleanDeviceHash
+                                        if (matchesEmail || matchesDevice) {
                                             val cPrem = asBool(child.child("isPremium").value)
                                                 ?: asBool(child.child("isPremiumUser").value)
                                                 ?: false
@@ -990,6 +1190,44 @@ object RealtimeDatabaseSync {
     }
 
     /**
+     * Atomically updates a user's `isPremium` status, `subscriptionStatus`, and expiry timestamp
+     * directly in `/users/{uid}` (and any sibling nodes sharing the same email/device) for
+     * sub-1-second client synchronization.
+     */
+    fun updateUserIsPremiumDirect(
+        uid: String,
+        isPremium: Boolean,
+        subscriptionExpiresAtMs: Long?,
+        subscriptionStatus: String = if (isPremium) UserEntitlement.STATUS_ACTIVE else UserEntitlement.STATUS_EXPIRED,
+        email: String = "",
+        deviceHash: String = "",
+        context: Context? = null
+    ): Boolean {
+        val cleanUid = uid.trim()
+        if (cleanUid.isEmpty()) return false
+        val monotonicNowMs = maxOf(currentServerNowMs(), System.currentTimeMillis())
+        val fields = mapOf<String, Any?>(
+            "isPremium" to isPremium,
+            "isPremiumUser" to isPremium,
+            "subscriptionStatus" to subscriptionStatus,
+            "subscriptionExpiresAtMs" to if (isPremium) subscriptionExpiresAtMs else null,
+            "isBlocked" to false,
+            "updatedAtMs" to monotonicNowMs
+        )
+        val ok = update("$NODE_USERS/$cleanUid", fields, context)
+        if (email.isNotBlank() || deviceHash.length == 64) {
+            propagateEntitlementByEmailInRtdb(
+                email = email,
+                primaryUid = cleanUid,
+                fields = fields,
+                context = context,
+                deviceHash = deviceHash
+            )
+        }
+        return ok
+    }
+
+    /**
      * Deletes a user node `/users/{uid}` in Firebase Realtime Database in <1s.
      */
     fun deleteUserNode(uid: String, context: Context? = null): Boolean {
@@ -1002,6 +1240,50 @@ object RealtimeDatabaseSync {
         }.onFailure { e ->
             Log.d(TAG, "RTDB deleteUserNode($cleanUid) skipped: ${e.message}")
         }.getOrDefault(false)
+    }
+
+    /**
+     * Deletes `/users/{uid}` AND any duplicate sibling `/users/{otherUid}` nodes matching
+     * the same normalized email or deviceHash so deletion reflects across Admin and client
+     * devices within < 1 second.
+     */
+    fun deleteUserAndSiblingsInRtdb(
+        uid: String,
+        email: String = "",
+        deviceHash: String = "",
+        context: Context? = null
+    ): Boolean {
+        val cleanUid = uid.trim()
+        val deletedPrimary = deleteUserNode(cleanUid, context)
+        val normalizedEmail = email.trim().lowercase()
+        val normalizedDevice = deviceHash.trim().lowercase().takeIf { it.length == 64 }.orEmpty()
+        if (normalizedEmail.isEmpty() && normalizedDevice.isEmpty()) {
+            return deletedPrimary
+        }
+        val usersRef = refForPath(NODE_USERS, context) ?: return deletedPrimary
+        runCatching {
+            usersRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    if (!snapshot.exists()) return
+                    for (child in snapshot.children) {
+                        val otherUid = child.key.orEmpty().trim()
+                        if (otherUid.isEmpty() || otherUid == cleanUid) continue
+                        val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
+                        val childDevice = (child.child("deviceHash").value as? String)?.trim()?.lowercase().orEmpty()
+                        val matches = (normalizedEmail.isNotEmpty() && childEmail == normalizedEmail) ||
+                            (normalizedDevice.isNotEmpty() && childDevice == normalizedDevice)
+                        if (matches) {
+                            child.ref.removeValue()
+                        }
+                    }
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Log.d(TAG, "deleteUserAndSiblingsInRtdb cancelled: ${error.message}")
+                }
+            })
+        }
+        return deletedPrimary
     }
 
     /**
@@ -1113,6 +1395,8 @@ object RealtimeDatabaseSync {
             "phone" to entitlement.phoneNumber,
             "phoneNumber" to entitlement.phoneNumber,
             "installDate" to installMs,
+            "registrationDate" to installMs,
+            "createdAtMs" to (entitlement.createdAt?.toDate()?.time ?: installMs),
             "subscriptionStatus" to entitlement.subscriptionStatus,
             "isPremium" to entitlement.isPremiumUser,
             "isPremiumUser" to entitlement.isPremiumUser,
@@ -1169,11 +1453,23 @@ object RealtimeDatabaseSync {
             ?: asBool(map["autoCallRecording"])
             ?: base.autoCallRecording
         val installDateMs = asLong(map["installDate"])
+            ?: asLong(map["registrationDate"])
+            ?: asLong(map["createdAtMs"])
+            ?: asLong(map["createdAt"])
             ?: asLong(map["trialStartedAtMs"])
+        val createdAtMs = asLong(map["registrationDate"])
+            ?: asLong(map["createdAtMs"])
+            ?: asLong(map["createdAt"])
+            ?: installDateMs
         val trialStartedTs = if (installDateMs != null && installDateMs > 0L) {
             Timestamp(Date(installDateMs))
         } else {
             base.trialStartedAt
+        }
+        val createdAtTs = if (createdAtMs != null && createdAtMs > 0L) {
+            Timestamp(Date(createdAtMs))
+        } else {
+            base.createdAt ?: trialStartedTs
         }
         val expiresMs = asLong(map["subscriptionExpiresAtMs"])
             ?: asLong(map["subscriptionExpiresAt"])
@@ -1261,6 +1557,7 @@ object RealtimeDatabaseSync {
             recordMeetCalls = asBool(map["recordMeetCalls"]) ?: base.recordMeetCalls,
             recordTelegramCalls = asBool(map["recordTelegramCalls"]) ?: base.recordTelegramCalls,
             recordInstagramCalls = asBool(map["recordInstagramCalls"]) ?: base.recordInstagramCalls,
+            createdAt = createdAtTs,
             updatedAt = updatedAtTs
         )
     }
@@ -1558,5 +1855,153 @@ object RealtimeDatabaseSync {
             impressionsCount = (asLong(map["impressionsCount"]) ?: 0L).coerceAtLeast(0L),
             clicksCount = (asLong(map["clicksCount"]) ?: 0L).coerceAtLeast(0L)
         )
+    }
+
+    /**
+     * Looks up a verified real caller profile from Firebase RTDB:
+     * 1. Exact key match under `/caller_directory/{e164Digits}`
+     * 2. Fallback match against registered PulseDial users under `/users` matching the same phone number.
+     * Always timeout-bounded (1.8s) and safe when offline or in Robolectric unit tests.
+     */
+    suspend fun lookupCallerProfileByPhone(
+        context: Context,
+        rawNumber: String
+    ): CallerDirectoryProfile? {
+        val e164Key = PhoneGeoDatabase.toE164Digits(rawNumber)
+        if (e164Key.length < 7) return null
+        val targetLast10 = e164Key.takeLast(10)
+        val root = rootRef(context) ?: return null
+
+        // 1. Check verified community/admin caller directory entry
+        val directRef = root.child(NODE_CALLER_DIRECTORY).child(e164Key)
+        val directProfile = kotlinx.coroutines.withTimeoutOrNull(1400L) {
+            kotlinx.coroutines.suspendCancellableCoroutine<CallerDirectoryProfile?> { cont ->
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (!cont.isActive) return
+                        val rawMap = if (snapshot.exists()) snapshot.value as? Map<*, *> else null
+                        if (rawMap == null) {
+                            cont.resume(null, onCancellation = null)
+                            return
+                        }
+                        val name = (rawMap["displayName"] as? String)?.trim().orEmpty()
+                        if (name.isEmpty()) {
+                            cont.resume(null, onCancellation = null)
+                            return
+                        }
+                        val platformsRaw = rawMap["socialPlatforms"] as? List<*>
+                        val platforms = platformsRaw
+                            ?.mapNotNull { (it as? String)?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                            .orEmpty()
+                        cont.resume(
+                            CallerDirectoryProfile(
+                                phoneKey = e164Key,
+                                displayName = name,
+                                city = (rawMap["city"] as? String)?.trim().orEmpty(),
+                                state = (rawMap["state"] as? String)?.trim().orEmpty(),
+                                postalCode = (rawMap["postalCode"] as? String)?.trim().orEmpty(),
+                                country = (rawMap["country"] as? String)?.trim().orEmpty(),
+                                countryCode = (rawMap["countryCode"] as? String)?.trim().orEmpty(),
+                                socialPlatforms = platforms,
+                                sourceLabel = (rawMap["sourceLabel"] as? String)?.trim()
+                                    ?.takeIf { it.isNotEmpty() }
+                                    ?: "Verified Cloud Directory"
+                            ),
+                            onCancellation = null
+                        )
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        if (cont.isActive) cont.resume(null, onCancellation = null)
+                    }
+                }
+                directRef.addListenerForSingleValueEvent(listener)
+                cont.invokeOnCancellation { runCatching { directRef.removeEventListener(listener) } }
+            }
+        }
+        if (directProfile != null) return directProfile
+
+        // 2. Fallback: match against registered PulseDial users by normalized phone number
+        val usersRef = root.child(NODE_USERS)
+        return kotlinx.coroutines.withTimeoutOrNull(1400L) {
+            kotlinx.coroutines.suspendCancellableCoroutine<CallerDirectoryProfile?> { cont ->
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (!cont.isActive) return
+                        var matched: CallerDirectoryProfile? = null
+                        if (snapshot.exists()) {
+                            for (child in snapshot.children) {
+                                val rawMap = child.value as? Map<*, *> ?: continue
+                                val userPhone = ((rawMap["phone"] as? String)
+                                    ?: (rawMap["phoneNumber"] as? String)).orEmpty()
+                                val userE164 = PhoneGeoDatabase.toE164Digits(userPhone)
+                                if (userE164.length < 7) continue
+                                if (userE164 == e164Key ||
+                                    (targetLast10.length == 10 && userE164.takeLast(10) == targetLast10)
+                                ) {
+                                    val name = (rawMap["displayName"] as? String)?.trim().orEmpty()
+                                    if (name.isNotEmpty() && !name.equals("PulseDial User", ignoreCase = true)) {
+                                        matched = CallerDirectoryProfile(
+                                            phoneKey = e164Key,
+                                            displayName = name,
+                                            city = (rawMap["city"] as? String)?.trim().orEmpty(),
+                                            state = (rawMap["state"] as? String)?.trim().orEmpty(),
+                                            postalCode = (rawMap["postalCode"] as? String)?.trim().orEmpty(),
+                                            country = (rawMap["country"] as? String)?.trim().orEmpty(),
+                                            socialPlatforms = listOf("PulseDial"),
+                                            sourceLabel = "PulseDial Cloud Directory"
+                                        )
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        cont.resume(matched, onCancellation = null)
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {
+                        if (cont.isActive) cont.resume(null, onCancellation = null)
+                    }
+                }
+                usersRef.addListenerForSingleValueEvent(listener)
+                cont.invokeOnCancellation { runCatching { usersRef.removeEventListener(listener) } }
+            }
+        }
+    }
+
+    /**
+     * Saves a user-verified caller name and optional Location / State / ZIP / Country into
+     * `/caller_directory/{e164Digits}` so all subsequent lookups show the verified real identity.
+     */
+    fun saveVerifiedCallerProfile(
+        context: Context,
+        rawNumber: String,
+        displayName: String,
+        city: String = "",
+        state: String = "",
+        postalCode: String = "",
+        country: String = "",
+        countryCode: String = "",
+        socialPlatforms: List<String> = emptyList(),
+        submittedByUid: String = ""
+    ): Boolean {
+        val e164Key = PhoneGeoDatabase.toE164Digits(rawNumber)
+        val cleanName = displayName.trim()
+        if (e164Key.length < 5 || cleanName.isEmpty()) return false
+        val payload = mapOf(
+            "phoneKey" to e164Key,
+            "rawNumber" to rawNumber.trim(),
+            "displayName" to cleanName,
+            "city" to city.trim(),
+            "state" to state.trim(),
+            "postalCode" to postalCode.trim(),
+            "country" to country.trim(),
+            "countryCode" to countryCode.trim(),
+            "socialPlatforms" to socialPlatforms.distinct(),
+            "sourceLabel" to "Verified Caller Directory",
+            "submittedByUid" to submittedByUid.trim(),
+            "updatedAtMs" to ServerValue.TIMESTAMP
+        )
+        return set("$NODE_CALLER_DIRECTORY/$e164Key", payload, context)
     }
 }

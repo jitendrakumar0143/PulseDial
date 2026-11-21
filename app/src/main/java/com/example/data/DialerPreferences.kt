@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.edit
 import com.example.billing.UpiPaymentHelper
 import com.example.data.firebase.AppConfig
+import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.data.firebase.TrialStatus
 import com.example.data.firebase.TrialVerificationResult
 import com.example.recording.CallRecordingSource
@@ -167,6 +168,24 @@ class DialerPreferences(context: Context) {
             prefs.edit { putLong(KEY_SERVER_CLOCK_OFFSET_MS, value) }
             refreshIntegritySeal()
         }
+
+    /**
+     * Syncs the Firebase server clock offset and heals a future-skewed `lastSeenTimeMs`
+     * so valid Admin-granted subscriptions never appear expired due to earlier device clock drift.
+     */
+    fun recalibrateClockFromServer(offsetMs: Long, localNowMs: Long = System.currentTimeMillis()) {
+        val serverNow = localNowMs + offsetMs
+        val storedLastSeen = lastSeenTimeMs
+        val shouldResetFutureLastSeen = storedLastSeen > serverNow + 5L * ONE_MINUTE_MILLIS
+        if (serverClockOffsetMs == offsetMs && !shouldResetFutureLastSeen) return
+        prefs.edit {
+            putLong(KEY_SERVER_CLOCK_OFFSET_MS, offsetMs)
+            if (shouldResetFutureLastSeen) {
+                putLong(KEY_LAST_SEEN_TIME, maxOf(firstLaunchTime, serverNow))
+            }
+        }
+        refreshIntegritySeal()
+    }
 
     var deviceIdHash: String
         get() = prefs.getString(KEY_DEVICE_ID_HASH, "").orEmpty()
@@ -411,10 +430,12 @@ class DialerPreferences(context: Context) {
             } else if (!prefs.getBoolean(KEY_USER_CUSTOM_AUTO_RECORDING, false)) {
                 putBoolean(KEY_AUTO_RECORDING, config.defaultAutoRecording)
             }
-            if (cleanTheme == AppConfig.THEME_DARK) {
-                putInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_YES)
-            } else if (cleanTheme == AppConfig.THEME_LIGHT) {
-                putInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_NO)
+            if (!prefs.getBoolean(KEY_USER_CUSTOM_THEME_MODE, false)) {
+                if (cleanTheme == AppConfig.THEME_DARK) {
+                    putInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_YES)
+                } else if (cleanTheme == AppConfig.THEME_LIGHT) {
+                    putInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_NO)
+                }
             }
         }
         refreshIntegritySeal()
@@ -516,12 +537,14 @@ class DialerPreferences(context: Context) {
         }
     }
 
+    /**
+     * Strict Premium-Only Call Recording gate: non-premium users can only use normal calling,
+     * contact saving, and the simple Standard Light theme.
+     */
     fun hasRecordingAccess(now: Long = System.currentTimeMillis()): Boolean {
         if (!verifyIntegrityOrReset()) return false
         if (adminBlockedUser) return false
-        if (isPremiumActive(now)) return true
-        if (enforceSingleDeviceTrialConfig && trialBlockedByDevice && isTrialExpired(now)) return false
-        return !isTrialExpired(now)
+        return isPremiumActive(now)
     }
 
     fun applyCloudVerification(
@@ -612,6 +635,11 @@ class DialerPreferences(context: Context) {
         val cleanDelegated = if (delegatedAdmin != null) {
             delegatedAdmin && UpiPaymentHelper.isSuperAdminEmail(cleanGrantedBy)
         } else null
+        val serverNow = RealtimeDatabaseSync.currentServerNowMs(serverClockOffsetMs)
+        val shouldHealFutureClockForGrant = isPremium && !isBlocked &&
+            cleanExp > 0L && lastSeenTimeMs >= cleanExp && serverNow < cleanExp
+        val shouldClearFlagsForGrant = isPremium && !isBlocked &&
+            (tamperDetected || trialBlockedByDevice)
         val changed = (isPremiumUser != isPremium) ||
             (adminBlockedUser != isBlocked) ||
             (this.subscriptionExpiresAtMs != cleanExp) ||
@@ -619,16 +647,27 @@ class DialerPreferences(context: Context) {
             (cleanBonus != null && adminBonusTrialDays != cleanBonus) ||
             (hideSubscriptionUi != null && prefs.getBoolean(KEY_HIDE_SUBSCRIPTION_UI, false) != hideSubscriptionUi) ||
             (cleanDelegated != null && (delegatedAdminAuthorized != cleanDelegated ||
-                !delegatedAdminGrantedBy.equals(if (cleanDelegated) cleanGrantedBy else "", ignoreCase = true)))
+                !delegatedAdminGrantedBy.equals(if (cleanDelegated) cleanGrantedBy else "", ignoreCase = true))) ||
+            shouldHealFutureClockForGrant ||
+            shouldClearFlagsForGrant
         if (!changed) return
 
         prefs.edit {
             putBoolean(KEY_IS_PREMIUM_USER, isPremium)
             putBoolean(KEY_ADMIN_BLOCKED_USER, isBlocked)
             putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, cleanExp)
+            if (isPremium && !isBlocked) {
+                putBoolean(KEY_TAMPER_DETECTED, false)
+                putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, false)
+            }
+            if (shouldHealFutureClockForGrant) {
+                putLong(KEY_LAST_SEEN_TIME, maxOf(cleanInstall ?: firstLaunchTime, serverNow))
+            }
             if (cleanInstall != null) {
                 putLong(KEY_FIRST_LAUNCH_TIME, cleanInstall)
-                putLong(KEY_LAST_SEEN_TIME, maxOf(prefs.getLong(KEY_LAST_SEEN_TIME, 0L), cleanInstall))
+                if (!shouldHealFutureClockForGrant) {
+                    putLong(KEY_LAST_SEEN_TIME, maxOf(prefs.getLong(KEY_LAST_SEEN_TIME, 0L), cleanInstall))
+                }
             }
             if (cleanBonus != null) {
                 putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, cleanBonus)
@@ -757,6 +796,10 @@ class DialerPreferences(context: Context) {
     var displayThemeMode: Int
         get() = prefs.getInt(KEY_THEME_MODE, AppCompatDelegate.MODE_NIGHT_NO)
         set(value) = prefs.edit { putInt(KEY_THEME_MODE, value) }
+
+    var hasLocalThemeCustomization: Boolean
+        get() = prefs.getBoolean(KEY_USER_CUSTOM_THEME_MODE, false)
+        set(value) = prefs.edit { putBoolean(KEY_USER_CUSTOM_THEME_MODE, value) }
 
     var selectedThemePaletteId: String
         get() = prefs.getString(
@@ -1144,6 +1187,7 @@ class DialerPreferences(context: Context) {
         private const val KEY_DIALPAD_TONES = "dialpad_tones_enabled"
         private const val KEY_USER_CUSTOM_AUTO_RECORDING = "user_custom_auto_recording"
         private const val KEY_USER_CUSTOM_DIALPAD_TONES = "user_custom_dialpad_tones"
+        private const val KEY_USER_CUSTOM_THEME_MODE = "user_custom_theme_mode"
         private const val KEY_THEME_MODE = "display_theme_mode"
         private const val KEY_SELECTED_THEME_PALETTE_ID = "selected_theme_palette_id"
         private const val KEY_USE_DYNAMIC_COLORS = "use_dynamic_colors"

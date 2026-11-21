@@ -97,7 +97,13 @@ object GoogleAuthHelper {
         val activeEmail = resolveActiveEmail(context).trim()
         val deviceEmails = getDeviceSignedInGoogleEmails(context)
         if (deviceEmails.isNotEmpty()) {
-            if (activeEmail.isBlank() || !isEmailSignedInOnDevice(context, activeEmail)) {
+            val lowerActive = activeEmail.lowercase()
+            if (activeEmail.isBlank() ||
+                !activeEmail.contains("@") ||
+                !activeEmail.contains(".") ||
+                activeEmail.length < 5 ||
+                deviceEmails.none { it.equals(lowerActive, ignoreCase = true) }
+            ) {
                 return false
             }
         } else if (activeEmail.isNotBlank() && !activeEmail.contains("@")) {

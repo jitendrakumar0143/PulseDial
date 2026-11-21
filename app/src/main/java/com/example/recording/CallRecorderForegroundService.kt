@@ -43,7 +43,7 @@ class CallRecorderForegroundService : Service() {
                 if (state.uid != null) {
                     val prefs = DialerPreferences(this@CallRecorderForegroundService)
                     val subManager = SubscriptionManager(this@CallRecorderForegroundService)
-                    if (!subManager.isSubscriptionActive() ||
+                    if (!subManager.isPremiumActive() ||
                         !prefs.allowCallRecordingConfig ||
                         prefs.adminBlockedUser
                     ) {

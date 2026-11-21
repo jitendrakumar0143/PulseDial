@@ -83,6 +83,72 @@
             app:tint="@color/md_theme_tertiary" />
     </LinearLayout>
 
+    <!-- Structured Caller Geo (Location, State, ZIP/PIN, Country) & Social Lookup Strip -->
+    <LinearLayout
+        android:id="@+id/layout_sheet_caller_geo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_icon_pill_tonal"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tv_sheet_geo_line"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/md_theme_onSurface"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_sheet_social_meta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+            android:textColor="@color/md_theme_onSurfaceVariant" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_sheet_whatsapp"
+                    style="@style/Widget.Material3.Chip.Assist"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/caller_id_social_whatsapp" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_sheet_telegram"
+                    style="@style/Widget.Material3.Chip.Assist"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:minHeight="48dp"
+                    android:text="@string/caller_id_social_telegram" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_sheet_web"
+                    style="@style/Widget.Material3.Chip.Assist"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:minHeight="48dp"
+                    android:text="@string/caller_id_social_web" />
+            </LinearLayout>
+        </HorizontalScrollView>
+    </LinearLayout>
+
     <!-- Essential Quick Actions Grid -->
     <LinearLayout
         android:layout_width="match_parent"

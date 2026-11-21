@@ -233,10 +233,21 @@ test("User entitlement: owner isolation, no self-grant bonus days or list all us
       displayName: "Alice Updated",
       autoCallRecording: true,
       themeMode: "dark",
+      themePaletteId: "cyber_neon_3d",
+      useDynamicColors: false,
       dialpadTonesEnabled: false,
       blockedNumbers: ["+919876500000"],
       quickDeclineResponses: ["In a meeting, will call back."],
       subscriptionStatus: "pending_approval",
+      updatedAt: pastDate(),
+    })
+  );
+
+  // Alice CAN also switch themeMode to 'system' and toggle useDynamicColors
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      themeMode: "system",
+      useDynamicColors: true,
       updatedAt: pastDate(),
     })
   );

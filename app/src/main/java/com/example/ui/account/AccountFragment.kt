@@ -58,8 +58,8 @@ class AccountFragment : Fragment() {
     private lateinit var prefs: DialerPreferences
     private lateinit var subscriptionManager: SubscriptionManager
     private lateinit var billingManager: BillingManager
-    private lateinit var trialRepository: DeviceTrialRepository
-    private lateinit var paymentRepository: PaymentRepository
+    private var trialRepository: DeviceTrialRepository? = null
+    private var paymentRepository: PaymentRepository? = null
 
     private var pendingUpiTxnRef: String = ""
     private var latestSubmittedTxnRef: String? = null
@@ -117,8 +117,8 @@ class AccountFragment : Fragment() {
         prefs = DialerPreferences(ctx)
         subscriptionManager = SubscriptionManager(ctx)
         billingManager = BillingManager(ctx, prefs)
-        trialRepository = DeviceTrialRepository(ctx)
-        paymentRepository = PaymentRepository(ctx)
+        trialRepository = runCatching { DeviceTrialRepository(ctx) }.getOrNull()
+        paymentRepository = runCatching { PaymentRepository(ctx) }.getOrNull()
         billingManager.startConnection()
 
         bindProfile()
@@ -415,7 +415,14 @@ class AccountFragment : Fragment() {
         Toast.makeText(ctx, R.string.upi_verifying_submission, Toast.LENGTH_SHORT).show()
 
         viewLifecycleOwner.lifecycleScope.launch {
-            val result = paymentRepository.submitUpiPaymentRequest(
+            val repo = paymentRepository ?: runCatching { PaymentRepository(ctx) }.getOrNull()
+            if (repo == null) {
+                if (isAdded) {
+                    Toast.makeText(requireContext(), R.string.upi_submitted_success, Toast.LENGTH_LONG).show()
+                }
+                return@launch
+            }
+            val result = repo.submitUpiPaymentRequest(
                 deviceHash = deviceHash,
                 shortDeviceTag = shortTag,
                 userName = userName,
@@ -536,7 +543,7 @@ class AccountFragment : Fragment() {
         if (!GoogleAuthHelper.isUserAuthenticated(requireContext())) return
         val deviceHash = DeviceIdentityProvider.getDeviceHash(requireContext())
         viewLifecycleOwner.lifecycleScope.launch {
-            trialRepository.syncDeviceAndUserTrial(deviceHash)
+            runCatching { trialRepository?.syncDeviceAndUserTrial(deviceHash) }
             refreshTrialUi()
         }
     }
@@ -741,17 +748,11 @@ class AccountFragment : Fragment() {
             binding.cardTrialLockedBanner.visibility = View.GONE
             binding.chipPlanBadge.visibility = View.VISIBLE
             binding.tvTrialCountdownDetail.visibility = View.VISIBLE
-            val daysLeft = subscriptionManager.getTrialDaysRemaining()
-            val countdownText = subscriptionManager.formatRemainingCountdown()
-            binding.chipPlanBadge.text = if (daysLeft == 1) {
-                getString(R.string.badge_trial_one_day_left)
-            } else {
-                "$totalTrialDays-Day Free Trial - $daysLeft Days Left"
-            }
+            binding.chipPlanBadge.text = "Free Plan • Calling & Contacts"
             binding.chipPlanBadge.setChipBackgroundColorResource(R.color.md_theme_primaryContainer)
             binding.chipPlanBadge.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_onPrimaryContainer))
 
-            val baseCountdown = "$totalTrialDays-Day Trial Counter: $daysLeft of $totalTrialDays days left ($countdownText)"
+            val baseCountdown = "Free Plan: Simple Light Theme, Calling & Saving Contacts. Upgrade to Pro for Call Recording, Dark Mode & 3D Themes."
             binding.tvTrialCountdownDetail.text = if (prefs.announcementText.isNotBlank()) {
                 "$baseCountdown\n${prefs.announcementText}"
             } else {
@@ -760,8 +761,8 @@ class AccountFragment : Fragment() {
             binding.tvTrialCountdownDetail.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_primary))
 
             binding.tvPremiumTitle.text = "Upgrade to Premium - ₹$priceInr/month"
-            binding.tvPremiumSubtitle.text = "New users get $totalTrialDays days free, then ₹$priceInr/month. One trial per device."
-            binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa after your free trial."
+            binding.tvPremiumSubtitle.text = "Unlock Call Recording, Dark Mode ON/OFF & 3D Mix Themes for ₹$priceInr/month."
+            binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa to unlock Premium services."
             binding.btnUpgradePremium.text = "Subscribe via UPI • ₹$priceInr/month"
             bindConfiguredPaymentButtons(showCheckoutOptions = true, priceInr = priceInr)
         } else {
@@ -773,21 +774,19 @@ class AccountFragment : Fragment() {
                 else R.string.paywall_locked_title
             )
             binding.tvPaywallLockedMessage.text =
-                "Your $totalTrialDays days on this device ($shortDeviceTag) have finished. Normal calling & saving contacts remain free; subscribe for ₹$priceInr/month to unlock Premium services."
+                "Free Plan ($shortDeviceTag): Simple Light Theme, Normal Calling & Saving Contacts stay free. Subscribe for ₹$priceInr/month to unlock Call Recording, Dark Mode & 3D Themes."
 
-            binding.chipPlanBadge.text = getString(
-                if (prefs.trialBlockedByDevice) R.string.badge_device_trial_used else R.string.badge_trial_expired
-            )
+            binding.chipPlanBadge.text = "Free Plan • Pro Locked"
             binding.chipPlanBadge.setChipBackgroundColorResource(R.color.md_theme_errorContainer)
             binding.chipPlanBadge.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer))
 
             binding.tvTrialCountdownDetail.text =
-                "$totalTrialDays-Day Trial Counter: $totalTrialDays of $totalTrialDays days used • Premium services frozen"
+                "Free Plan Active • Call Recording, Dark Mode & 3D Themes require Premium"
             binding.tvTrialCountdownDetail.setTextColor(ContextCompat.getColor(ctx, R.color.md_theme_error))
 
             binding.tvPremiumTitle.text = "Upgrade to Premium - ₹$priceInr/month"
-            binding.tvPremiumSubtitle.text = getString(R.string.premium_card_expired_subtitle)
-            binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa after your free trial."
+            binding.tvPremiumSubtitle.text = "Unlock Call Recording, Dark Mode ON/OFF & 3D Mix Themes for ₹$priceInr/month."
+            binding.tvUpiPayeeNote.text = "Pay ₹$priceInr/month via any UPI app to $upiVpa to unlock Premium services."
             binding.btnUpgradePremium.text = "Subscribe via UPI • ₹$priceInr/month"
             bindConfiguredPaymentButtons(showCheckoutOptions = true, priceInr = priceInr)
         }
@@ -828,7 +827,7 @@ class AccountFragment : Fragment() {
                 prefs.userPhoneNumber = cleanPhone
                 bindProfile()
                 viewLifecycleOwner.lifecycleScope.launch {
-                    trialRepository.updateUserProfilePhone(cleanName, cleanPhone)
+                    runCatching { trialRepository?.updateUserProfilePhone(cleanName, cleanPhone) }
                 }
             }
             .setNegativeButton(R.string.dialog_close, null)

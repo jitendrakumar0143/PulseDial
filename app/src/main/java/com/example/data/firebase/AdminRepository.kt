@@ -72,7 +72,8 @@ enum class AdminUserDateField {
 class AdminRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth,
-    private val fallbackUidProvider: () -> String? = { null }
+    private val fallbackUidProvider: () -> String? = { null },
+    private val appContext: Context? = null
 ) {
 
     constructor(context: Context) : this(
@@ -80,7 +81,8 @@ class AdminRepository(
             context.applicationContext.getString(R.string.firestore_database_id)
         ),
         auth = Firebase.auth,
-        fallbackUidProvider = { GoogleAuthHelper.resolveActiveUid(context.applicationContext) }
+        fallbackUidProvider = { GoogleAuthHelper.resolveActiveUid(context.applicationContext) },
+        appContext = context.applicationContext
     )
 
     private fun requireAdminUid(): String {
@@ -487,7 +489,8 @@ class AdminRepository(
                     payuPaymentLink = cleanPayuLink,
                     customGatewayName = cleanCustomName,
                     customGatewayUrl = cleanCustomUrl
-                )
+                ),
+                context = appContext
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
@@ -527,8 +530,8 @@ class AdminRepository(
             null
         }
 
-        val nowMs = System.currentTimeMillis()
-        val monotonicNowMs = maxOf(nowMs, (user.updatedAt?.toDate()?.time ?: 0L) + 1_000L)
+        val nowMs = RealtimeDatabaseSync.currentServerNowMs()
+        val monotonicNowMs = maxOf(nowMs, System.currentTimeMillis(), (user.updatedAt?.toDate()?.time ?: 0L) + 1_000L)
         val resolvedExpiry: Timestamp? = if (isPremium && !isBlocked) {
             subscriptionExpiresAt
                 ?: user.subscriptionExpiresAt?.takeIf { it.toDate().time > nowMs }
@@ -556,40 +559,60 @@ class AdminRepository(
         )
 
         return try {
-            RealtimeDatabaseSync.pushUserFields(targetUid, rtdbUpdateFields)
+            RealtimeDatabaseSync.pushUserFields(targetUid, rtdbUpdateFields, context = appContext)
             RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
                 email = user.email,
                 primaryUid = targetUid,
-                fields = rtdbUpdateFields
+                fields = rtdbUpdateFields,
+                context = appContext,
+                deviceHash = user.deviceHash
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
-            val deviceSnap = deviceRef?.snapshots()?.first()
-            val batch = db.batch()
-            batch.update(
-                userRef,
-                mapOf(
-                    "isPremiumUser" to isPremium,
-                    "subscriptionStatus" to resolvedStatus,
-                    "subscriptionProductId" to if (isPremium) {
-                        user.subscriptionProductId.ifBlank { "admin_granted_pro" }
-                    } else {
-                        ""
-                    },
-                    "purchaseToken" to if (isPremium) {
-                        user.purchaseToken.ifBlank { "admin_manual" }
-                    } else {
-                        ""
-                    },
-                    "subscriptionExpiresAt" to resolvedExpiry,
-                    "isBlocked" to isBlocked,
-                    "bonusTrialDays" to bonusTrialDays.coerceIn(0L, 3650L),
-                    "adminNote" to adminNote.trim().take(240),
-                    "hideSubscriptionUI" to hideSubscriptionUI,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+            val userSnap = runCatching { userRef.snapshots().first() }.getOrNull()
+            val deviceSnap = runCatching { deviceRef?.snapshots()?.first() }.getOrNull()
+            val firestoreUserPayload = mapOf(
+                "isPremiumUser" to isPremium,
+                "subscriptionStatus" to resolvedStatus,
+                "subscriptionProductId" to if (isPremium) {
+                    user.subscriptionProductId.ifBlank { "admin_granted_pro" }
+                } else {
+                    ""
+                },
+                "purchaseToken" to if (isPremium) {
+                    user.purchaseToken.ifBlank { "admin_manual" }
+                } else {
+                    ""
+                },
+                "subscriptionExpiresAt" to resolvedExpiry,
+                "isBlocked" to isBlocked,
+                "bonusTrialDays" to bonusTrialDays.coerceIn(0L, 3650L),
+                "adminNote" to adminNote.trim().take(240),
+                "hideSubscriptionUI" to hideSubscriptionUI,
+                "updatedAt" to FieldValue.serverTimestamp()
             )
+            val batch = db.batch()
+            var hasBatchWrites = false
+            if (userSnap?.exists() == true) {
+                batch.update(userRef, firestoreUserPayload)
+                hasBatchWrites = true
+            }
+            val cleanEmail = user.email.trim()
+            if (cleanEmail.isNotEmpty()) {
+                val emailMatches = runCatching {
+                    db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                        .whereEqualTo("email", cleanEmail)
+                        .snapshots()
+                        .first()
+                }.getOrNull()
+                emailMatches?.documents?.forEach { doc ->
+                    if (doc.id != targetUid) {
+                        batch.update(doc.reference, firestoreUserPayload)
+                        hasBatchWrites = true
+                    }
+                }
+            }
             if (deviceRef != null && deviceSnap?.exists() == true) {
                 batch.update(
                     deviceRef,
@@ -599,14 +622,20 @@ class AdminRepository(
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            batch.commit().awaitTask()
+            if (hasBatchWrites) {
+                batch.commit().awaitTask()
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             val firestoreError = generateSequence<Throwable>(e) { it.cause }
                 .filterIsInstance<FirebaseFirestoreException>()
                 .firstOrNull()
             if (firestoreError == null && e is CancellationException) throw e
+            if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                return Result.success(Unit)
+            }
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.UPDATE, userRef.path, auth)
             Result.failure(actualError)
@@ -652,7 +681,7 @@ class AdminRepository(
             )
         }
 
-        val nowMs = System.currentTimeMillis()
+        val nowMs = RealtimeDatabaseSync.currentServerNowMs()
         val existingExpMs = resolveEffectiveExpiryMs(user)
         val baseMs = maxOf(nowMs, existingExpMs)
         val nextExpiry = Timestamp(Date(baseMs + DialerPreferences.ONE_MONTH_MILLIS))
@@ -709,7 +738,7 @@ class AdminRepository(
     suspend fun adjustUserSubscriptionDays(
         user: UserEntitlement,
         deltaDays: Long,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = RealtimeDatabaseSync.currentServerNowMs()
     ): Result<Unit> {
         val nextExpMs = computeAdjustedSubscriptionExpiryMs(user, deltaDays, nowMs)
         val stillActive = !user.isBlocked && nextExpMs > nowMs
@@ -847,8 +876,8 @@ class AdminRepository(
         val cleanNote = adminNote.trim().take(240)
         val cleanBonus = bonusTrialDays.coerceIn(0L, 3650L)
 
-        val nowMs = System.currentTimeMillis()
-        val monotonicNowMs = maxOf(nowMs, (user.updatedAt?.toDate()?.time ?: 0L) + 1_000L)
+        val nowMs = RealtimeDatabaseSync.currentServerNowMs()
+        val monotonicNowMs = maxOf(nowMs, System.currentTimeMillis(), (user.updatedAt?.toDate()?.time ?: 0L) + 1_000L)
         val resolvedExpiry: Timestamp? = if (isPremium && !isBlocked) {
             subscriptionExpiresAt
                 ?: user.subscriptionExpiresAt?.takeIf { it.toDate().time > nowMs }
@@ -908,16 +937,19 @@ class AdminRepository(
         }
 
         return try {
-            RealtimeDatabaseSync.pushUserFields(targetUid, rtdbMap)
+            RealtimeDatabaseSync.pushUserFields(targetUid, rtdbMap, context = appContext)
             RealtimeDatabaseSync.propagateEntitlementByEmailInRtdb(
                 email = user.email,
                 primaryUid = targetUid,
-                fields = rtdbMap
+                fields = rtdbMap,
+                context = appContext,
+                deviceHash = user.deviceHash
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
-            val deviceSnap = deviceRef?.snapshots()?.first()
+            val userSnap = runCatching { userRef.snapshots().first() }.getOrNull()
+            val deviceSnap = runCatching { deviceRef?.snapshots()?.first() }.getOrNull()
             val firestorePayload = mutableMapOf<String, Any?>(
                 "displayName" to cleanName,
                 "phoneNumber" to cleanPhone,
@@ -937,7 +969,26 @@ class AdminRepository(
                 firestorePayload["deviceHash"] = ""
             }
             val batch = db.batch()
-            batch.update(userRef, firestorePayload)
+            var hasBatchWrites = false
+            if (userSnap?.exists() == true) {
+                batch.update(userRef, firestorePayload)
+                hasBatchWrites = true
+            }
+            val cleanEmail = user.email.trim()
+            if (cleanEmail.isNotEmpty()) {
+                val emailMatches = runCatching {
+                    db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                        .whereEqualTo("email", cleanEmail)
+                        .snapshots()
+                        .first()
+                }.getOrNull()
+                emailMatches?.documents?.forEach { doc ->
+                    if (doc.id != targetUid) {
+                        batch.update(doc.reference, firestorePayload)
+                        hasBatchWrites = true
+                    }
+                }
+            }
             if (deviceRef != null && deviceSnap?.exists() == true) {
                 batch.update(
                     deviceRef,
@@ -947,14 +998,20 @@ class AdminRepository(
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                hasBatchWrites = true
             }
-            batch.commit().awaitTask()
+            if (hasBatchWrites) {
+                batch.commit().awaitTask()
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             val firestoreError = generateSequence<Throwable>(e) { it.cause }
                 .filterIsInstance<FirebaseFirestoreException>()
                 .firstOrNull()
             if (firestoreError == null && e is CancellationException) throw e
+            if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                return Result.success(Unit)
+            }
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.UPDATE, userRef.path, auth)
             Result.failure(actualError)
@@ -1000,7 +1057,7 @@ class AdminRepository(
             "usr_${System.currentTimeMillis()}_${(1000..9999).random()}"
         }
 
-        val nowMs = System.currentTimeMillis()
+        val nowMs = RealtimeDatabaseSync.currentServerNowMs()
         val nowTs = Timestamp(Date(nowMs))
         val clampedSubDays = subscriptionDays.coerceIn(0L, 3650L)
         val expiryTs = if (isPremium && clampedSubDays > 0L) {
@@ -1049,7 +1106,7 @@ class AdminRepository(
 
         val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(generatedUid)
         return try {
-            RealtimeDatabaseSync.pushUserEntitlement(newUser, overwriteWithSet = true)
+            RealtimeDatabaseSync.pushUserEntitlement(newUser, context = appContext, overwriteWithSet = true)
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(newUser)
             }
@@ -1120,7 +1177,12 @@ class AdminRepository(
 
         val userRef = db.collection(DeviceTrialRepository.COLLECTION_USERS).document(targetUid)
         return try {
-            RealtimeDatabaseSync.deleteUserNode(targetUid)
+            RealtimeDatabaseSync.deleteUserAndSiblingsInRtdb(
+                uid = targetUid,
+                email = user.email,
+                deviceHash = user.deviceHash,
+                context = appContext
+            )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
@@ -1131,6 +1193,9 @@ class AdminRepository(
                 .filterIsInstance<FirebaseFirestoreException>()
                 .firstOrNull()
             if (firestoreError == null && e is CancellationException) throw e
+            if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                return Result.success(Unit)
+            }
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.DELETE, userRef.path, auth)
             Result.failure(actualError)

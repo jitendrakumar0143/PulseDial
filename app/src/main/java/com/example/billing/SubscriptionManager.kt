@@ -3,6 +3,7 @@ package com.example.billing
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.data.DialerPreferences
+import com.example.data.firebase.RealtimeDatabaseSync
 
 /**
  * Helper class that tracks `firstLaunchTime` in SharedPreferences and provides
@@ -55,8 +56,13 @@ class SubscriptionManager(context: Context) {
             prefs.subscriptionExpiresAtMs = value
         }
 
-    fun isPremiumActive(nowMillis: Long = System.currentTimeMillis()): Boolean =
-        prefs.isPremiumActive(nowMillis)
+    fun isPremiumActive(
+        nowMillis: Long = RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
+    ): Boolean = prefs.isPremiumActive(nowMillis)
+
+    fun hasPremiumServiceAccess(
+        nowMillis: Long = RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
+    ): Boolean = !prefs.adminBlockedUser && prefs.isPremiumActive(nowMillis)
 
     fun hasMonthlySubscriptionExpired(nowMillis: Long = System.currentTimeMillis()): Boolean =
         prefs.hasMonthlySubscriptionExpired(nowMillis)
@@ -113,8 +119,10 @@ class SubscriptionManager(context: Context) {
         return prefs.formatRemainingCountdown(nowMillis)
     }
 
-    fun isFeatureLocked(nowMillis: Long = System.currentTimeMillis()): Boolean {
-        return !isSubscriptionActive(nowMillis)
+    fun isFeatureLocked(
+        nowMillis: Long = RealtimeDatabaseSync.currentServerNowMs(prefs.serverClockOffsetMs)
+    ): Boolean {
+        return !hasPremiumServiceAccess(nowMillis)
     }
 
     companion object {

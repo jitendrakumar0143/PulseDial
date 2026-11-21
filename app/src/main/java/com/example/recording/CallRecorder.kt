@@ -80,10 +80,8 @@ class CallRecorder(private val context: Context) {
                 return false
             }
             val subscriptionManager = SubscriptionManager(appContext)
-            if (!subscriptionManager.isSubscriptionActive() ||
-                com.example.billing.SubscriptionEnforcementService.shouldRestrictUi(appContext)
-            ) {
-                Log.w(TAG, "Trial or monthly subscription expired and user is not subscribed")
+            if (prefs.adminBlockedUser || !subscriptionManager.isPremiumActive()) {
+                Log.w(TAG, "Call recording requires an active Premium subscription")
                 return false
             }
             if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) !=

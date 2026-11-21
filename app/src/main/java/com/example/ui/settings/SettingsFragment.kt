@@ -274,20 +274,41 @@ class SettingsFragment : Fragment() {
     }
 
     private fun isVipEntitledSnapshot(): Boolean {
-        return !prefs.adminBlockedUser &&
-            !SubscriptionEnforcementService.state.value.shouldRestrictUiToAccountTab &&
-            subscriptionManager.isSubscriptionActive()
+        return !prefs.adminBlockedUser && subscriptionManager.isPremiumActive()
     }
 
     private fun isVipEntitled(): Boolean {
-        return !prefs.adminBlockedUser &&
-            !SubscriptionEnforcementService.shouldRestrictUi(requireContext()) &&
-            subscriptionManager.isSubscriptionActive()
+        return !prefs.adminBlockedUser && subscriptionManager.isPremiumActive()
+    }
+
+    private fun showPremiumFeatureLockedPrompt(featureTitle: String, message: String) {
+        val ctx = context ?: return
+        if (!isAdded || activity?.isFinishing == true || activity?.isDestroyed == true) return
+        runCatching { activeSettingsDialog?.dismiss() }
+        val dialog = MaterialAlertDialogBuilder(ctx)
+            .setTitle("👑 $featureTitle")
+            .setMessage(message)
+            .setPositiveButton("Upgrade to Pro 👑") { _, _ ->
+                (activity as? MainActivity)?.navigateToAccountTab()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .create()
+        dialog.setOnDismissListener {
+            if (activeSettingsDialog === dialog) {
+                activeSettingsDialog = null
+            }
+        }
+        activeSettingsDialog = dialog
+        dialog.show()
     }
 
     private fun handleVoipToggleChange(isChecked: Boolean, persistChange: (Boolean) -> Unit) {
         if (!isVipEntitled()) {
             bindVoipCardState()
+            showPremiumFeatureLockedPrompt(
+                featureTitle = "Call Recording (Pro Only)",
+                message = "Call Recording (Cellular & WhatsApp/VoIP) is exclusively for Premium users. Free users can use Simple Light Theme, save contacts, and make/receive calls.\n\nUpgrade to Pro in the Account tab to unlock Call Recording."
+            )
             return
         }
         if (!isChecked) {
@@ -349,7 +370,13 @@ class SettingsFragment : Fragment() {
         }
 
         binding.btnManageVoipFolders.setOnClickListener {
-            if (!isVipEntitled()) return@setOnClickListener
+            if (!isVipEntitled()) {
+                showPremiumFeatureLockedPrompt(
+                    featureTitle = "Recording Folders (Pro Only)",
+                    message = "Call Recording and custom Recording Folders are exclusive to Premium users. Upgrade to Pro in the Account tab to unlock."
+                )
+                return@setOnClickListener
+            }
             showVoipFoldersDialog()
         }
     }
@@ -782,6 +809,16 @@ class SettingsFragment : Fragment() {
                 R.id.chip_theme_mode_dark -> AppCompatDelegate.MODE_NIGHT_YES
                 else -> AppCompatDelegate.MODE_NIGHT_NO
             }
+            if (!ThemeStudioManager.isUserEntitledToPremiumThemes(prefs) &&
+                desiredMode != AppCompatDelegate.MODE_NIGHT_NO
+            ) {
+                bindThemeStudioCard()
+                showPremiumFeatureLockedPrompt(
+                    featureTitle = "Dark Mode (Pro Only)",
+                    message = "Dark Mode ON/OFF and System Theme are exclusive to Premium users. Free users stay on Simple Light Mode.\n\nUpgrade to PulseDial Pro in the Account tab to unlock Dark Mode, 3D Themes & Call Recording."
+                )
+                return@setOnCheckedStateChangeListener
+            }
             if (prefs.displayThemeMode != desiredMode) {
                 settingsManager.setThemeMode(desiredMode)
                 bindThemeStudioCard()
@@ -791,6 +828,14 @@ class SettingsFragment : Fragment() {
 
         binding.switchDynamicColors.setOnCheckedChangeListener { _, isChecked ->
             if (isBindingThemeControls) return@setOnCheckedChangeListener
+            if (!ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)) {
+                bindThemeStudioCard()
+                showPremiumFeatureLockedPrompt(
+                    featureTitle = "Theme Customization (Pro Only)",
+                    message = "Dynamic Colors, Dark Mode, and 3D Mix Themes are exclusive to Premium users. Upgrade to PulseDial Pro in the Account tab to unlock."
+                )
+                return@setOnCheckedChangeListener
+            }
             if (prefs.useDynamicColors != isChecked) {
                 settingsManager.setUseDynamicColors(isChecked)
                 bindThemeStudioCard()
@@ -823,17 +868,10 @@ class SettingsFragment : Fragment() {
     }
 
     private fun showPremiumThemeLockedPrompt(lockedPalette: AppThemePalette) {
-        val ctx = context ?: return
-        MaterialAlertDialogBuilder(ctx)
-            .setTitle("👑 Full-App 3D Mix-Color Theme (Pro Only)")
-            .setMessage(
-                "\"${lockedPalette.title}\" is one of the 3 exclusive Full-App 3D Mix-Color Themes (transforming the full app background, 3D glass cards, dialer keypad, and all text colors).\n\nOnly active Premium subscribers can use the 3 Full-App 3D Mix-Color Themes. Upgrade to PulseDial Pro in the Account tab to unlock!"
-            )
-            .setPositiveButton("Upgrade to Pro 👑") { _, _ ->
-                (activity as? MainActivity)?.navigateToAccountTab()
-            }
-            .setNegativeButton(R.string.dialog_close, null)
-            .show()
+        showPremiumFeatureLockedPrompt(
+            featureTitle = "Full-App 3D Mix-Color Theme (Pro Only)",
+            message = "\"${lockedPalette.title}\" is one of the 3 exclusive Full-App 3D Mix-Color Themes (transforming the full app background, 3D glass cards, dialer keypad, and all text colors).\n\nOnly active Premium subscribers can change themes or enable Dark Mode. Upgrade to PulseDial Pro in the Account tab to unlock!"
+        )
     }
 
     private fun applySelectedThemePalette(palette: AppThemePalette) {
@@ -851,6 +889,7 @@ class SettingsFragment : Fragment() {
         bindCurrentValues(force = true)
         (activity as? MainActivity)?.refreshPremiumMainChrome()
         if (_binding != null) {
+            ThemeStudioManager.invalidateHierarchyThemeTag(binding.root)
             ThemeStudioManager.applyFullApp3DThemeToViewHierarchy(binding.root, prefs)
         }
         Toast.makeText(
@@ -873,42 +912,52 @@ class SettingsFragment : Fragment() {
         try {
             val ctx = requireContext()
             val hasPremiumThemes = ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
+            val effectiveNightMode = ThemeStudioManager.resolveEffectiveNightMode(prefs)
             val palette = ThemeStudioManager.resolveEffectivePalette(prefs)
             val density = resources.displayMetrics.density
-            binding.bannerTheme3dPreview.background = if (palette.is3DMix) {
-                palette.createFullApp3DBackgroundDrawable(cornerRadiusPx = 18f * density)
-            } else {
-                palette.create3DGradientDrawable(
-                    cornerRadiusPx = 18f * density,
-                    strokeColorInt = android.graphics.Color.argb(110, 255, 255, 255),
-                    strokeWidthPx = (1.5f * density).toInt().coerceAtLeast(1)
-                )
-            }
-            binding.tvActiveThemePaletteName.text = if (hasPremiumThemes && palette.isPremiumTheme) {
-                "👑 ${palette.title}"
-            } else {
-                "${palette.title} (3 Pro 3D Themes Available)"
-            }
-            binding.tvActiveThemePaletteName.setTextColor(
-                if (palette.is3DMix) palette.textPrimaryColorInt() else android.graphics.Color.WHITE
+            val hairlinePx = (1.1f * density).toInt().coerceAtLeast(1)
+
+            binding.bannerTheme3dPreview.background = palette.create3DThemeShowcaseBannerDrawable(
+                cornerRadiusPx = 18f * density,
+                strokeWidthPx = hairlinePx
             )
-            binding.tvActiveThemePaletteSubtitle.text =
-                "${ThemeStudioManager.resolveThemeModeLabel(ctx, prefs.displayThemeMode)} • ${palette.subtitle}"
+            binding.tvActiveThemePaletteName.text = when {
+                hasPremiumThemes && palette.isPremiumTheme -> "👑 ${palette.title}"
+                hasPremiumThemes -> "👑 ${palette.title} (Pro Unlocked)"
+                else -> "${palette.title} (Free Simple Theme)"
+            }
+            binding.tvActiveThemePaletteName.setTextColor(android.graphics.Color.WHITE)
+            ThemeStudioManager.applyCrispTypography(binding.tvActiveThemePaletteName)
+
+            binding.tvActiveThemePaletteSubtitle.text = if (hasPremiumThemes) {
+                "${ThemeStudioManager.resolveThemeModeLabel(ctx, effectiveNightMode)} • ${palette.subtitle}"
+            } else {
+                "Simple Light Mode • Upgrade to Pro for Dark Mode & 3D Themes"
+            }
             binding.tvActiveThemePaletteSubtitle.setTextColor(
-                if (palette.is3DMix) palette.textSecondaryColorInt() else android.graphics.Color.parseColor("#F1F5F9")
+                android.graphics.Color.parseColor("#E2E8F0")
             )
+            ThemeStudioManager.applyCrispTypography(binding.tvActiveThemePaletteSubtitle)
+
             binding.tvActiveThemeBadge.text = when {
                 hasPremiumThemes && palette.is3DMix -> "👑 ${palette.badgeText}"
-                prefs.useDynamicColors -> "DYNAMIC"
-                else -> "🔒 3 PRO 3D THEMES"
+                hasPremiumThemes && prefs.useDynamicColors -> "👑 DYNAMIC"
+                hasPremiumThemes -> "👑 PRO UNLOCKED"
+                else -> "🔒 PRO ONLY"
             }
-            binding.tvActiveThemeBadge.setTextColor(palette.primaryColorInt())
-            binding.cardThemeStudio.strokeColor = if (palette.is3DMix) palette.cardStrokeColorInt() else palette.primaryColorInt()
-            binding.cardThemeStudio.strokeWidth = if (hasPremiumThemes && palette.is3DMix) {
-                (2f * density).toInt().coerceAtLeast(2)
+            binding.tvActiveThemeBadge.background = palette.createCrispBadgePillDrawable(
+                cornerRadiusPx = 999f * density,
+                strokeWidthPx = hairlinePx
+            )
+            binding.tvActiveThemeBadge.setTextColor(android.graphics.Color.WHITE)
+            ThemeStudioManager.applyCrispTypography(binding.tvActiveThemeBadge)
+
+            binding.cardThemeStudio.strokeColor = if (palette.is3DMix) {
+                androidx.core.graphics.ColorUtils.setAlphaComponent(palette.cardStrokeColorInt(), 125)
             } else {
-                (1f * density).toInt().coerceAtLeast(1)
+                palette.primaryColorInt()
             }
+            binding.cardThemeStudio.strokeWidth = hairlinePx
 
             paletteChipIds.forEach { (pal, chipId) ->
                 val chipView = binding.chipGroupThemePalettes.findViewById<Chip>(chipId)
@@ -922,7 +971,21 @@ class SettingsFragment : Fragment() {
                 }
             }
 
-            val modeChipId = when (prefs.displayThemeMode) {
+            binding.chipThemeModeDark.text = if (hasPremiumThemes) {
+                getString(R.string.setting_theme_dark)
+            } else {
+                "🔒 ${getString(R.string.setting_theme_dark)}"
+            }
+            binding.chipThemeModeSystem.text = if (hasPremiumThemes) {
+                getString(R.string.setting_theme_system_default)
+            } else {
+                "🔒 ${getString(R.string.setting_theme_system_default)}"
+            }
+            binding.chipThemeModeDark.alpha = if (hasPremiumThemes) 1f else 0.72f
+            binding.chipThemeModeSystem.alpha = if (hasPremiumThemes) 1f else 0.72f
+            binding.switchDynamicColors.alpha = if (hasPremiumThemes) 1f else 0.72f
+
+            val modeChipId = when (effectiveNightMode) {
                 AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM -> R.id.chip_theme_mode_system
                 AppCompatDelegate.MODE_NIGHT_YES -> R.id.chip_theme_mode_dark
                 else -> R.id.chip_theme_mode_light
@@ -931,8 +994,9 @@ class SettingsFragment : Fragment() {
                 binding.chipGroupThemeMode.check(modeChipId)
             }
 
-            if (binding.switchDynamicColors.isChecked != prefs.useDynamicColors) {
-                binding.switchDynamicColors.isChecked = prefs.useDynamicColors
+            val effectiveDynamic = hasPremiumThemes && prefs.useDynamicColors
+            if (binding.switchDynamicColors.isChecked != effectiveDynamic) {
+                binding.switchDynamicColors.isChecked = effectiveDynamic
             }
 
             val targetChipId = paletteChipIds[palette]
@@ -1070,6 +1134,10 @@ class SettingsFragment : Fragment() {
     private fun handleSettingToggle(row: DynamicSettingUiRow, isChecked: Boolean): Boolean {
         val item = row.item
         if (row.isFrozenBySubscription) {
+            showPremiumFeatureLockedPrompt(
+                featureTitle = "Call Recording (Pro Only)",
+                message = "Auto Call Recording and custom Recording Folders are exclusive to Premium users. Upgrade to Pro in the Account tab to unlock."
+            )
             return false
         }
         if (item.lockedByAdmin) {
@@ -1084,6 +1152,10 @@ class SettingsFragment : Fragment() {
                 } else if (!isVipEntitled() ||
                     !SubscriptionEnforcementService.canStartCallRecording(requireContext())
                 ) {
+                    showPremiumFeatureLockedPrompt(
+                        featureTitle = "Call Recording (Pro Only)",
+                        message = "Call Recording is exclusively for Premium users. Upgrade to Pro in the Account tab to unlock."
+                    )
                     false
                 } else {
                     settingsManager.setAutoCallRecording(isChecked)
@@ -1110,6 +1182,10 @@ class SettingsFragment : Fragment() {
     private fun handleSettingAction(row: DynamicSettingUiRow) {
         val item = row.item
         if (row.isFrozenBySubscription) {
+            showPremiumFeatureLockedPrompt(
+                featureTitle = "Call Recording (Pro Only)",
+                message = "Call Recording and Recording Folders are exclusive to Premium users. Upgrade to Pro in the Account tab to unlock."
+            )
             return
         }
         if (!row.isInteractive) {
@@ -1126,7 +1202,13 @@ class SettingsFragment : Fragment() {
         }
         when (item.key) {
             DynamicSettingItem.KEY_RECORDING_FOLDER -> {
-                if (!isVipEntitled()) return
+                if (!isVipEntitled()) {
+                    showPremiumFeatureLockedPrompt(
+                        featureTitle = "Recording Folder (Pro Only)",
+                        message = "Call Recording folders are exclusive to Premium users. Upgrade to Pro in the Account tab to unlock."
+                    )
+                    return
+                }
                 launchFolderPickerForSource(null)
             }
             DynamicSettingItem.KEY_ACCESSIBILITY_STATUS -> {
@@ -1195,9 +1277,16 @@ class SettingsFragment : Fragment() {
             .setPositiveButton(R.string.dialog_close, null)
             .create()
 
+        val hasPremiumThemes = ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
+        val effectiveNightMode = ThemeStudioManager.resolveEffectiveNightMode(prefs)
+
         // 1. Color Scheme Mode Section (System Default / Light Mode / Dark Mode)
         val modeHeader = TextView(ctx).apply {
-            text = getString(R.string.setting_theme_title)
+            text = if (hasPremiumThemes) {
+                getString(R.string.setting_theme_title)
+            } else {
+                "${getString(R.string.setting_theme_title)} (Dark Mode is Pro Only)"
+            }
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             textSize = 14f
             setPadding(0, 0, 0, (6 * density).toInt())
@@ -1209,7 +1298,11 @@ class SettingsFragment : Fragment() {
         }
         val rbSystem = android.widget.RadioButton(ctx).apply {
             id = View.generateViewId()
-            text = getString(R.string.setting_theme_system_default)
+            text = if (hasPremiumThemes) {
+                getString(R.string.setting_theme_system_default)
+            } else {
+                "🔒 ${getString(R.string.setting_theme_system_default)} (Pro)"
+            }
         }
         val rbLight = android.widget.RadioButton(ctx).apply {
             id = View.generateViewId()
@@ -1217,13 +1310,17 @@ class SettingsFragment : Fragment() {
         }
         val rbDark = android.widget.RadioButton(ctx).apply {
             id = View.generateViewId()
-            text = getString(R.string.setting_theme_dark)
+            text = if (hasPremiumThemes) {
+                getString(R.string.setting_theme_dark)
+            } else {
+                "🔒 ${getString(R.string.setting_theme_dark)} (Pro)"
+            }
         }
         modeGroup.addView(rbSystem)
         modeGroup.addView(rbLight)
         modeGroup.addView(rbDark)
 
-        when (prefs.displayThemeMode) {
+        when (effectiveNightMode) {
             AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM -> modeGroup.check(rbSystem.id)
             AppCompatDelegate.MODE_NIGHT_YES -> modeGroup.check(rbDark.id)
             else -> modeGroup.check(rbLight.id)
@@ -1235,6 +1332,14 @@ class SettingsFragment : Fragment() {
                 rbDark.id -> AppCompatDelegate.MODE_NIGHT_YES
                 else -> AppCompatDelegate.MODE_NIGHT_NO
             }
+            if (!hasPremiumThemes && mode != AppCompatDelegate.MODE_NIGHT_NO) {
+                runCatching { dialog.dismiss() }
+                showPremiumFeatureLockedPrompt(
+                    featureTitle = "Dark Mode (Pro Only)",
+                    message = "Dark Mode ON/OFF and System Theme are exclusive to Premium users. Upgrade to Pro in the Account tab to unlock."
+                )
+                return@setOnCheckedChangeListener
+            }
             runCatching { dialog.dismiss() }
             settingsManager.setThemeMode(mode)
             bindThemeStudioCard()
@@ -1244,10 +1349,22 @@ class SettingsFragment : Fragment() {
 
         // 2. Dynamic Colors Toggle
         val dynamicSwitch = com.google.android.material.materialswitch.MaterialSwitch(ctx).apply {
-            text = getString(R.string.setting_theme_dynamic_title)
-            isChecked = prefs.useDynamicColors
+            text = if (hasPremiumThemes) {
+                getString(R.string.setting_theme_dynamic_title)
+            } else {
+                "🔒 ${getString(R.string.setting_theme_dynamic_title)} (Pro)"
+            }
+            isChecked = hasPremiumThemes && prefs.useDynamicColors
             minHeight = (48 * density).toInt()
             setOnCheckedChangeListener { _, isChecked ->
+                if (!hasPremiumThemes) {
+                    runCatching { dialog.dismiss() }
+                    showPremiumFeatureLockedPrompt(
+                        featureTitle = "Theme Customization (Pro Only)",
+                        message = "Dynamic Colors and custom themes are exclusive to Premium users. Upgrade to Pro in the Account tab to unlock."
+                    )
+                    return@setOnCheckedChangeListener
+                }
                 runCatching { dialog.dismiss() }
                 settingsManager.setUseDynamicColors(isChecked)
                 bindThemeStudioCard()
@@ -1257,7 +1374,6 @@ class SettingsFragment : Fragment() {
         container.addView(dynamicSwitch)
 
         // 3. 3 Exclusive Full-App 3D Mix-Color Premium Themes (Only for Premium Subscribers)
-        val hasPremiumThemes = ThemeStudioManager.isUserEntitledToPremiumThemes(prefs)
         val paletteHeader = TextView(ctx).apply {
             text = if (hasPremiumThemes) {
                 "👑 3 Full-App 3D Mix-Color Themes (Unlocked)"
@@ -1271,6 +1387,7 @@ class SettingsFragment : Fragment() {
         container.addView(paletteHeader)
 
         val currentPalette = ThemeStudioManager.resolveEffectivePalette(prefs)
+        val strokePx = (1.1f * density).toInt().coerceAtLeast(1)
         AppThemePalette.premium3DMixThemes().forEach { palette ->
             val isSelected = palette == currentPalette
             val isLocked = !hasPremiumThemes
@@ -1279,10 +1396,11 @@ class SettingsFragment : Fragment() {
                 gravity = android.view.Gravity.CENTER_VERTICAL
                 val cardPad = (14 * density).toInt()
                 setPadding(cardPad, cardPad, cardPad, cardPad)
-                background = palette.createFullApp3DBackgroundDrawable(
-                    cornerRadiusPx = 16f * density
+                background = palette.create3DThemeShowcaseBannerDrawable(
+                    cornerRadiusPx = 16f * density,
+                    strokeWidthPx = strokePx
                 )
-                alpha = if (isLocked) 0.85f else 1f
+                alpha = if (isLocked) 0.88f else 1f
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1307,9 +1425,10 @@ class SettingsFragment : Fragment() {
                     isLocked -> "🔒 ${palette.title}"
                     else -> "👑 ${palette.title}"
                 }
-                setTextColor(palette.textPrimaryColorInt())
+                setTextColor(android.graphics.Color.WHITE)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 textSize = 15f
+                ThemeStudioManager.applyCrispTypography(this)
             }
             val subView = TextView(ctx).apply {
                 text = if (isLocked) {
@@ -1319,16 +1438,28 @@ class SettingsFragment : Fragment() {
                 }
                 setTextColor(palette.textSecondaryColorInt())
                 textSize = 12f
+                ThemeStudioManager.applyCrispTypography(this)
             }
             textCol.addView(titleView)
             textCol.addView(subView)
 
             val badgeView = TextView(ctx).apply {
                 text = if (isLocked) "🔒 PRO ONLY" else palette.badgeText
-                setTextColor(palette.textPrimaryColorInt())
+                setTextColor(android.graphics.Color.WHITE)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 textSize = 11f
-                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+                background = palette.createCrispBadgePillDrawable(
+                    cornerRadiusPx = 999f * density,
+                    strokeWidthPx = strokePx
+                )
+                setPadding((10 * density).toInt(), (5 * density).toInt(), (10 * density).toInt(), (5 * density).toInt())
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = (8 * density).toInt()
+                }
+                ThemeStudioManager.applyCrispTypography(this)
             }
 
             card.addView(textCol)

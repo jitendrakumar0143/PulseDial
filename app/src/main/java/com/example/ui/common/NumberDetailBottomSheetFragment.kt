@@ -20,6 +20,8 @@ import com.example.data.DialerPreferences
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.data.firebase.SettingsManager
 import com.example.databinding.BottomSheetNumberDetailBinding
+import com.example.telecom.CallerIdResolver
+import com.example.telecom.CallerIdentityInfo
 import com.example.telecom.DialerHelper
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import kotlinx.coroutines.launch
@@ -133,15 +135,69 @@ class NumberDetailBottomSheetFragment : BottomSheetDialogFragment() {
                 onDataChanged?.invoke()
             }
         }
+
+        binding.chipSheetWhatsapp.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_WHATSAPP, getString(R.string.caller_id_social_whatsapp))
+        }
+        binding.chipSheetTelegram.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_TELEGRAM, getString(R.string.caller_id_social_telegram))
+        }
+        binding.chipSheetWeb.setOnClickListener {
+            openSocialLookup(CallerIdResolver.PLATFORM_GOOGLE, getString(R.string.caller_id_social_web))
+        }
+    }
+
+    private fun openSocialLookup(platform: String, label: String) {
+        val url = CallerIdResolver.buildSocialLookupUrl(platform, phoneNumber)
+        val launched = runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            true
+        }.getOrDefault(false)
+        if (!launched && isAdded) {
+            Toast.makeText(
+                requireContext(),
+                getString(R.string.caller_id_lookup_open_failed, label),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun renderSheetCallerIdentity(identity: CallerIdentityInfo) {
+        binding.tvSheetGeoLine.text = identity.structuredLocationLine()
+        val socialSummary = identity.socialBadgesSummary()
+        val metaParts = buildList {
+            if (identity.sourceLabel.isNotBlank()) add(identity.sourceLabel)
+            if (identity.carrier.isNotBlank()) add(identity.carrier)
+            if (socialSummary.isNotBlank()) add("Linked: $socialSummary")
+        }
+        binding.tvSheetSocialMeta.text = metaParts.joinToString(" • ")
     }
 
     private fun loadDetailsAndHistory() {
+        renderSheetCallerIdentity(
+            CallerIdResolver.resolveInstant(
+                rawNumber = phoneNumber,
+                savedContactName = matchedContact?.name,
+                telecomDisplayName = initialName
+            )
+        )
         viewLifecycleOwner.lifecycleScope.launch {
             matchedContact = repository.lookupContactByNumber(phoneNumber)
             val history = repository.getCallHistoryForNumber(phoneNumber)
+            val ctx = context ?: return@launch
+            val identity = CallerIdResolver.resolveWithDeviceAsync(
+                context = ctx,
+                rawNumber = phoneNumber,
+                telecomDisplayName = initialName
+            )
             if (_binding == null) return@launch
 
+            renderSheetCallerIdentity(identity)
+
             val displayName = matchedContact?.name
+                ?: identity.displayName.takeIf {
+                    it.isNotBlank() && !it.equals("Unknown Caller", ignoreCase = true)
+                }
                 ?: initialName?.takeIf { it.isNotBlank() }
                 ?: getString(R.string.detail_unsaved_number)
 
