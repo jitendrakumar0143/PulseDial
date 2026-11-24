@@ -251,6 +251,10 @@ service cloud.firestore {
       return data.showPopup is bool &&
              data.popupId is string &&
              data.popupId.size() <= 80 &&
+             (!('popupType' in data) || (data.popupType is string && data.popupType in ['update', 'ad'])) &&
+             (!('version' in data) || (data.version is string && data.version.size() <= 40)) &&
+             (!('forceUpdate' in data) || data.forceUpdate is bool) &&
+             (!('showOnce' in data) || data.showOnce is bool) &&
              data.title is string &&
              data.title.size() <= 140 &&
              data.message is string &&
@@ -327,7 +331,7 @@ service cloud.firestore {
                          )
                        );
 
-      allow delete: if false;
+      allow delete: if isSignedIn() && isAdmin();
     }
 
     // Per-user entitlement, real-time preferences, and subscription record isolated by request.auth.uid, plus full admin moderation.
@@ -533,7 +537,7 @@ service cloud.firestore {
                          'status', 'reviewedByUid', 'reviewNote', 'updatedAt'
                        ]);
 
-      allow delete: if false;
+      allow delete: if isSignedIn() && isAdmin();
     }
 
     // Global app settings managed exclusively by verified admin; signed-in users can read config.
@@ -564,7 +568,8 @@ service cloud.firestore {
                                      'updatedByUid', 'updatedAt'
                                    ]) &&
                                    incoming().keys().hasOnly([
-                                     'showPopup', 'popupId', 'title', 'message', 'imageUrl',
+                                     'showPopup', 'popupId', 'popupType', 'version', 'forceUpdate', 'showOnce',
+                                     'title', 'message', 'imageUrl',
                                      'buttonText', 'actionUrl', 'isCancelable',
                                      'showBannerAd', 'bannerText', 'bannerImageUrl', 'bannerActionUrl',
                                      'updatedByUid', 'updatedAt'
@@ -594,7 +599,7 @@ service cloud.firestore {
                                  )
                                );
 
-      allow delete: if false;
+      allow delete: if isSignedIn() && isAdmin() && configId == 'live_broadcast';
     }
   }
 }

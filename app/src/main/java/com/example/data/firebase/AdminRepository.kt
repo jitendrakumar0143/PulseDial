@@ -1187,6 +1187,35 @@ class AdminRepository(
                 return Result.success(Unit)
             }
             userRef.delete().awaitTask()
+
+            // Purge all associated Firestore payment_requests created by this user
+            runCatching {
+                val paymentDocs = db.collection(PaymentRepository.COLLECTION_PAYMENT_REQUESTS)
+                    .whereEqualTo("userId", targetUid)
+                    .get()
+                    .awaitTask()
+                for (doc in paymentDocs.documents) {
+                    runCatching { doc.reference.delete().awaitTask() }
+                }
+            }
+
+            // Purge associated Firestore device_trials doc if owned by this deleted user
+            val cleanDeviceHash = user.deviceHash.trim().lowercase()
+            if (cleanDeviceHash.length == 64) {
+                runCatching {
+                    val deviceRef = db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS)
+                        .document(cleanDeviceHash)
+                    val snap = deviceRef.get().awaitTask()
+                    if (snap.exists()) {
+                        val ownerUid = snap.getString("ownerUid").orEmpty()
+                        val lastUid = snap.getString("lastUserId").orEmpty()
+                        if (ownerUid == targetUid || lastUid == targetUid) {
+                            deviceRef.delete().awaitTask()
+                        }
+                    }
+                }
+            }
+
             Result.success(Unit)
         } catch (e: Exception) {
             val firestoreError = generateSequence<Throwable>(e) { it.cause }
@@ -1394,26 +1423,38 @@ class AdminRepository(
         } catch (e: Exception) {
             return Result.failure(e)
         }
+        val normalizedType = broadcast.normalizedPopupType()
+        val effectiveForce = normalizedType == LiveBroadcast.TYPE_UPDATE && broadcast.forceUpdate
+        val effectiveCancelable = if (effectiveForce) false else true
+        val normalizedBroadcast = broadcast.copy(
+            popupType = normalizedType,
+            forceUpdate = effectiveForce,
+            isCancelable = effectiveCancelable
+        )
         val docRef = db.collection(COLLECTION_APP_CONFIG)
             .document(LiveBroadcast.DOC_LIVE_BROADCAST)
         val payload = mapOf(
-            "showPopup" to broadcast.showPopup,
-            "popupId" to broadcast.popupId.trim().take(80),
-            "title" to broadcast.title.trim().take(140),
-            "message" to broadcast.message.trim().take(500),
-            "imageUrl" to broadcast.imageUrl.trim().take(500),
-            "buttonText" to broadcast.buttonText.trim().ifBlank { "Open" }.take(60),
-            "actionUrl" to broadcast.actionUrl.trim().take(500),
-            "isCancelable" to broadcast.isCancelable,
-            "showBannerAd" to broadcast.showBannerAd,
-            "bannerText" to broadcast.bannerText.trim().take(180),
-            "bannerImageUrl" to broadcast.bannerImageUrl.trim().take(500),
-            "bannerActionUrl" to broadcast.bannerActionUrl.trim().take(500),
+            "showPopup" to normalizedBroadcast.showPopup,
+            "popupId" to normalizedBroadcast.popupId.trim().take(80),
+            "popupType" to normalizedType,
+            "version" to normalizedBroadcast.version.trim().take(40),
+            "forceUpdate" to effectiveForce,
+            "showOnce" to normalizedBroadcast.showOnce,
+            "title" to normalizedBroadcast.title.trim().take(140),
+            "message" to normalizedBroadcast.message.trim().take(500),
+            "imageUrl" to normalizedBroadcast.imageUrl.trim().take(500),
+            "buttonText" to normalizedBroadcast.buttonText.trim().ifBlank { "Open" }.take(60),
+            "actionUrl" to normalizedBroadcast.actionUrl.trim().take(500),
+            "isCancelable" to effectiveCancelable,
+            "showBannerAd" to normalizedBroadcast.showBannerAd,
+            "bannerText" to normalizedBroadcast.bannerText.trim().take(180),
+            "bannerImageUrl" to normalizedBroadcast.bannerImageUrl.trim().take(500),
+            "bannerActionUrl" to normalizedBroadcast.bannerActionUrl.trim().take(500),
             "updatedByUid" to adminUid,
             "updatedAt" to FieldValue.serverTimestamp()
         )
         return try {
-            RealtimeDatabaseSync.setLiveBroadcast(broadcast, adminUid)
+            RealtimeDatabaseSync.setLiveBroadcast(normalizedBroadcast, adminUid)
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
@@ -1425,6 +1466,26 @@ class AdminRepository(
             handleFirestoreError(e, OperationType.WRITE, docRef.path, auth)
             Result.failure(e)
         }
+    }
+
+    /**
+     * Clears/deletes the active popup while preserving any configured banner ad settings.
+     */
+    suspend fun deleteLiveBroadcastPopup(current: LiveBroadcast): Result<LiveBroadcast> {
+        val cleared = current.copy(
+            showPopup = false,
+            popupId = "",
+            version = "",
+            forceUpdate = false,
+            showOnce = true,
+            title = "",
+            message = "",
+            imageUrl = "",
+            buttonText = "",
+            actionUrl = "",
+            isCancelable = true
+        )
+        return saveLiveBroadcast(cleared).map { cleared }
     }
 
     companion object {

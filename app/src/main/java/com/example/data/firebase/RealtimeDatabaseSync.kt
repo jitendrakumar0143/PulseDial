@@ -1243,9 +1243,10 @@ object RealtimeDatabaseSync {
     }
 
     /**
-     * Deletes `/users/{uid}` AND any duplicate sibling `/users/{otherUid}` nodes matching
-     * the same normalized email or deviceHash so deletion reflects across Admin and client
-     * devices within < 1 second.
+     * Permanently deletes `/users/{uid}`, any duplicate sibling `/users/{otherUid}` nodes matching
+     * the same normalized email or deviceHash, all `/payment_requests` belonging to this user, and
+     * `/device_trials/{deviceHash}` if owned by this user so deletion reflects across Admin and
+     * client devices within < 1 second.
      */
     fun deleteUserAndSiblingsInRtdb(
         uid: String,
@@ -1257,32 +1258,86 @@ object RealtimeDatabaseSync {
         val deletedPrimary = deleteUserNode(cleanUid, context)
         val normalizedEmail = email.trim().lowercase()
         val normalizedDevice = deviceHash.trim().lowercase().takeIf { it.length == 64 }.orEmpty()
-        if (normalizedEmail.isEmpty() && normalizedDevice.isEmpty()) {
-            return deletedPrimary
-        }
-        val usersRef = refForPath(NODE_USERS, context) ?: return deletedPrimary
-        runCatching {
-            usersRef.addListenerForSingleValueEvent(object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    if (!snapshot.exists()) return
-                    for (child in snapshot.children) {
-                        val otherUid = child.key.orEmpty().trim()
-                        if (otherUid.isEmpty() || otherUid == cleanUid) continue
-                        val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
-                        val childDevice = (child.child("deviceHash").value as? String)?.trim()?.lowercase().orEmpty()
-                        val matches = (normalizedEmail.isNotEmpty() && childEmail == normalizedEmail) ||
-                            (normalizedDevice.isNotEmpty() && childDevice == normalizedDevice)
-                        if (matches) {
-                            child.ref.removeValue()
-                        }
-                    }
-                }
 
-                override fun onCancelled(error: DatabaseError) {
-                    Log.d(TAG, "deleteUserAndSiblingsInRtdb cancelled: ${error.message}")
+        // 1. Remove any duplicate sibling /users/{otherUid} matching email or deviceHash
+        if (normalizedEmail.isNotEmpty() || normalizedDevice.isNotEmpty()) {
+            val usersRef = refForPath(NODE_USERS, context)
+            if (usersRef != null) {
+                runCatching {
+                    usersRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            if (!snapshot.exists()) return
+                            for (child in snapshot.children) {
+                                val otherUid = child.key.orEmpty().trim()
+                                if (otherUid.isEmpty() || otherUid == cleanUid) continue
+                                val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
+                                val childDevice = (child.child("deviceHash").value as? String)?.trim()?.lowercase().orEmpty()
+                                val matches = (normalizedEmail.isNotEmpty() && childEmail == normalizedEmail) ||
+                                    (normalizedDevice.isNotEmpty() && childDevice == normalizedDevice)
+                                if (matches) {
+                                    child.ref.removeValue()
+                                }
+                            }
+                        }
+
+                        override fun onCancelled(error: DatabaseError) {
+                            Log.d(TAG, "deleteUserAndSiblingsInRtdb users scan cancelled: ${error.message}")
+                        }
+                    })
                 }
-            })
+            }
         }
+
+        // 2. Remove all /payment_requests belonging to this user (by userId or userEmail)
+        if (cleanUid.isNotEmpty() || normalizedEmail.isNotEmpty()) {
+            val paymentsRef = refForPath(NODE_PAYMENT_REQUESTS, context)
+            if (paymentsRef != null) {
+                runCatching {
+                    paymentsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            if (!snapshot.exists()) return
+                            for (child in snapshot.children) {
+                                val reqUid = (child.child("userId").value as? String)?.trim().orEmpty()
+                                val reqEmail = (child.child("userEmail").value as? String)?.trim()?.lowercase().orEmpty()
+                                val matches = (cleanUid.isNotEmpty() && reqUid == cleanUid) ||
+                                    (normalizedEmail.isNotEmpty() && reqEmail == normalizedEmail)
+                                if (matches) {
+                                    child.ref.removeValue()
+                                }
+                            }
+                        }
+
+                        override fun onCancelled(error: DatabaseError) {
+                            Log.d(TAG, "deleteUserAndSiblingsInRtdb payments scan cancelled: ${error.message}")
+                        }
+                    })
+                }
+            }
+        }
+
+        // 3. Remove /device_trials/{deviceHash} if owned by this deleted user
+        if (normalizedDevice.isNotEmpty()) {
+            val deviceTrialRef = refForPath("$NODE_DEVICE_TRIALS/$normalizedDevice", context)
+            if (deviceTrialRef != null) {
+                runCatching {
+                    deviceTrialRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            if (!snapshot.exists()) return
+                            val ownerUid = (snapshot.child("ownerUid").value as? String)?.trim().orEmpty()
+                            val lastUid = (snapshot.child("lastUserId").value as? String)?.trim().orEmpty()
+                            if (ownerUid == cleanUid || lastUid == cleanUid || ownerUid.isEmpty()) {
+                                snapshot.ref.removeValue()
+                            }
+                        }
+
+                        override fun onCancelled(error: DatabaseError) {
+                            Log.d(TAG, "deleteUserAndSiblingsInRtdb device trial scan cancelled: ${error.message}")
+                        }
+                    })
+                }
+            }
+        }
+
         return deletedPrimary
     }
 
@@ -1357,15 +1412,22 @@ object RealtimeDatabaseSync {
      * Saves live broadcast config to `/app_config/live_broadcast` using `set`.
      */
     fun setLiveBroadcast(broadcast: LiveBroadcast, updatedByUid: String = "", context: Context? = null) {
+        val normalizedType = broadcast.normalizedPopupType()
+        val effectiveForce = normalizedType == LiveBroadcast.TYPE_UPDATE && broadcast.forceUpdate
+        val effectiveCancelable = if (effectiveForce) false else true
         val payload = mapOf(
             "showPopup" to broadcast.showPopup,
             "popupId" to broadcast.popupId,
+            "popupType" to normalizedType,
+            "version" to broadcast.version,
+            "forceUpdate" to effectiveForce,
+            "showOnce" to broadcast.showOnce,
             "title" to broadcast.title,
             "message" to broadcast.message,
             "imageUrl" to broadcast.imageUrl,
             "buttonText" to broadcast.buttonText,
             "actionUrl" to broadcast.actionUrl,
-            "isCancelable" to broadcast.isCancelable,
+            "isCancelable" to effectiveCancelable,
             "showBannerAd" to broadcast.showBannerAd,
             "bannerText" to broadcast.bannerText,
             "bannerImageUrl" to broadcast.bannerImageUrl,
@@ -1792,16 +1854,29 @@ object RealtimeDatabaseSync {
      * Parses `/app_config/live_broadcast` snapshot map into `LiveBroadcast`.
      */
     fun parseLiveBroadcastSnapshot(map: Map<*, *>): LiveBroadcast {
+        val isCancelable = (map["isCancelable"] as? Boolean) ?: true
+        val rawVersion = (map["version"] as? String).orEmpty()
+        val rawForce = (map["forceUpdate"] as? Boolean) ?: !isCancelable
+        val rawType = (map["popupType"] as? String)?.trim()?.lowercase().orEmpty()
+        val resolvedType = when (rawType) {
+            LiveBroadcast.TYPE_AD -> LiveBroadcast.TYPE_AD
+            LiveBroadcast.TYPE_UPDATE -> LiveBroadcast.TYPE_UPDATE
+            else -> if (rawVersion.isNotBlank() || rawForce) LiveBroadcast.TYPE_UPDATE else LiveBroadcast.TYPE_AD
+        }
         return LiveBroadcast(
             id = LiveBroadcast.DOC_LIVE_BROADCAST,
             showPopup = (map["showPopup"] as? Boolean) ?: false,
             popupId = (map["popupId"] as? String).orEmpty(),
+            popupType = resolvedType,
+            version = rawVersion,
+            forceUpdate = resolvedType == LiveBroadcast.TYPE_UPDATE && rawForce,
+            showOnce = (map["showOnce"] as? Boolean) ?: true,
             title = (map["title"] as? String).orEmpty(),
             message = (map["message"] as? String).orEmpty(),
             imageUrl = (map["imageUrl"] as? String).orEmpty(),
             buttonText = (map["buttonText"] as? String)?.ifBlank { "Open" } ?: "Open",
             actionUrl = (map["actionUrl"] as? String).orEmpty(),
-            isCancelable = (map["isCancelable"] as? Boolean) ?: true,
+            isCancelable = if (resolvedType == LiveBroadcast.TYPE_UPDATE && rawForce) false else isCancelable,
             showBannerAd = (map["showBannerAd"] as? Boolean) ?: false,
             bannerText = (map["bannerText"] as? String).orEmpty(),
             bannerImageUrl = (map["bannerImageUrl"] as? String).orEmpty(),

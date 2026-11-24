@@ -596,6 +596,56 @@ class DialerPreferences(context: Context) {
         refreshIntegritySeal()
     }
 
+    /**
+     * Full local session cleanup executed immediately when the user's account is permanently
+     * deleted by an Admin from the server.
+     */
+    fun clearSessionForAdminRemoval() {
+        prefs.edit {
+            putBoolean(KEY_IS_LOGGED_IN, false)
+            remove(KEY_LOGGED_IN_USER_ID)
+            putBoolean(KEY_IS_PREMIUM_USER, false)
+            putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
+            putBoolean(KEY_ADMIN_BLOCKED_USER, false)
+            putBoolean(KEY_HIDE_SUBSCRIPTION_UI, false)
+            putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0)
+            putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
+            putString(KEY_DELEGATED_ADMIN_GRANTED_BY, "")
+            putBoolean(KEY_TAMPER_DETECTED, false)
+            putBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, false)
+            putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, false)
+            remove(KEY_USER_EMAIL)
+            remove(KEY_USER_NAME)
+            remove(KEY_USER_NUMBER)
+        }
+        refreshIntegritySeal()
+    }
+
+    /**
+     * Full local session cleanup executed immediately when the user's account is permanently
+     * deleted by an Admin from the server.
+     */
+    fun clearSessionForAdminRemoval() {
+        prefs.edit {
+            putBoolean(KEY_IS_LOGGED_IN, false)
+            remove(KEY_LOGGED_IN_USER_ID)
+            putBoolean(KEY_IS_PREMIUM_USER, false)
+            putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
+            putBoolean(KEY_ADMIN_BLOCKED_USER, false)
+            putBoolean(KEY_HIDE_SUBSCRIPTION_UI, false)
+            putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0)
+            putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
+            putString(KEY_DELEGATED_ADMIN_GRANTED_BY, "")
+            putBoolean(KEY_TAMPER_DETECTED, false)
+            putBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, false)
+            putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, false)
+            remove(KEY_USER_EMAIL)
+            remove(KEY_USER_NAME)
+            remove(KEY_USER_NUMBER)
+        }
+        refreshIntegritySeal()
+    }
+
     val delegatedAdminAuthorized: Boolean
         get() = prefs.getBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
 
@@ -878,23 +928,32 @@ class DialerPreferences(context: Context) {
             refreshIntegritySeal()
         }
 
-    fun isPopupDismissed(popupId: String): Boolean {
-        if (popupId.isBlank()) return false
-        val dismissed = prefs.getStringSet(KEY_DISMISSED_POPUP_IDS, emptySet()).orEmpty()
-        return dismissed.contains(popupId)
+    fun getSeenPopupIds(): Set<String> {
+        return prefs.getStringSet(KEY_DISMISSED_POPUP_IDS, emptySet()).orEmpty().toSet()
     }
 
-    fun markPopupDismissed(popupId: String) {
-        if (popupId.isBlank()) return
-        val updated = prefs.getStringSet(KEY_DISMISSED_POPUP_IDS, emptySet()).orEmpty().toMutableSet()
-        updated.add(popupId)
-        if (updated.size > 50) {
-            val trimmed = updated.toList().takeLast(50).toSet()
-            prefs.edit { putStringSet(KEY_DISMISSED_POPUP_IDS, trimmed) }
-        } else {
-            prefs.edit { putStringSet(KEY_DISMISSED_POPUP_IDS, updated) }
-        }
+    fun hasSeenPopupId(popupId: String): Boolean {
+        val clean = popupId.trim()
+        if (clean.isEmpty()) return false
+        return getSeenPopupIds().contains(clean)
     }
+
+    fun markPopupIdSeen(popupId: String) {
+        val clean = popupId.trim()
+        if (clean.isEmpty()) return
+        val updated = prefs.getStringSet(KEY_DISMISSED_POPUP_IDS, emptySet()).orEmpty().toMutableSet()
+        updated.add(clean)
+        val persisted = if (updated.size > 200) {
+            updated.toList().takeLast(200).toSet()
+        } else {
+            updated.toSet()
+        }
+        prefs.edit { putStringSet(KEY_DISMISSED_POPUP_IDS, persisted) }
+    }
+
+    fun isPopupDismissed(popupId: String): Boolean = hasSeenPopupId(popupId)
+
+    fun markPopupDismissed(popupId: String) = markPopupIdSeen(popupId)
 
     fun getDynamicToggle(key: String, defaultValue: Boolean = false): Boolean {
         val cleanKey = key.trim()

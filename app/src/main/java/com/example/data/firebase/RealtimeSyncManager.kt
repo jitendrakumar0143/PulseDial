@@ -97,6 +97,8 @@ object RealtimeSyncManager {
     private var rtdbServerTimeOffsetMs: Long? = null
     private var hasReceivedInitialConfig = false
     private var hasReceivedInitialUser = false
+    private var hasReceivedServerUserSnapshot = false
+    private var emittedAccountDeletedForUid: String? = null
     private var hasReceivedInitialPayments = false
     private val knownPaymentStatuses = mutableMapOf<String, String>()
 
@@ -364,14 +366,7 @@ object RealtimeSyncManager {
             uid = uid,
             currentFallback = { latestUser },
             onUserDeleted = {
-                Log.w(TAG, "RTDB /users/$uid was deleted by Admin — reverting client to Free Plan")
-                latestRtdbUser = null
-                latestFirestoreUser = null
-                latestUser = null
-                com.example.billing.SubscriptionEnforcementService.handleUserDeletedByAdmin(ctx)
-                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
-                bumpState(userEntitlement = null)
-                _events.tryEmit(RealtimeSyncEvent.AccountDeletedByAdmin)
+                handleUserDeletedFromServer(uid, ctx, prefs, source = "RTDB")
             },
             onUpdate = { rtdbUser, rawMap ->
                 handleIncomingUserUpdate(
@@ -423,9 +418,7 @@ object RealtimeSyncManager {
         rtdbLiveBroadcastCleanup = RealtimeDatabaseSync.attachLiveBroadcastListener(
             context = ctx,
             onUpdate = { broadcast ->
-                if (broadcast.showPopup) {
-                    _events.tryEmit(RealtimeSyncEvent.LiveBroadcastTriggered(broadcast))
-                }
+                _events.tryEmit(RealtimeSyncEvent.LiveBroadcastTriggered(broadcast))
                 bumpState(liveBroadcast = broadcast)
             }
         )
@@ -487,18 +480,20 @@ object RealtimeSyncManager {
                     return@addSnapshotListener
                 }
                 if (snapshot == null) return@addSnapshotListener
-                if (!snapshot.exists() && latestUser != null) {
-                    return@addSnapshotListener
-                }
-                val user = if (snapshot.exists()) {
-                    snapshot.toObject(
+                if (snapshot.exists()) {
+                    hasReceivedServerUserSnapshot = true
+                    val user = snapshot.toObject(
                         UserEntitlement::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                     )
-                } else {
-                    null
+                    handleIncomingUserUpdate(user, snapshot, prefs)
+                } else if (!snapshot.metadata.isFromCache &&
+                    (hasReceivedServerUserSnapshot || latestFirestoreUser != null || latestUser != null)
+                ) {
+                    handleUserDeletedFromServer(uid, ctx, prefs, source = "Firestore")
+                } else if (latestUser == null) {
+                    handleIncomingUserUpdate(null, snapshot, prefs)
                 }
-                handleIncomingUserUpdate(user, snapshot, prefs)
             }
 
         // 3. Live /device_trials/{deviceHash} device-lock push stream
@@ -606,18 +601,39 @@ object RealtimeSyncManager {
                     Log.w(TAG, "Live broadcast listener error: ${error.code}")
                     return@addSnapshotListener
                 }
-                if (snapshot == null || snapshot.metadata.isFromCache || !snapshot.exists()) {
+                if (snapshot == null || snapshot.metadata.isFromCache) {
                     return@addSnapshotListener
                 }
-                val broadcast = snapshot.toObject(
-                    LiveBroadcast::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ) ?: LiveBroadcast()
-                if (broadcast.showPopup) {
-                    _events.tryEmit(RealtimeSyncEvent.LiveBroadcastTriggered(broadcast))
+                val broadcast = if (snapshot.exists()) {
+                    snapshot.toObject(
+                        LiveBroadcast::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ) ?: LiveBroadcast()
+                } else {
+                    LiveBroadcast(showPopup = false)
                 }
+                _events.tryEmit(RealtimeSyncEvent.LiveBroadcastTriggered(broadcast))
                 bumpState(liveBroadcast = broadcast)
             }
+    }
+
+    internal fun handleUserDeletedFromServer(
+        uid: String,
+        ctx: Context,
+        prefs: DialerPreferences,
+        source: String = "Server"
+    ) {
+        if (uid.isBlank() || emittedAccountDeletedForUid == uid) return
+        emittedAccountDeletedForUid = uid
+        Log.w(TAG, "$source /users/$uid was deleted by Admin — invalidating user session immediately")
+        latestRtdbUser = null
+        latestFirestoreUser = null
+        latestUser = null
+        com.example.billing.SubscriptionEnforcementService.handleUserDeletedByAdmin(ctx)
+        prefs.clearSessionForAdminRemoval()
+        com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+        bumpState(userEntitlement = null)
+        _events.tryEmit(RealtimeSyncEvent.AccountDeletedByAdmin)
     }
 
     private fun recomputeEntitlementFromSnapshots(prefs: DialerPreferences) {
@@ -842,6 +858,8 @@ object RealtimeSyncManager {
         rtdbServerTimeOffsetMs = null
         hasReceivedInitialConfig = false
         hasReceivedInitialUser = false
+        hasReceivedServerUserSnapshot = false
+        emittedAccountDeletedForUid = null
         hasReceivedInitialPayments = false
         knownPaymentStatuses.clear()
         _syncState.value = RealtimeSyncState()

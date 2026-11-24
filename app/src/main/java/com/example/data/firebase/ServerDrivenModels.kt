@@ -245,6 +245,12 @@ data class LiveBroadcast(
     @get:PropertyName("showPopup")
     val showPopup: Boolean = false,
     val popupId: String = "",
+    val popupType: String = TYPE_UPDATE,
+    val version: String = "",
+    @get:PropertyName("forceUpdate")
+    val forceUpdate: Boolean = false,
+    @get:PropertyName("showOnce")
+    val showOnce: Boolean = true,
     val title: String = "",
     val message: String = "",
     val imageUrl: String = "",
@@ -260,7 +266,55 @@ data class LiveBroadcast(
     val updatedByUid: String = "",
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    fun normalizedPopupType(): String {
+        val clean = popupType.trim().lowercase()
+        return when (clean) {
+            TYPE_AD -> TYPE_AD
+            TYPE_UPDATE -> TYPE_UPDATE
+            else -> if (version.isNotBlank() || forceUpdate || !isCancelable) TYPE_UPDATE else TYPE_AD
+        }
+    }
+
+    fun isUpdatePopup(): Boolean = normalizedPopupType() == TYPE_UPDATE
+
+    fun isAdPopup(): Boolean = normalizedPopupType() == TYPE_AD
+
+    /**
+     * Force Update applies only to App Update popups. When enabled, the close (x) button is
+     * hidden and the popup keeps appearing until the user updates or the Admin disables it.
+     */
+    fun isForceUpdateActive(): Boolean = isUpdatePopup() && (forceUpdate || !isCancelable)
+
+    fun hasRenderablePopupContent(): Boolean {
+        return title.isNotBlank() || message.isNotBlank() || imageUrl.isNotBlank()
+    }
+
+    fun effectivePopupId(): String {
+        val explicit = popupId.trim()
+        if (explicit.isNotEmpty()) return explicit
+        return listOf(normalizedPopupType(), version.trim(), title.trim(), message.trim(), imageUrl.trim())
+            .joinToString("|")
+    }
+
+    /**
+     * Strict "One-Time Delivery" gate:
+     * - Must be active (`showPopup == true`) and contain renderable content.
+     * - If Force Update is enabled on an Update popup, keep showing even if seen previously.
+     * - Otherwise, if `showOnce == true` and `effectivePopupId()` is already in `seenPopupIds`,
+     *   do NOT show it again until the Admin pushes a new popup with a new `popupId`.
+     */
+    fun shouldShowToUser(seenPopupIds: Set<String>): Boolean {
+        if (!showPopup || !hasRenderablePopupContent()) return false
+        if (isForceUpdateActive()) return true
+        if (showOnce && seenPopupIds.contains(effectivePopupId())) return false
+        return true
+    }
+
     companion object {
         const val DOC_LIVE_BROADCAST = "live_broadcast"
+        const val TYPE_UPDATE = "update"
+        const val TYPE_AD = "ad"
+
+        fun generatePopupId(nowMs: Long = System.currentTimeMillis()): String = "popup_$nowMs"
     }
 }

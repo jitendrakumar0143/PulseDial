@@ -1250,7 +1250,7 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- 5. Active "On Call" Sculpted 3D Smoked-Sapphire Control Dock + 68dp Ruby-Glass End Call Pedestal -->
+        <!-- 5. Active "On Call" Live Recording Toggle + Sculpted 3D Smoked-Sapphire Control Dock + Ruby End Call -->
         <LinearLayout
             android:id="@+id/layout_active_controls"
             android:layout_width="0dp"
@@ -1262,6 +1262,69 @@
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent">
+
+            <!-- Simple Live Audio Stream Recording Toggle Switch Bar -->
+            <LinearLayout
+                android:id="@+id/layout_live_record_toggle_bar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:background="@drawable/bg_frosted_glass_pill"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="54dp"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingEnd="12dp"
+                android:paddingVertical="6dp">
+
+                <ImageView
+                    android:id="@+id/iv_live_record_dot"
+                    android:layout_width="14dp"
+                    android:layout_height="14dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_record_dot"
+                    app:tint="#94A3B8" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginEnd="10dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/tv_live_record_switch_title"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/incall_record_switch_title_off"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                        android:textColor="#F8FAFC"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tv_live_record_switch_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/incall_record_switch_hint_off"
+                        android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                        android:textColor="#94A3B8" />
+                </LinearLayout>
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switch_incall_record_audio"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="@string/incall_record_switch_cd"
+                    android:minWidth="48dp"
+                    android:minHeight="48dp" />
+            </LinearLayout>
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/card_active_controls_deck"

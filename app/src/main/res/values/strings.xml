@@ -140,6 +140,11 @@
     <string name="incall_quick_decline">Message</string>
     <string name="incall_recording_saved">Saved recording to folder: %1$s</string>
     <string name="incall_recording_failed">Unable to start call recording</string>
+    <string name="incall_recording_stopped_toast">Call recording stopped</string>
+    <string name="incall_record_switch_title_off">Record Call Audio</string>
+    <string name="incall_record_switch_title_on">Recording Audio</string>
+    <string name="incall_record_switch_hint_off">Toggle on to record live audio</string>
+    <string name="incall_record_switch_cd">Toggle call audio recording</string>
     <string name="incall_rec_badge">REC</string>
     <string name="incall_add_call">Add Call</string>
     <string name="incall_hold">Hold</string>
@@ -379,7 +384,7 @@
     <string name="realtime_payment_disapproved_toast">Payment disapproved by Admin: %1$s</string>
     <string name="realtime_account_blocked_toast">Your account was suspended by Admin.</string>
     <string name="realtime_account_unblocked_toast">Your account access has been restored by Admin.</string>
-    <string name="realtime_account_deleted_toast">Your subscription record was removed by Admin. Switched to Free Plan.</string>
+    <string name="realtime_account_deleted_toast">Your account has been removed by the admin.</string>
     <string name="realtime_settings_synced_toast">App settings updated by Admin.</string>
     <string name="admin_settings_enforce_dark_all">Force Dark Theme on All Phones</string>
     <string name="admin_hide_sub_ui_global">Hide Subscription &amp; Payment UI Globally</string>
@@ -397,19 +402,37 @@
     <string name="setting_locked_by_admin">Managed by Admin</string>
 
     <!-- Super Admin Panel: Broadcast, Ads & Tabs/Settings Manager -->
-    <string name="admin_tab_broadcast">Broadcast &amp; Ads</string>
+    <string name="admin_tab_broadcast">Popups &amp; Ads</string>
     <string name="admin_tab_tabs_ui">Tabs &amp; Settings</string>
-    <string name="admin_broadcast_popup_section">Instant Live Popup (All 10,000+ Devices)</string>
-    <string name="admin_broadcast_title_hint">Popup Title</string>
-    <string name="admin_broadcast_message_hint">Popup Message</string>
-    <string name="admin_broadcast_image_hint">Banner / Ad Image URL (optional)</string>
-    <string name="admin_broadcast_btn_text_hint">Action Button Text</string>
-    <string name="admin_broadcast_action_url_hint">Action URL (https://… optional)</string>
+    <string name="admin_broadcast_popup_section">Popups &amp; Ads Manager (One-Time Delivery)</string>
+    <string name="admin_broadcast_type_update">App Update Popup</string>
+    <string name="admin_broadcast_type_ad">Custom Ad Popup</string>
+    <string name="admin_broadcast_active_toggle">Active Popup Status (ON / OFF)</string>
+    <string name="admin_broadcast_status_live">LIVE • ID: %1$s</string>
+    <string name="admin_broadcast_status_inactive">INACTIVE • No live popup active</string>
+    <string name="admin_broadcast_version_hint">Version (e.g. v2.0)</string>
+    <string name="admin_broadcast_title_hint">Title (e.g. New Update Available)</string>
+    <string name="admin_broadcast_message_hint">Message / What\'s New</string>
+    <string name="admin_broadcast_ad_title_hint">Ad Title</string>
+    <string name="admin_broadcast_ad_desc_hint">Ad Description</string>
+    <string name="admin_broadcast_image_hint">Ad Image URL (https://…)</string>
+    <string name="admin_broadcast_btn_text_hint">Update Button Text (e.g. Update Now)</string>
+    <string name="admin_broadcast_ad_btn_text_hint">Action Button Text (e.g. Check Now)</string>
+    <string name="admin_broadcast_action_url_hint">Download / Redirect Link (URL)</string>
+    <string name="admin_broadcast_force_update">Force Update (hide close × button until updated)</string>
     <string name="admin_broadcast_cancelable">Allow user to dismiss popup</string>
-    <string name="admin_broadcast_send_now">Broadcast Popup Now</string>
-    <string name="admin_broadcast_stop">Stop Popup</string>
-    <string name="admin_broadcast_sent_toast">Live popup broadcasted to all connected users!</string>
-    <string name="admin_broadcast_stopped_toast">Live popup stopped across all devices.</string>
+    <string name="admin_broadcast_send_now">Push / Send Popup</string>
+    <string name="admin_broadcast_stop">Turn OFF</string>
+    <string name="admin_broadcast_delete">Delete Popup</string>
+    <string name="admin_broadcast_sent_toast">Popup pushed to all users (one-time delivery active)!</string>
+    <string name="admin_broadcast_stopped_toast">Active popup turned OFF across all devices.</string>
+    <string name="admin_broadcast_deleted_toast">Active popup permanently deleted from server.</string>
+    <string name="popup_badge_app_update">APP UPDATE</string>
+    <string name="popup_badge_custom_ad">FEATURED AD</string>
+    <string name="popup_default_update_cta">Update Now</string>
+    <string name="popup_default_ad_cta">Check Now</string>
+    <string name="popup_close_button_cd">Close popup</string>
+    <string name="popup_force_update_hint">Required update — please update to continue.</string>
     <string name="admin_banner_ad_section">Custom Banner Ad Across App Tabs</string>
     <string name="admin_banner_enable">Show Custom Banner Ad Across App</string>
     <string name="admin_banner_text_hint">Banner Text</string>
@@ -648,11 +671,11 @@
     <string name="admin_add_user_bonus_days_hint">Bonus Free Trial Days (default 0)</string>
     <string name="admin_add_user_create_btn">Add User</string>
     <string name="admin_add_user_success">Added user %1$s</string>
-    <string name="admin_delete_user_btn">Delete</string>
+    <string name="admin_delete_user_btn">Delete User</string>
     <string name="admin_delete_user_title">Delete User?</string>
-    <string name="admin_delete_user_message">Permanently remove %1$s (%2$s) from PulseDial Firestore &amp; Realtime Database? This cannot be undone.</string>
+    <string name="admin_delete_user_message">Are you sure? This will permanently delete all user data from the server.\n\nUser: %1$s (%2$s)</string>
     <string name="admin_delete_user_confirm">Delete User</string>
-    <string name="admin_delete_user_success">Deleted user %1$s</string>
+    <string name="admin_delete_user_success">Permanently deleted user %1$s from server</string>
     <string name="admin_delete_super_admin_blocked">Super Admin account cannot be deleted.</string>
 
     <!-- Play-Protect-Safe VoIP Detection & Clean Per-App Folders Dialog -->

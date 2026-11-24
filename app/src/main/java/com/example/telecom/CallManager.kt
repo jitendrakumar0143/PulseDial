@@ -723,6 +723,31 @@ object CallManager {
         }
     }
 
+    /**
+     * Explicitly starts or stops live call audio stream recording idempotently,
+     * ideal for the In-Call recording toggle switch.
+     */
+    fun setRecordingEnabled(context: Context, enabled: Boolean): Boolean {
+        val currentlyRecording = recorder?.isRecording == true || _uiState.value.isRecording
+        return if (enabled) {
+            if (currentlyRecording) true else toggleRecording(context)
+        } else {
+            if (!currentlyRecording) {
+                _uiState.update { it.copy(isRecording = false) }
+                false
+            } else {
+                val savedName = recorder?.stopRecording()
+                _uiState.update {
+                    it.copy(
+                        isRecording = false,
+                        lastSavedRecordingName = savedName ?: it.lastSavedRecordingName
+                    )
+                }
+                false
+            }
+        }
+    }
+
     fun startAutoRecordingIfEnabled(context: Context) {
         if (!com.example.billing.SubscriptionEnforcementService.canStartCallRecording(context)) {
             stopRecordingIfNeeded()

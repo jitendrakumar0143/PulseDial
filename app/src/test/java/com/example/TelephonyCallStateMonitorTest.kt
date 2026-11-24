@@ -275,4 +275,49 @@ class TelephonyCallStateMonitorTest {
 
         controller.destroy()
     }
+
+    @Test
+    fun `live call UI displays recording toggle switch synced with active audio recording state`() {
+        CallManager.publishStateForTesting(
+            CallUiState(
+                hasActiveCall = true,
+                callerName = "Ananya Singh",
+                callerNumber = "+919822334455",
+                callState = Call.STATE_ACTIVE,
+                isRecording = false,
+                connectTimeMillis = System.currentTimeMillis() - 4_000L
+            )
+        )
+
+        val controller = Robolectric.buildActivity(InCallActivity::class.java).setup()
+        val activity = controller.get()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        val recordBar = activity.findViewById<android.view.View>(R.id.layout_live_record_toggle_bar)
+        val recordSwitch = activity.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(
+            R.id.switch_incall_record_audio
+        )
+        val recordTitle = activity.findViewById<TextView>(R.id.tv_live_record_switch_title)
+
+        assertEquals(android.view.View.VISIBLE, recordBar.visibility)
+        assertFalse(recordSwitch.isChecked)
+        assertEquals(app.getString(R.string.incall_record_switch_title_off), recordTitle.text.toString())
+
+        // Simulate active call recording starting -> switch syncs ON without infinite recursion
+        CallManager.publishStateForTesting(CallManager.uiState.value.copy(isRecording = true))
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(recordSwitch.isChecked)
+        assertEquals(app.getString(R.string.incall_record_switch_title_on), recordTitle.text.toString())
+
+        // Toggle switch OFF -> cleanly stops recording via CallManager.setRecordingEnabled(false)
+        recordSwitch.isChecked = false
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        assertFalse(CallManager.uiState.value.isRecording)
+        assertFalse(recordSwitch.isChecked)
+        assertEquals(app.getString(R.string.incall_record_switch_title_off), recordTitle.text.toString())
+
+        controller.destroy()
+    }
 }

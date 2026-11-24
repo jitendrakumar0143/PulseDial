@@ -784,24 +784,107 @@ class AdminPanelActivity : AppCompatActivity() {
         }
     }
 
+    private var suppressBroadcastActiveSwitchListener = false
+
+    private fun selectedBroadcastPopupType(): String {
+        return if (binding.chipGroupBroadcastType.checkedChipId == R.id.chip_broadcast_type_ad) {
+            LiveBroadcast.TYPE_AD
+        } else {
+            LiveBroadcast.TYPE_UPDATE
+        }
+    }
+
+    private fun applyBroadcastTypeUi(popupType: String) {
+        val isUpdate = popupType != LiveBroadcast.TYPE_AD
+        binding.tilBroadcastVersion.visibility = if (isUpdate) View.VISIBLE else View.GONE
+        binding.switchBroadcastForceUpdate.visibility = if (isUpdate) View.VISIBLE else View.GONE
+        binding.tilBroadcastImageUrl.visibility = if (isUpdate) View.GONE else View.VISIBLE
+        if (isUpdate) {
+            binding.cardBroadcastImagePreview.visibility = View.GONE
+        } else {
+            updateBroadcastImagePreview(binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty())
+        }
+        binding.tilBroadcastTitle.hint = getString(
+            if (isUpdate) R.string.admin_broadcast_title_hint else R.string.admin_broadcast_ad_title_hint
+        )
+        binding.tilBroadcastMessage.hint = getString(
+            if (isUpdate) R.string.admin_broadcast_message_hint else R.string.admin_broadcast_ad_desc_hint
+        )
+        binding.tilBroadcastBtnText.hint = getString(
+            if (isUpdate) R.string.admin_broadcast_btn_text_hint else R.string.admin_broadcast_ad_btn_text_hint
+        )
+    }
+
+    private fun updateBroadcastStatusHeader(broadcast: LiveBroadcast) {
+        suppressBroadcastActiveSwitchListener = true
+        binding.switchBroadcastActiveToggle.isChecked = broadcast.showPopup
+        suppressBroadcastActiveSwitchListener = false
+
+        val idLabel = broadcast.popupId.ifBlank { "default" }
+        binding.tvBroadcastLiveStatus.text = if (broadcast.showPopup) {
+            getString(R.string.admin_broadcast_status_live, idLabel)
+        } else {
+            getString(R.string.admin_broadcast_status_inactive)
+        }
+    }
+
     private fun setupBroadcastTab() {
+        applyBroadcastTypeUi(LiveBroadcast.TYPE_UPDATE)
+
+        binding.chipGroupBroadcastType.setOnCheckedStateChangeListener { _, checkedIds ->
+            val checkedId = checkedIds.firstOrNull() ?: R.id.chip_broadcast_type_update
+            val type = if (checkedId == R.id.chip_broadcast_type_ad) {
+                LiveBroadcast.TYPE_AD
+            } else {
+                LiveBroadcast.TYPE_UPDATE
+            }
+            applyBroadcastTypeUi(type)
+        }
+
+        binding.switchBroadcastForceUpdate.setOnCheckedChangeListener { _, isChecked ->
+            binding.switchBroadcastCancelable.isChecked = !isChecked
+        }
+
+        binding.switchBroadcastActiveToggle.setOnCheckedChangeListener { _, isChecked ->
+            if (suppressBroadcastActiveSwitchListener) return@setOnCheckedChangeListener
+            if (isChecked) {
+                val next = buildBroadcastFromInputs(generateFreshId = currentBroadcast.popupId.isBlank())
+                if (next == null) {
+                    suppressBroadcastActiveSwitchListener = true
+                    binding.switchBroadcastActiveToggle.isChecked = false
+                    suppressBroadcastActiveSwitchListener = false
+                    return@setOnCheckedChangeListener
+                }
+                saveLiveBroadcast(next, R.string.admin_broadcast_sent_toast)
+            } else {
+                val next = currentBroadcast.copy(showPopup = false)
+                saveLiveBroadcast(next, R.string.admin_broadcast_stopped_toast)
+            }
+        }
+
         binding.etBroadcastImageUrl.doAfterTextChanged { editable ->
-            updateBroadcastImagePreview(editable?.toString()?.trim().orEmpty())
+            if (selectedBroadcastPopupType() == LiveBroadcast.TYPE_AD) {
+                updateBroadcastImagePreview(editable?.toString()?.trim().orEmpty())
+            }
         }
 
         binding.btnBroadcastPreview.setOnClickListener {
-            val previewBroadcast = buildBroadcastFromInputs() ?: return@setOnClickListener
+            val previewBroadcast = buildBroadcastFromInputs(generateFreshId = false) ?: return@setOnClickListener
             showBroadcastPreviewDialog(previewBroadcast)
         }
 
         binding.btnBroadcastSendNow.setOnClickListener {
-            val next = buildBroadcastFromInputs() ?: return@setOnClickListener
+            val next = buildBroadcastFromInputs(generateFreshId = true) ?: return@setOnClickListener
             saveLiveBroadcast(next, R.string.admin_broadcast_sent_toast)
         }
 
         binding.btnBroadcastStop.setOnClickListener {
             val next = currentBroadcast.copy(showPopup = false)
             saveLiveBroadcast(next, R.string.admin_broadcast_stopped_toast)
+        }
+
+        binding.btnBroadcastDelete.setOnClickListener {
+            deleteLiveBroadcastPopup()
         }
 
         binding.btnBannerAdSave.setOnClickListener {
@@ -824,24 +907,40 @@ class AdminPanelActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildBroadcastFromInputs(): LiveBroadcast? {
+    private fun buildBroadcastFromInputs(generateFreshId: Boolean = true): LiveBroadcast? {
+        val popupType = selectedBroadcastPopupType()
+        val isUpdate = popupType == LiveBroadcast.TYPE_UPDATE
         val title = binding.etBroadcastTitle.text?.toString()?.trim().orEmpty()
+        val version = if (isUpdate) binding.etBroadcastVersion.text?.toString()?.trim().orEmpty() else ""
         val message = binding.etBroadcastMessage.text?.toString()?.trim().orEmpty()
-        val imageUrl = binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty()
+        val imageUrl = if (isUpdate) "" else binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty()
         val actionUrl = binding.etBroadcastActionUrl.text?.toString()?.trim().orEmpty()
         if (title.isBlank() && message.isBlank() && imageUrl.isBlank()) {
             Toast.makeText(this, "Enter popup image URL, title, or message", Toast.LENGTH_SHORT).show()
             return null
         }
+        val forceUpdate = isUpdate && binding.switchBroadcastForceUpdate.isChecked
+        val defaultBtn = getString(
+            if (isUpdate) R.string.popup_default_update_cta else R.string.popup_default_ad_cta
+        )
+        val resolvedPopupId = if (generateFreshId || currentBroadcast.popupId.isBlank()) {
+            LiveBroadcast.generatePopupId()
+        } else {
+            currentBroadcast.popupId
+        }
         return currentBroadcast.copy(
             showPopup = true,
-            popupId = "pop_${System.currentTimeMillis()}",
+            popupId = resolvedPopupId,
+            popupType = popupType,
+            version = version,
+            forceUpdate = forceUpdate,
+            showOnce = true,
             title = title,
             message = message,
             imageUrl = imageUrl,
-            buttonText = binding.etBroadcastBtnText.text?.toString()?.trim()?.ifBlank { "Open Link" } ?: "Open Link",
+            buttonText = binding.etBroadcastBtnText.text?.toString()?.trim()?.ifBlank { defaultBtn } ?: defaultBtn,
             actionUrl = actionUrl,
-            isCancelable = binding.switchBroadcastCancelable.isChecked
+            isCancelable = !forceUpdate
         )
     }
 
@@ -851,19 +950,23 @@ class AdminPanelActivity : AppCompatActivity() {
         val message = binding.etPopupAdMessage.text?.toString()?.trim().orEmpty()
         val targetUrl = binding.etPopupAdTargetUrl.text?.toString()?.trim().orEmpty()
         val buttonText = binding.etPopupAdButtonText.text?.toString()?.trim()
-            ?.ifBlank { "Open Offer" }
-            ?: "Open Offer"
+            ?.ifBlank { getString(R.string.popup_default_ad_cta) }
+            ?: getString(R.string.popup_default_ad_cta)
 
         if (imageUrl.isBlank() && title.isBlank() && message.isBlank()) {
             Toast.makeText(this, R.string.admin_popup_ad_validation_error, Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Also publish the CustomPopupAd config AND push an immediate LiveBroadcast popup with link
+        // Also publish the CustomPopupAd config AND push an immediate one-time Custom Ad popup
         publishCustomPopupAdFromInputs()
         val livePopup = currentBroadcast.copy(
             showPopup = true,
-            popupId = "pop_${System.currentTimeMillis()}",
+            popupId = LiveBroadcast.generatePopupId(),
+            popupType = LiveBroadcast.TYPE_AD,
+            version = "",
+            forceUpdate = false,
+            showOnce = true,
             title = title,
             message = message,
             imageUrl = imageUrl,
@@ -896,13 +999,38 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private fun showBroadcastPreviewDialog(broadcast: LiveBroadcast) {
         val dialogView = layoutInflater.inflate(R.layout.dialog_live_broadcast, null)
+        val glassCard = dialogView.findViewById<View>(R.id.card_popup_glass)
+        val tvTypeBadge = dialogView.findViewById<TextView>(R.id.tv_popup_type_badge)
+        val tvVersionPill = dialogView.findViewById<TextView>(R.id.tv_popup_version_pill)
+        val btnCloseIcon = dialogView.findViewById<TextView>(R.id.btn_popup_close_icon)
         val cardImageWrapper = dialogView.findViewById<View>(R.id.card_popup_image_wrapper)
         val ivImage = dialogView.findViewById<android.widget.ImageView>(R.id.iv_popup_image)
         val tvImageLinkBadge = dialogView.findViewById<TextView>(R.id.tv_popup_image_link_badge)
         val tvTitle = dialogView.findViewById<TextView>(R.id.tv_popup_title)
         val tvMessage = dialogView.findViewById<TextView>(R.id.tv_popup_message)
+        val tvForceNotice = dialogView.findViewById<TextView>(R.id.tv_popup_force_notice)
         val btnAction = dialogView.findViewById<MaterialButton>(R.id.btn_popup_action)
         val btnDismiss = dialogView.findViewById<MaterialButton>(R.id.btn_popup_close)
+
+        val isUpdate = broadcast.isUpdatePopup()
+        val isForce = broadcast.isForceUpdateActive()
+
+        tvTypeBadge.text = getString(
+            if (isUpdate) R.string.popup_badge_app_update else R.string.popup_badge_custom_ad
+        )
+        tvTypeBadge.setBackgroundResource(
+            if (isUpdate) R.drawable.bg_sapphire_badge_update else R.drawable.bg_sapphire_badge_ad
+        )
+        tvTypeBadge.setTextColor(
+            android.graphics.Color.parseColor(if (isUpdate) "#6EE7B7" else "#FDE68A")
+        )
+
+        if (isUpdate && broadcast.version.isNotBlank()) {
+            tvVersionPill.visibility = View.VISIBLE
+            tvVersionPill.text = broadcast.version.trim()
+        } else {
+            tvVersionPill.visibility = View.GONE
+        }
 
         val cleanTitle = broadcast.title.trim()
         val cleanMessage = broadcast.message.trim()
@@ -910,12 +1038,21 @@ class AdminPanelActivity : AppCompatActivity() {
         tvTitle.visibility = if (cleanTitle.isNotEmpty()) View.VISIBLE else View.GONE
         tvMessage.text = cleanMessage
         tvMessage.visibility = if (cleanMessage.isNotEmpty()) View.VISIBLE else View.GONE
-        btnAction.text = broadcast.buttonText.ifBlank { "Open Link" }
+        tvForceNotice.visibility = if (isForce) View.VISIBLE else View.GONE
 
+        btnAction.text = broadcast.buttonText.ifBlank {
+            getString(if (isUpdate) R.string.popup_default_update_cta else R.string.popup_default_ad_cta)
+        }
+        btnAction.backgroundTintList = android.content.res.ColorStateList.valueOf(
+            android.graphics.Color.parseColor(if (isUpdate) "#10B981" else "#2563EB")
+        )
+
+        // In admin preview, allow tapping outside to exit preview even when previewing Force Update
         val dialog = MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .setCancelable(true)
             .create()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
 
         val hasActionUrl = broadcast.actionUrl.isNotBlank()
         val openActionUrl = {
@@ -949,9 +1086,24 @@ class AdminPanelActivity : AppCompatActivity() {
         }
 
         btnAction.setOnClickListener { openActionUrl() }
-        btnDismiss.visibility = View.VISIBLE
+        btnCloseIcon.visibility = if (isForce) View.GONE else View.VISIBLE
+        btnDismiss.visibility = if (isForce) View.GONE else View.VISIBLE
+        btnCloseIcon.setOnClickListener { dialog.dismiss() }
         btnDismiss.setOnClickListener { dialog.dismiss() }
+
         dialog.show()
+        glassCard?.apply {
+            alpha = 0f
+            scaleX = 0.88f
+            scaleY = 0.88f
+            animate()
+                .alpha(1f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(280L)
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.08f))
+                .start()
+        }
     }
 
     private fun selectedPopupAdTriggerMode(): String {
@@ -1052,7 +1204,29 @@ class AdminPanelActivity : AppCompatActivity() {
             val result = adminRepository.saveLiveBroadcast(broadcast)
             result.onSuccess {
                 currentBroadcast = broadcast
+                updateBroadcastStatusHeader(broadcast)
                 Toast.makeText(this@AdminPanelActivity, successToastRes, Toast.LENGTH_SHORT).show()
+            }.onFailure { err ->
+                updateBroadcastStatusHeader(currentBroadcast)
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun deleteLiveBroadcastPopup() {
+        lifecycleScope.launch {
+            val result = adminRepository.deleteLiveBroadcastPopup(currentBroadcast)
+            result.onSuccess { cleared ->
+                bindBroadcastInputs(cleared)
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    R.string.admin_broadcast_deleted_toast,
+                    Toast.LENGTH_SHORT
+                ).show()
             }.onFailure { err ->
                 Toast.makeText(
                     this@AdminPanelActivity,
@@ -1065,13 +1239,28 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private fun bindBroadcastInputs(broadcast: LiveBroadcast) {
         currentBroadcast = broadcast
+        val resolvedType = broadcast.normalizedPopupType()
+        binding.chipGroupBroadcastType.check(
+            if (resolvedType == LiveBroadcast.TYPE_AD) {
+                R.id.chip_broadcast_type_ad
+            } else {
+                R.id.chip_broadcast_type_update
+            }
+        )
+        applyBroadcastTypeUi(resolvedType)
+        updateBroadcastStatusHeader(broadcast)
+
         binding.etBroadcastTitle.setText(broadcast.title)
+        binding.etBroadcastVersion.setText(broadcast.version)
         binding.etBroadcastMessage.setText(broadcast.message)
         binding.etBroadcastImageUrl.setText(broadcast.imageUrl)
         binding.etBroadcastBtnText.setText(broadcast.buttonText)
         binding.etBroadcastActionUrl.setText(broadcast.actionUrl)
-        binding.switchBroadcastCancelable.isChecked = broadcast.isCancelable
-        updateBroadcastImagePreview(broadcast.imageUrl)
+        binding.switchBroadcastForceUpdate.isChecked = broadcast.isForceUpdateActive()
+        binding.switchBroadcastCancelable.isChecked = !broadcast.isForceUpdateActive()
+        if (resolvedType == LiveBroadcast.TYPE_AD) {
+            updateBroadcastImagePreview(broadcast.imageUrl)
+        }
 
         binding.switchBannerAdEnable.isChecked = broadcast.showBannerAd
         binding.etBannerAdText.setText(broadcast.bannerText)

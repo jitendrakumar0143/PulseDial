@@ -915,10 +915,53 @@
                             android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
                             android:textColor="@color/md_theme_onSurface" />
 
-                        <com.google.android.material.textfield.TextInputLayout
+                        <TextView
+                            android:id="@+id/tv_broadcast_live_status"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/admin_broadcast_status_inactive"
+                            android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                            android:textColor="@color/md_theme_primary" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_broadcast_active_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:checked="false"
+                            android:minHeight="48dp"
+                            android:text="@string/admin_broadcast_active_toggle" />
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/chip_group_broadcast_type"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            app:selectionRequired="true"
+                            app:singleSelection="true">
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_broadcast_type_update"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true"
+                                android:text="@string/admin_broadcast_type_update" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_broadcast_type_ad"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_broadcast_type_ad" />
+                        </com.google.android.material.chip.ChipGroup>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/til_broadcast_title"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
                             app:boxBackgroundMode="outline">
 
                             <com.google.android.material.textfield.TextInputEditText
@@ -930,6 +973,22 @@
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/til_broadcast_version"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_broadcast_version"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_broadcast_version_hint"
+                                android:inputType="text" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/til_broadcast_message"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
@@ -944,6 +1003,7 @@
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/til_broadcast_image_url"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
@@ -958,6 +1018,7 @@
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/til_broadcast_btn_text"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
@@ -972,6 +1033,7 @@
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/til_broadcast_action_url"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
@@ -1006,13 +1068,22 @@
                         </com.google.android.material.card.MaterialCardView>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switch_broadcast_cancelable"
+                            android:id="@+id/switch_broadcast_force_update"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
+                            android:checked="false"
+                            android:minHeight="48dp"
+                            android:text="@string/admin_broadcast_force_update" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_broadcast_cancelable"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
                             android:checked="true"
                             android:minHeight="48dp"
-                            android:text="@string/admin_broadcast_cancelable" />
+                            android:text="@string/admin_broadcast_cancelable"
+                            android:visibility="gone" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btn_broadcast_preview"
@@ -1020,12 +1091,20 @@
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
                             android:layout_marginTop="8dp"
-                            android:text="👁 Preview Image Popup + Link" />
+                            android:text="👁 Preview Glassmorphic Popup" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_broadcast_send_now"
+                            style="@style/Widget.Material3.Button"
+                            android:layout_width="match_parent"
+                            android:layout_height="50dp"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/admin_broadcast_send_now" />
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:orientation="horizontal">
 
                             <com.google.android.material.button.MaterialButton
@@ -1041,12 +1120,14 @@
                                 android:layout_height="1dp" />
 
                             <com.google.android.material.button.MaterialButton
-                                android:id="@+id/btn_broadcast_send_now"
-                                style="@style/Widget.Material3.Button"
+                                android:id="@+id/btn_broadcast_delete"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
                                 android:layout_width="0dp"
                                 android:layout_height="48dp"
-                                android:layout_weight="1.3"
-                                android:text="@string/admin_broadcast_send_now" />
+                                android:layout_weight="1"
+                                android:text="@string/admin_broadcast_delete"
+                                android:textColor="@color/md_theme_error"
+                                app:strokeColor="@color/md_theme_error" />
                         </LinearLayout>
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>

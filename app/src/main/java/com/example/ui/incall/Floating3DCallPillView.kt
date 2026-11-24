@@ -129,6 +129,7 @@ class Floating3DCallPillView @JvmOverloads constructor(
 
     // Cached caller & active-call data
     private var callerNameText: String = context.getString(R.string.incall_unknown_caller)
+    private var callerInitialsText: String = computeCallerInitials(callerNameText)
     private var callerSubtitleText: String = context.getString(R.string.incall_status_ringing)
     private var activeTimerText: String = "00:00"
     private var isMutedState: Boolean = false
@@ -187,6 +188,30 @@ class Floating3DCallPillView @JvmOverloads constructor(
     }
     private val liveDotHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
+    }
+    private val capsuleAvatarFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val capsuleAvatarStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+    }
+    private val capsuleInitialsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+    }
+    private val capsuleAvatarFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val capsuleAvatarStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+    }
+    private val capsuleInitialsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
     }
 
     // Subviews inside the pill
@@ -325,15 +350,15 @@ class Floating3DCallPillView @JvmOverloads constructor(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, pillHeightPx.toInt(), Gravity.CENTER)
-            setPadding((18f * density).toInt(), 0, (12f * density).toInt(), 0)
+            setPadding((14f * density).toInt(), 0, (12f * density).toInt(), 0)
             visibility = View.GONE
             alpha = 0f
         }
 
-        // Left spacer for pulsing emerald live dot drawn on canvas
+        // Left circular caller-initials avatar badge drawn directly on canvas
         val dotSpacer = View(context).apply {
-            layoutParams = LinearLayout.LayoutParams((16f * density).toInt(), (16f * density).toInt()).apply {
-                marginEnd = (8f * density).toInt()
+            layoutParams = LinearLayout.LayoutParams((42f * density).toInt(), (42f * density).toInt()).apply {
+                marginEnd = (10f * density).toInt()
             }
             contentDescription = context.getString(R.string.incall_pill_live_call_cd)
         }
@@ -468,10 +493,12 @@ class Floating3DCallPillView @JvmOverloads constructor(
      */
     fun updateCallerInfo(callerName: String, callerLabelOrNumber: String) {
         callerNameText = callerName.ifBlank { context.getString(R.string.incall_unknown_caller) }
+        callerInitialsText = computeCallerInitials(callerNameText)
         callerSubtitleText = callerLabelOrNumber.ifBlank { context.getString(R.string.incall_status_ringing) }
         tvCallerName.text = callerNameText
         tvCallerSubtitle.text = callerSubtitleText
         tvActiveName.text = callerNameText
+        invalidate()
     }
 
     /**
@@ -485,13 +512,15 @@ class Floating3DCallPillView @JvmOverloads constructor(
         isBluetooth: Boolean = false
     ) {
         callerNameText = callerName.ifBlank { context.getString(R.string.incall_unknown_caller) }
+        callerInitialsText = computeCallerInitials(callerNameText)
         activeTimerText = formattedTimer.ifBlank { "00:00" }
         isMutedState = isMuted
         isSpeakerState = isSpeakerOn
         isBluetoothAudioState = isBluetooth
 
         tvActiveName.text = callerNameText
-        tvActiveTimer.text = activeTimerText
+        tvActiveTimer.text = "● $activeTimerText"
+        invalidate()
 
         btnActiveMute.setIconRes(if (isMuted) R.drawable.ic_mic_off else R.drawable.ic_mic)
         btnActiveMute.setActiveHighlight(isMuted, COLOR_MUTE_ACTIVE)
@@ -1183,19 +1212,84 @@ class Floating3DCallPillView @JvmOverloads constructor(
             drawDirectionalChevrons(canvas, pillRect.centerY())
         }
 
-        // 9. Pulsing Green Live Indicator Dot in Active "On Call" Bar
+        // 8b. Circular Caller Initials Badge inside Collapsed Capsule during Stage 1 Drop, Early Unfold & Retract
+        if (currentMode != PillMode.ACTIVE_CALL && unfoldProgress < 0.36f) {
+            val badgeAlpha = (1f - (unfoldProgress / 0.36f)).coerceIn(0f, 1f)
+            drawCircularInitialsBadge(
+                canvas = canvas,
+                cx = centerX,
+                cy = pillRect.centerY(),
+                radiusPx = 22f * density,
+                alphaFraction = badgeAlpha
+            )
+        }
+
+        // 9. Circular Caller Initials Badge + Pulsing Emerald Live Halo in Active "On Call" Bar
         if (currentMode == PillMode.ACTIVE_CALL) {
-            val dotCx = pillRect.left + 25f * density
-            val dotCy = pillRect.centerY()
-            val haloRadius = (4.5f + 5.5f * liveDotPulse) * density
+            val badgeRadius = 20f * density
+            val badgeCx = pillRect.left + 14f * density + badgeRadius
+            val badgeCy = pillRect.centerY()
+            drawCircularInitialsBadge(
+                canvas = canvas,
+                cx = badgeCx,
+                cy = badgeCy,
+                radiusPx = badgeRadius,
+                alphaFraction = activeCallContainer.alpha.coerceIn(0f, 1f)
+            )
+            // Subtle pulsing emerald active-call ring dot at bottom-right of initials avatar
+            val dotCx = badgeCx + badgeRadius * 0.68f
+            val dotCy = badgeCy + badgeRadius * 0.68f
+            val haloRadius = (3.8f + 4.0f * liveDotPulse) * density
             liveDotHaloPaint.color = Color.argb(((1f - liveDotPulse) * 145).toInt().coerceIn(0, 150), 52, 211, 153)
             canvas.drawCircle(dotCx, dotCy, haloRadius, liveDotHaloPaint)
             liveDotPaint.color = Color.parseColor("#34D399")
-            canvas.drawCircle(dotCx, dotCy, 4.4f * density, liveDotPaint)
+            canvas.drawCircle(dotCx, dotCy, 3.6f * density, liveDotPaint)
         }
 
         // 10. Animated Liquid-Platinum Iridescent Conic-Gradient Rim Border (shifts to Emerald / Crimson on drag)
         drawIridescentConicRim(canvas, pillRect, radius)
+    }
+
+    private fun drawCircularInitialsBadge(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radiusPx: Float,
+        alphaFraction: Float
+    ) {
+        if (alphaFraction <= 0.01f) return
+        val a = (alphaFraction * 255f).toInt().coerceIn(0, 255)
+        capsuleAvatarFillPaint.shader = RadialGradient(
+            cx - radiusPx * 0.25f,
+            cy - radiusPx * 0.25f,
+            radiusPx * 1.45f,
+            intArrayOf(
+                Color.argb((a * 0.92f).toInt(), 37, 99, 235),
+                Color.argb((a * 0.95f).toInt(), 23, 37, 84)
+            ),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawCircle(cx, cy, radiusPx, capsuleAvatarFillPaint)
+
+        capsuleAvatarStrokePaint.color = Color.argb((a * 0.72f).toInt(), 147, 197, 253)
+        canvas.drawCircle(cx, cy, radiusPx - 0.75f * density, capsuleAvatarStrokePaint)
+
+        capsuleInitialsPaint.textSize = radiusPx * 0.78f
+        capsuleInitialsPaint.alpha = a
+        val textBaseline = cy - (capsuleInitialsPaint.descent() + capsuleInitialsPaint.ascent()) * 0.5f
+        canvas.drawText(callerInitialsText, cx, textBaseline, capsuleInitialsPaint)
+    }
+
+    private fun computeCallerInitials(name: String): String {
+        val parts = name.trim()
+            .split(Regex("\\s+"))
+            .filter { token -> token.any { it.isLetter() } }
+        return when {
+            parts.size >= 2 -> "${parts[0].first { it.isLetter() }}${parts[1].first { it.isLetter() }}".uppercase()
+            parts.size == 1 -> parts[0].filter { it.isLetter() }.take(2).uppercase().ifEmpty { "#" }
+            else -> "#"
+        }
     }
 
     private fun drawCompactLiveWaveform(canvas: Canvas, cx: Float, baselineY: Float, alphaFactor: Float) {

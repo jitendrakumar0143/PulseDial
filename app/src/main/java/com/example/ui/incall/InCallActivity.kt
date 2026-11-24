@@ -79,6 +79,7 @@ class InCallActivity : AppCompatActivity() {
     private var hasPlayedShowcaseEntrance = false
     private var lastRecordingActive = false
     private var recordingStartTimeMs: Long = 0L
+    private var isSyncingRecordSwitch = false
     private var lastTopSystemBarInset: Int = 0
     private var lastBottomSystemBarInset: Int = 0
     private var isTopIncomingPopupReserved: Boolean = false
@@ -95,8 +96,9 @@ class InCallActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         if (recordGranted) {
-            toggleCallRecording()
+            applyRecordingEnabled(true)
         } else {
+            syncLiveRecordSwitchVisuals(isRecording = CallManager.uiState.value.isRecording)
             Toast.makeText(this, R.string.incall_recording_failed, Toast.LENGTH_SHORT).show()
         }
     }
@@ -964,12 +966,17 @@ class InCallActivity : AppCompatActivity() {
 
     private fun updateRecordButtonAvailability() {
         val canRecord = canUseInCallRecording()
-        binding.btnIncallRecord.isEnabled = canRecord
-        binding.btnIncallRecord.isClickable = canRecord
-        binding.btnIncallRecord.alpha = if (canRecord) 1f else 0.45f
-        binding.tvIncallRecordLabel.alpha = if (canRecord) 1f else 0.45f
-        binding.btnDrawerRecord.isEnabled = canRecord
-        binding.btnDrawerRecord.alpha = if (canRecord) 1f else 0.45f
+        val isCurrentlyRecording = CallManager.uiState.value.isRecording
+        val allowInteraction = canRecord || isCurrentlyRecording
+        binding.btnIncallRecord.isEnabled = allowInteraction
+        binding.btnIncallRecord.isClickable = allowInteraction
+        binding.btnIncallRecord.alpha = if (allowInteraction) 1f else 0.45f
+        binding.tvIncallRecordLabel.alpha = if (allowInteraction) 1f else 0.45f
+        binding.btnDrawerRecord.isEnabled = allowInteraction
+        binding.btnDrawerRecord.alpha = if (allowInteraction) 1f else 0.45f
+        binding.switchIncallRecordAudio.isEnabled = allowInteraction
+        binding.layoutLiveRecordToggleBar.isEnabled = allowInteraction
+        binding.layoutLiveRecordToggleBar.alpha = if (allowInteraction) 1f else 0.55f
     }
 
     private fun observeRealtimePolicy() {
@@ -1075,36 +1082,35 @@ class InCallActivity : AppCompatActivity() {
         attachTactile3DPress(binding.btnIncallRecord, pressScale = 0.93f, pushDownDp = 1.5f)
 
         val handleRecordClick = View.OnClickListener {
-            if (!canUseInCallRecording()) {
-                updateRecordButtonAvailability()
-                Toast.makeText(
-                    this@InCallActivity,
-                    "Call Recording is a Premium feature. Upgrade to Pro to unlock.",
-                    Toast.LENGTH_SHORT
-                ).show()
-                return@OnClickListener
-            }
-            val missing = buildList {
-                if (ContextCompat.checkSelfPermission(this@InCallActivity, Manifest.permission.RECORD_AUDIO) !=
-                    PackageManager.PERMISSION_GRANTED
-                ) {
-                    add(Manifest.permission.RECORD_AUDIO)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                    ContextCompat.checkSelfPermission(this@InCallActivity, Manifest.permission.POST_NOTIFICATIONS) !=
-                    PackageManager.PERMISSION_GRANTED
-                ) {
-                    add(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
-            if (missing.isEmpty()) {
-                toggleCallRecording()
-            } else {
-                recordingPermissionsLauncher.launch(missing.toTypedArray())
-            }
+            val desiredState = !CallManager.uiState.value.isRecording
+            requestRecordingStateChange(desiredState)
         }
         binding.btnIncallRecord.setOnClickListener(handleRecordClick)
         binding.btnDrawerRecord.setOnClickListener(handleRecordClick)
+
+        // Simple Live Call Audio Stream Recording Toggle Switch
+        val switchTrackColors = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(Color.parseColor("#E11D48"), Color.argb(66, 255, 255, 255))
+        )
+        val switchThumbColors = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(Color.WHITE, Color.parseColor("#E2E8F0"))
+        )
+        binding.switchIncallRecordAudio.trackTintList = switchTrackColors
+        binding.switchIncallRecordAudio.thumbTintList = switchThumbColors
+        binding.switchIncallRecordAudio.setOnCheckedChangeListener { buttonView, isChecked ->
+            if (isSyncingRecordSwitch) return@setOnCheckedChangeListener
+            buttonView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            requestRecordingStateChange(isChecked)
+        }
+        binding.layoutLiveRecordToggleBar.setOnClickListener {
+            if (binding.switchIncallRecordAudio.isEnabled) {
+                binding.switchIncallRecordAudio.performClick()
+            } else {
+                requestRecordingStateChange(true)
+            }
+        }
 
         // Multi-Party Conference & Dual-Call Controls
         binding.btnAddCall.setOnClickListener {
@@ -1335,11 +1341,82 @@ class InCallActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleCallRecording() {
-        val started = CallManager.toggleRecording(this)
-        if (!started && !CallManager.uiState.value.isRecording) {
-            Toast.makeText(this, R.string.incall_recording_failed, Toast.LENGTH_SHORT).show()
+    internal fun requestRecordingStateChange(desiredRecording: Boolean) {
+        val currentRecording = CallManager.uiState.value.isRecording
+        if (desiredRecording == currentRecording) {
+            syncLiveRecordSwitchVisuals(currentRecording)
+            return
         }
+        if (!desiredRecording) {
+            applyRecordingEnabled(false)
+            return
+        }
+        if (!canUseInCallRecording()) {
+            syncLiveRecordSwitchVisuals(false)
+            updateRecordButtonAvailability()
+            Toast.makeText(
+                this@InCallActivity,
+                "Call Recording is a Premium feature. Upgrade to Pro to unlock.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val missing = buildList {
+            if (ContextCompat.checkSelfPermission(this@InCallActivity, Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.RECORD_AUDIO)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(this@InCallActivity, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (missing.isEmpty()) {
+            applyRecordingEnabled(true)
+        } else {
+            syncLiveRecordSwitchVisuals(false)
+            recordingPermissionsLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    private fun applyRecordingEnabled(enable: Boolean) {
+        val wasRecording = CallManager.uiState.value.isRecording
+        val isNowRecording = CallManager.setRecordingEnabled(this, enable)
+        syncLiveRecordSwitchVisuals(isNowRecording)
+        if (enable && !isNowRecording) {
+            Toast.makeText(this, R.string.incall_recording_failed, Toast.LENGTH_SHORT).show()
+        } else if (!enable && wasRecording && !isNowRecording) {
+            Toast.makeText(this, R.string.incall_recording_stopped_toast, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun syncLiveRecordSwitchVisuals(isRecording: Boolean) {
+        if (!::binding.isInitialized) return
+        if (binding.switchIncallRecordAudio.isChecked != isRecording) {
+            isSyncingRecordSwitch = true
+            binding.switchIncallRecordAudio.isChecked = isRecording
+            isSyncingRecordSwitch = false
+        }
+        binding.tvLiveRecordSwitchTitle.text = getString(
+            if (isRecording) R.string.incall_record_switch_title_on else R.string.incall_record_switch_title_off
+        )
+        binding.tvLiveRecordSwitchStatus.text = if (isRecording) {
+            formatRecordingTimer()
+        } else {
+            getString(R.string.incall_record_switch_hint_off)
+        }
+        binding.tvLiveRecordSwitchStatus.setTextColor(
+            if (isRecording) Color.parseColor("#FDA4AF") else Color.parseColor("#94A3B8")
+        )
+        binding.ivLiveRecordDot.imageTintList = ColorStateList.valueOf(
+            if (isRecording) Color.parseColor("#FB7185") else Color.parseColor("#94A3B8")
+        )
+        binding.layoutLiveRecordToggleBar.backgroundTintList = ColorStateList.valueOf(
+            if (isRecording) Color.argb(92, 159, 18, 57) else Color.argb(46, 15, 23, 42)
+        )
     }
 
     private fun handleAudioRouteClick() {
@@ -1405,7 +1482,9 @@ class InCallActivity : AppCompatActivity() {
                     }
                     binding.tvDrawerLiveTimer.text = formattedTime
                     if (state.isRecording) {
-                        binding.tvLiveRecTimer.text = formatRecordingTimer()
+                        val recTimer = formatRecordingTimer()
+                        binding.tvLiveRecTimer.text = recTimer
+                        binding.tvLiveRecordSwitchStatus.text = recTimer
                     }
                     if (isMinimizedToTopBar && state.hasActiveCall && state.callState != Call.STATE_RINGING) {
                         val isBtActive = (state.audioRoute and CallAudioState.ROUTE_BLUETOOTH) != 0
@@ -1737,6 +1816,7 @@ class InCallActivity : AppCompatActivity() {
             activeStrokeColor = Color.argb(236, 253, 164, 175)
         )
         updateLiveRecordingPill(state.isRecording)
+        syncLiveRecordSwitchVisuals(state.isRecording)
         if (state.isRecording) startRecBadgePulse() else stopRecBadgePulse()
 
         renderTopDrawerDetails(state)

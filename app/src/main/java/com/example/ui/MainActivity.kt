@@ -682,15 +682,7 @@ class MainActivity : AppCompatActivity() {
                                 ).show()
                             }
                             RealtimeSyncEvent.AccountDeletedByAdmin -> {
-                                com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
-                                updateBlockedOverlayState()
-                                refreshPremiumMainChrome()
-                                refreshCurrentFragment()
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    R.string.realtime_account_deleted_toast,
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                handleAccountRemovedByAdmin()
                             }
                             RealtimeSyncEvent.RecordingDisabledByAdmin -> {
                                 Toast.makeText(
@@ -840,8 +832,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val popupId = broadcast.popupId.ifBlank { "${broadcast.title}|${broadcast.message}" }
-        if (broadcast.isCancelable && prefs.isPopupDismissed(popupId)) {
+        val popupId = broadcast.effectivePopupId()
+        if (!broadcast.shouldShowToUser(prefs.getSeenPopupIds())) {
             return
         }
         if (activeBroadcastDialog?.isShowing == true && activeBroadcastPopupId == popupId) {
@@ -851,19 +843,42 @@ class MainActivity : AppCompatActivity() {
         showLiveBroadcastDialog(broadcast, popupId)
     }
 
-    private fun showLiveBroadcastDialog(broadcast: LiveBroadcast, popupId: String) {
+    internal fun showLiveBroadcastDialog(broadcast: LiveBroadcast, popupId: String) {
         if (isFinishing || isDestroyed) return
         activeBroadcastDialog?.dismiss()
 
         val dialogBinding = DialogLiveBroadcastBinding.inflate(layoutInflater)
+        val isUpdate = broadcast.isUpdatePopup()
+        val isForceUpdate = broadcast.isForceUpdateActive()
+        val canDismiss = !isForceUpdate
         val hasImage = broadcast.imageUrl.isNotBlank()
         val hasAction = broadcast.actionUrl.isNotBlank()
+
+        // Badge + Version Pill styling
+        dialogBinding.tvPopupTypeBadge.text = getString(
+            if (isUpdate) R.string.popup_badge_app_update else R.string.popup_badge_custom_ad
+        )
+        dialogBinding.tvPopupTypeBadge.setBackgroundResource(
+            if (isUpdate) R.drawable.bg_sapphire_badge_update else R.drawable.bg_sapphire_badge_ad
+        )
+        dialogBinding.tvPopupTypeBadge.setTextColor(
+            android.graphics.Color.parseColor(if (isUpdate) "#6EE7B7" else "#FDE68A")
+        )
+
+        if (isUpdate && broadcast.version.isNotBlank()) {
+            dialogBinding.tvPopupVersionPill.visibility = View.VISIBLE
+            dialogBinding.tvPopupVersionPill.text = broadcast.version.trim()
+        } else {
+            dialogBinding.tvPopupVersionPill.visibility = View.GONE
+        }
 
         if (broadcast.title.isBlank() && hasImage) {
             dialogBinding.tvPopupTitle.visibility = View.GONE
         } else {
             dialogBinding.tvPopupTitle.visibility = View.VISIBLE
-            dialogBinding.tvPopupTitle.text = broadcast.title.ifBlank { getString(R.string.custom_tab_default_title) }
+            dialogBinding.tvPopupTitle.text = broadcast.title.ifBlank {
+                getString(if (isUpdate) R.string.popup_badge_app_update else R.string.custom_tab_default_title)
+            }
         }
 
         if (broadcast.message.isBlank()) {
@@ -872,6 +887,8 @@ class MainActivity : AppCompatActivity() {
             dialogBinding.tvPopupMessage.visibility = View.VISIBLE
             dialogBinding.tvPopupMessage.text = broadcast.message
         }
+
+        dialogBinding.tvPopupForceNotice.visibility = if (isForceUpdate) View.VISIBLE else View.GONE
 
         if (hasImage) {
             dialogBinding.cardPopupImageWrapper.visibility = View.VISIBLE
@@ -882,21 +899,37 @@ class MainActivity : AppCompatActivity() {
             dialogBinding.tvPopupImageLinkBadge.visibility = View.GONE
         }
 
-        dialogBinding.btnPopupAction.visibility = if (hasAction || !broadcast.isCancelable) View.VISIBLE else View.GONE
-        dialogBinding.btnPopupAction.text = broadcast.buttonText.ifBlank { getString(R.string.custom_tab_open_link) }
-        dialogBinding.btnPopupClose.visibility = if (broadcast.isCancelable) View.VISIBLE else View.GONE
+        dialogBinding.btnPopupAction.visibility = if (hasAction || isForceUpdate) View.VISIBLE else View.GONE
+        dialogBinding.btnPopupAction.text = broadcast.buttonText.ifBlank {
+            getString(if (isUpdate) R.string.popup_default_update_cta else R.string.popup_default_ad_cta)
+        }
+        dialogBinding.btnPopupAction.backgroundTintList = android.content.res.ColorStateList.valueOf(
+            android.graphics.Color.parseColor(if (isUpdate) "#10B981" else "#2563EB")
+        )
+        dialogBinding.btnPopupCloseIcon.visibility = if (canDismiss) View.VISIBLE else View.GONE
+        dialogBinding.btnPopupClose.visibility = if (canDismiss) View.VISIBLE else View.GONE
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setView(dialogBinding.root)
-            .setCancelable(broadcast.isCancelable)
+            .setCancelable(canDismiss)
             .create()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        dialog.setCanceledOnTouchOutside(canDismiss)
+
+        val markSeenAndDismiss: () -> Unit = {
+            if (canDismiss) {
+                prefs.markPopupIdSeen(popupId)
+                dialog.dismiss()
+            }
+        }
 
         val handleOpenLink: () -> Unit = {
             if (hasAction) {
                 openSafeExternalUrl(broadcast.actionUrl)
             }
-            if (broadcast.isCancelable) {
-                prefs.markPopupDismissed(popupId)
+            // Strict one-time delivery: mark seen on CTA click unless Force Update is enabled
+            if (canDismiss) {
+                prefs.markPopupIdSeen(popupId)
                 dialog.dismiss()
             }
         }
@@ -906,12 +939,14 @@ class MainActivity : AppCompatActivity() {
             dialogBinding.ivPopupImage.setOnClickListener { handleOpenLink() }
         }
 
-        dialogBinding.btnPopupClose.setOnClickListener {
-            prefs.markPopupDismissed(popupId)
-            dialog.dismiss()
-        }
-        dialogBinding.btnPopupAction.setOnClickListener {
-            handleOpenLink()
+        dialogBinding.btnPopupCloseIcon.setOnClickListener { markSeenAndDismiss() }
+        dialogBinding.btnPopupClose.setOnClickListener { markSeenAndDismiss() }
+        dialogBinding.btnPopupAction.setOnClickListener { handleOpenLink() }
+
+        dialog.setOnCancelListener {
+            if (canDismiss) {
+                prefs.markPopupIdSeen(popupId)
+            }
         }
         dialog.setOnDismissListener {
             if (activeBroadcastDialog == dialog) {
@@ -923,6 +958,61 @@ class MainActivity : AppCompatActivity() {
         activeBroadcastPopupId = popupId
         activeBroadcastDialog = dialog
         dialog.show()
+
+        // Smooth scale-in + fade-in glassmorphic entrance animation
+        dialogBinding.cardPopupGlass.apply {
+            alpha = 0f
+            scaleX = 0.88f
+            scaleY = 0.88f
+            animate()
+                .alpha(1f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(280L)
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.08f))
+                .start()
+        }
+    }
+
+    /**
+     * Immediately invalidates local session, clears local user storage, signs out Firebase/Google,
+     * redirects to the Login/Onboarding screen, and informs the user that the Admin removed their account.
+     */
+    internal fun handleAccountRemovedByAdmin() {
+        lastSyncedUid = null
+        com.example.billing.SubscriptionEnforcementService.stopMonitoring()
+        RealtimeSyncManager.stop()
+        runCatching { activeBroadcastDialog?.dismiss() }
+        activeBroadcastDialog = null
+        activeBroadcastPopupId = null
+        runCatching { activeTrialExpiredDialog?.dismiss() }
+        activeTrialExpiredDialog = null
+        (supportFragmentManager.findFragmentByTag(CustomAdPopupDialog.TAG) as? CustomAdPopupDialog)
+            ?.dismissAllowingStateLoss()
+        (supportFragmentManager.findFragmentByTag(DialpadBottomSheetFragment.TAG)
+            as? DialpadBottomSheetFragment)?.dismissAllowingStateLoss()
+        lastTriggeredAppOpenAdKey = null
+        attemptedSilentSignIn = true
+        trialDialogShownThisSession = false
+        hiddenAdminTapDetector.onOtherTabSelected()
+        prefs.clearSessionForAdminRemoval()
+        com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
+
+        val message = getString(R.string.realtime_account_deleted_toast)
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+
+        GoogleAuthHelper.signOut(
+            context = this,
+            credentialManager = credentialManager,
+            scope = lifecycleScope,
+            onSignOutComplete = {
+                lastRenderedAuthState = null
+                renderAuthState(false)
+                if (!isFinishing && !isDestroyed) {
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                }
+            }
+        )
     }
 
     private fun openSafeExternalUrl(rawUrl: String) {
@@ -1277,6 +1367,7 @@ class MainActivity : AppCompatActivity() {
         if (trigger == CustomPopupAd.TRIGGER_ON_APP_OPEN) {
             val campaignKey = ad.effectiveCampaignKey()
             if (campaignKey == lastTriggeredAppOpenAdKey) return
+            if (prefs.hasSeenPopupId(campaignKey)) return
             if (existing != null) return
             lastTriggeredAppOpenAdKey = campaignKey
         } else if (existing != null) {

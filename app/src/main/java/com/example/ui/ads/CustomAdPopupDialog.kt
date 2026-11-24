@@ -119,6 +119,7 @@ class CustomAdPopupDialog : DialogFragment() {
 
         binding.btnAdCloseBadge.setOnClickListener {
             if (remainingSeconds <= 0) {
+                markCampaignSeen()
                 dismissAllowingStateLoss()
             }
         }
@@ -129,6 +130,20 @@ class CustomAdPopupDialog : DialogFragment() {
         if (!impressionRecorded) {
             impressionRecorded = true
             RealtimeDatabaseSync.incrementCustomPopupAdImpression(requireContext())
+        }
+
+        // Smooth scale-in + fade-in entrance animation matching the dark smoked-sapphire theme
+        binding.cardAdContainer.apply {
+            alpha = 0f
+            scaleX = 0.88f
+            scaleY = 0.88f
+            animate()
+                .alpha(1f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(280L)
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.08f))
+                .start()
         }
     }
 
@@ -180,9 +195,18 @@ class CustomAdPopupDialog : DialogFragment() {
         }
     }
 
+    private fun markCampaignSeen() {
+        val ctx = context ?: return
+        val key = adCampaign.effectiveCampaignKey()
+        if (key.isNotBlank()) {
+            com.example.data.DialerPreferences(ctx).markPopupIdSeen(key)
+        }
+    }
+
     private fun handleAdActionClick() {
         val ctx = context ?: return
         RealtimeDatabaseSync.incrementCustomPopupAdClick(ctx)
+        markCampaignSeen()
 
         val normalizedUrl = CustomPopupAd.normalizeTargetUrl(adCampaign.targetUrl)
         if (normalizedUrl.isNotEmpty()) {
