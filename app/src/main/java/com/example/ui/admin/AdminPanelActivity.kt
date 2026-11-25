@@ -998,112 +998,11 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun showBroadcastPreviewDialog(broadcast: LiveBroadcast) {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_live_broadcast, null)
-        val glassCard = dialogView.findViewById<View>(R.id.card_popup_glass)
-        val tvTypeBadge = dialogView.findViewById<TextView>(R.id.tv_popup_type_badge)
-        val tvVersionPill = dialogView.findViewById<TextView>(R.id.tv_popup_version_pill)
-        val btnCloseIcon = dialogView.findViewById<TextView>(R.id.btn_popup_close_icon)
-        val cardImageWrapper = dialogView.findViewById<View>(R.id.card_popup_image_wrapper)
-        val ivImage = dialogView.findViewById<android.widget.ImageView>(R.id.iv_popup_image)
-        val tvImageLinkBadge = dialogView.findViewById<TextView>(R.id.tv_popup_image_link_badge)
-        val tvTitle = dialogView.findViewById<TextView>(R.id.tv_popup_title)
-        val tvMessage = dialogView.findViewById<TextView>(R.id.tv_popup_message)
-        val tvForceNotice = dialogView.findViewById<TextView>(R.id.tv_popup_force_notice)
-        val btnAction = dialogView.findViewById<MaterialButton>(R.id.btn_popup_action)
-        val btnDismiss = dialogView.findViewById<MaterialButton>(R.id.btn_popup_close)
-
-        val isUpdate = broadcast.isUpdatePopup()
-        val isForce = broadcast.isForceUpdateActive()
-
-        tvTypeBadge.text = getString(
-            if (isUpdate) R.string.popup_badge_app_update else R.string.popup_badge_custom_ad
+        com.example.ui.popup.SmokedSapphirePopupDialogFragment.showIfNotAlreadyVisible(
+            fragmentManager = supportFragmentManager,
+            broadcast = broadcast,
+            isPreview = true
         )
-        tvTypeBadge.setBackgroundResource(
-            if (isUpdate) R.drawable.bg_sapphire_badge_update else R.drawable.bg_sapphire_badge_ad
-        )
-        tvTypeBadge.setTextColor(
-            android.graphics.Color.parseColor(if (isUpdate) "#6EE7B7" else "#FDE68A")
-        )
-
-        if (isUpdate && broadcast.version.isNotBlank()) {
-            tvVersionPill.visibility = View.VISIBLE
-            tvVersionPill.text = broadcast.version.trim()
-        } else {
-            tvVersionPill.visibility = View.GONE
-        }
-
-        val cleanTitle = broadcast.title.trim()
-        val cleanMessage = broadcast.message.trim()
-        tvTitle.text = cleanTitle
-        tvTitle.visibility = if (cleanTitle.isNotEmpty()) View.VISIBLE else View.GONE
-        tvMessage.text = cleanMessage
-        tvMessage.visibility = if (cleanMessage.isNotEmpty()) View.VISIBLE else View.GONE
-        tvForceNotice.visibility = if (isForce) View.VISIBLE else View.GONE
-
-        btnAction.text = broadcast.buttonText.ifBlank {
-            getString(if (isUpdate) R.string.popup_default_update_cta else R.string.popup_default_ad_cta)
-        }
-        btnAction.backgroundTintList = android.content.res.ColorStateList.valueOf(
-            android.graphics.Color.parseColor(if (isUpdate) "#10B981" else "#2563EB")
-        )
-
-        // In admin preview, allow tapping outside to exit preview even when previewing Force Update
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .setCancelable(true)
-            .create()
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-
-        val hasActionUrl = broadcast.actionUrl.isNotBlank()
-        val openActionUrl = {
-            if (hasActionUrl) {
-                runCatching {
-                    val raw = broadcast.actionUrl.trim()
-                    val normalized = if (raw.startsWith("http://", true) || raw.startsWith("https://", true)) {
-                        raw
-                    } else {
-                        "https://$raw"
-                    }
-                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(normalized)))
-                }
-            }
-            dialog.dismiss()
-        }
-
-        if (broadcast.imageUrl.isNotBlank()) {
-            cardImageWrapper?.visibility = View.VISIBLE
-            tvImageLinkBadge?.visibility = if (hasActionUrl) View.VISIBLE else View.GONE
-            ivImage.load(broadcast.imageUrl) {
-                crossfade(true)
-            }
-            if (hasActionUrl) {
-                cardImageWrapper?.setOnClickListener { openActionUrl() }
-                ivImage.setOnClickListener { openActionUrl() }
-            }
-        } else {
-            cardImageWrapper?.visibility = View.GONE
-            tvImageLinkBadge?.visibility = View.GONE
-        }
-
-        btnAction.setOnClickListener { openActionUrl() }
-        btnCloseIcon.visibility = if (isForce) View.GONE else View.VISIBLE
-        btnDismiss.visibility = if (isForce) View.GONE else View.VISIBLE
-        btnCloseIcon.setOnClickListener { dialog.dismiss() }
-        btnDismiss.setOnClickListener { dialog.dismiss() }
-
-        dialog.show()
-        glassCard?.apply {
-            alpha = 0f
-            scaleX = 0.88f
-            scaleY = 0.88f
-            animate()
-                .alpha(1f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setDuration(280L)
-                .setInterpolator(android.view.animation.OvershootInterpolator(1.08f))
-                .start()
-        }
     }
 
     private fun selectedPopupAdTriggerMode(): String {

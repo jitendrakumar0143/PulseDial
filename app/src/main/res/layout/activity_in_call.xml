@@ -13,16 +13,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- 2. Compact 76dp Minimized Floating 3D Top Bar (shown smoothly when Minimized) -->
-    <com.example.ui.incall.Floating3DCallPillView
-        android:id="@+id/floating_3d_call_pill"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|center_horizontal"
-        android:elevation="24dp"
-        android:visibility="gone" />
-
-    <!-- 3. Full-Screen Smoked-Sapphire 3D Call Interface -->
+    <!-- 2. Full-Screen Smoked-Sapphire 3D Call Interface -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/full_screen_call_container"
         android:layout_width="match_parent"
@@ -1905,6 +1896,18 @@
             </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
     </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- 3. Dedicated High-Z Non-Clipping Overlay Layer for Compact 76dp 3D Incoming & Minimized Call Popup -->
+    <com.example.ui.incall.Floating3DCallPillView
+        android:id="@+id/floating_3d_call_pill"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:elevation="28dp"
+        android:translationZ="6dp"
+        android:visibility="gone" />
 
     <!-- 4. Proximity Ear-Lock Blackout & Touch-Blocking Overlay (shown automatically when held to ear during active call) -->
     <FrameLayout

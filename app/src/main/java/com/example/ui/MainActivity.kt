@@ -48,7 +48,6 @@ import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.RealtimeSyncEvent
 import com.example.data.firebase.RealtimeSyncManager
 import com.example.databinding.ActivityMainBinding
-import com.example.databinding.DialogLiveBroadcastBinding
 import com.example.ui.account.AccountFragment
 import com.example.ui.admin.AdminPanelActivity
 import com.example.ui.admin.HiddenAdminTapDetector
@@ -62,6 +61,7 @@ import com.example.telecom.CallUiState
 import com.example.ui.history.HistoryFragment
 import com.example.ui.incall.Floating3DCallPillView
 import com.example.ui.incall.InCallActivity
+import com.example.ui.popup.SmokedSapphirePopupDialogFragment
 import com.example.ui.settings.SettingsFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.firebase.Firebase
@@ -92,7 +92,6 @@ class MainActivity : AppCompatActivity() {
 
     private var visibleTabsSignature: String = ""
     private val menuIdToTabConfig = linkedMapOf<Int, NavigationTabItem>()
-    private var activeBroadcastDialog: AlertDialog? = null
     private var activeBroadcastPopupId: String? = null
     private var activeTrialExpiredDialog: AlertDialog? = null
     private var bannerDismissedTextKey: String? = null
@@ -351,8 +350,8 @@ class MainActivity : AppCompatActivity() {
         if (::binding.isInitialized) {
             binding.floating3dCallPill.hideImmediately()
         }
-        runCatching { activeBroadcastDialog?.dismiss() }
-        activeBroadcastDialog = null
+        runCatching { SmokedSapphirePopupDialogFragment.dismissIfShowing(supportFragmentManager) }
+        activeBroadcastPopupId = null
         runCatching { activeTrialExpiredDialog?.dismiss() }
         activeTrialExpiredDialog = null
         super.onDestroy()
@@ -487,8 +486,8 @@ class MainActivity : AppCompatActivity() {
             lastSyncedUid = null
             com.example.billing.SubscriptionEnforcementService.stopMonitoring()
             RealtimeSyncManager.stop()
-            runCatching { activeBroadcastDialog?.dismiss() }
-            activeBroadcastDialog = null
+            runCatching { SmokedSapphirePopupDialogFragment.dismissIfShowing(supportFragmentManager) }
+            activeBroadcastPopupId = null
             runCatching { activeTrialExpiredDialog?.dismiss() }
             activeTrialExpiredDialog = null
             binding.blockedOverlayContainer.visibility = View.GONE
@@ -824,10 +823,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (!broadcast.showPopup) {
-            if (activeBroadcastDialog?.isShowing == true) {
-                activeBroadcastDialog?.dismiss()
-            }
-            activeBroadcastDialog = null
+            SmokedSapphirePopupDialogFragment.dismissIfShowing(supportFragmentManager)
             activeBroadcastPopupId = null
             return
         }
@@ -836,7 +832,7 @@ class MainActivity : AppCompatActivity() {
         if (!broadcast.shouldShowToUser(prefs.getSeenPopupIds())) {
             return
         }
-        if (activeBroadcastDialog?.isShowing == true && activeBroadcastPopupId == popupId) {
+        if (SmokedSapphirePopupDialogFragment.isShowingPopup(supportFragmentManager, popupId)) {
             return
         }
 
@@ -845,132 +841,18 @@ class MainActivity : AppCompatActivity() {
 
     internal fun showLiveBroadcastDialog(broadcast: LiveBroadcast, popupId: String) {
         if (isFinishing || isDestroyed) return
-        activeBroadcastDialog?.dismiss()
-
-        val dialogBinding = DialogLiveBroadcastBinding.inflate(layoutInflater)
-        val isUpdate = broadcast.isUpdatePopup()
-        val isForceUpdate = broadcast.isForceUpdateActive()
-        val canDismiss = !isForceUpdate
-        val hasImage = broadcast.imageUrl.isNotBlank()
-        val hasAction = broadcast.actionUrl.isNotBlank()
-
-        // Badge + Version Pill styling
-        dialogBinding.tvPopupTypeBadge.text = getString(
-            if (isUpdate) R.string.popup_badge_app_update else R.string.popup_badge_custom_ad
-        )
-        dialogBinding.tvPopupTypeBadge.setBackgroundResource(
-            if (isUpdate) R.drawable.bg_sapphire_badge_update else R.drawable.bg_sapphire_badge_ad
-        )
-        dialogBinding.tvPopupTypeBadge.setTextColor(
-            android.graphics.Color.parseColor(if (isUpdate) "#6EE7B7" else "#FDE68A")
-        )
-
-        if (isUpdate && broadcast.version.isNotBlank()) {
-            dialogBinding.tvPopupVersionPill.visibility = View.VISIBLE
-            dialogBinding.tvPopupVersionPill.text = broadcast.version.trim()
+        val payload = if (broadcast.popupId.isBlank()) {
+            broadcast.copy(popupId = popupId)
         } else {
-            dialogBinding.tvPopupVersionPill.visibility = View.GONE
+            broadcast
         }
-
-        if (broadcast.title.isBlank() && hasImage) {
-            dialogBinding.tvPopupTitle.visibility = View.GONE
-        } else {
-            dialogBinding.tvPopupTitle.visibility = View.VISIBLE
-            dialogBinding.tvPopupTitle.text = broadcast.title.ifBlank {
-                getString(if (isUpdate) R.string.popup_badge_app_update else R.string.custom_tab_default_title)
-            }
-        }
-
-        if (broadcast.message.isBlank()) {
-            dialogBinding.tvPopupMessage.visibility = View.GONE
-        } else {
-            dialogBinding.tvPopupMessage.visibility = View.VISIBLE
-            dialogBinding.tvPopupMessage.text = broadcast.message
-        }
-
-        dialogBinding.tvPopupForceNotice.visibility = if (isForceUpdate) View.VISIBLE else View.GONE
-
-        if (hasImage) {
-            dialogBinding.cardPopupImageWrapper.visibility = View.VISIBLE
-            dialogBinding.ivPopupImage.load(broadcast.imageUrl) { crossfade(true) }
-            dialogBinding.tvPopupImageLinkBadge.visibility = if (hasAction) View.VISIBLE else View.GONE
-        } else {
-            dialogBinding.cardPopupImageWrapper.visibility = View.GONE
-            dialogBinding.tvPopupImageLinkBadge.visibility = View.GONE
-        }
-
-        dialogBinding.btnPopupAction.visibility = if (hasAction || isForceUpdate) View.VISIBLE else View.GONE
-        dialogBinding.btnPopupAction.text = broadcast.buttonText.ifBlank {
-            getString(if (isUpdate) R.string.popup_default_update_cta else R.string.popup_default_ad_cta)
-        }
-        dialogBinding.btnPopupAction.backgroundTintList = android.content.res.ColorStateList.valueOf(
-            android.graphics.Color.parseColor(if (isUpdate) "#10B981" else "#2563EB")
+        val shown = SmokedSapphirePopupDialogFragment.showIfNotAlreadyVisible(
+            fragmentManager = supportFragmentManager,
+            broadcast = payload,
+            isPreview = false
         )
-        dialogBinding.btnPopupCloseIcon.visibility = if (canDismiss) View.VISIBLE else View.GONE
-        dialogBinding.btnPopupClose.visibility = if (canDismiss) View.VISIBLE else View.GONE
-
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogBinding.root)
-            .setCancelable(canDismiss)
-            .create()
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-        dialog.setCanceledOnTouchOutside(canDismiss)
-
-        val markSeenAndDismiss: () -> Unit = {
-            if (canDismiss) {
-                prefs.markPopupIdSeen(popupId)
-                dialog.dismiss()
-            }
-        }
-
-        val handleOpenLink: () -> Unit = {
-            if (hasAction) {
-                openSafeExternalUrl(broadcast.actionUrl)
-            }
-            // Strict one-time delivery: mark seen on CTA click unless Force Update is enabled
-            if (canDismiss) {
-                prefs.markPopupIdSeen(popupId)
-                dialog.dismiss()
-            }
-        }
-
-        if (hasImage && hasAction) {
-            dialogBinding.cardPopupImageWrapper.setOnClickListener { handleOpenLink() }
-            dialogBinding.ivPopupImage.setOnClickListener { handleOpenLink() }
-        }
-
-        dialogBinding.btnPopupCloseIcon.setOnClickListener { markSeenAndDismiss() }
-        dialogBinding.btnPopupClose.setOnClickListener { markSeenAndDismiss() }
-        dialogBinding.btnPopupAction.setOnClickListener { handleOpenLink() }
-
-        dialog.setOnCancelListener {
-            if (canDismiss) {
-                prefs.markPopupIdSeen(popupId)
-            }
-        }
-        dialog.setOnDismissListener {
-            if (activeBroadcastDialog == dialog) {
-                activeBroadcastDialog = null
-                activeBroadcastPopupId = null
-            }
-        }
-
-        activeBroadcastPopupId = popupId
-        activeBroadcastDialog = dialog
-        dialog.show()
-
-        // Smooth scale-in + fade-in glassmorphic entrance animation
-        dialogBinding.cardPopupGlass.apply {
-            alpha = 0f
-            scaleX = 0.88f
-            scaleY = 0.88f
-            animate()
-                .alpha(1f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setDuration(280L)
-                .setInterpolator(android.view.animation.OvershootInterpolator(1.08f))
-                .start()
+        if (shown != null) {
+            activeBroadcastPopupId = popupId
         }
     }
 
@@ -982,8 +864,7 @@ class MainActivity : AppCompatActivity() {
         lastSyncedUid = null
         com.example.billing.SubscriptionEnforcementService.stopMonitoring()
         RealtimeSyncManager.stop()
-        runCatching { activeBroadcastDialog?.dismiss() }
-        activeBroadcastDialog = null
+        runCatching { SmokedSapphirePopupDialogFragment.dismissIfShowing(supportFragmentManager) }
         activeBroadcastPopupId = null
         runCatching { activeTrialExpiredDialog?.dismiss() }
         activeTrialExpiredDialog = null
@@ -1034,8 +915,8 @@ class MainActivity : AppCompatActivity() {
         lastSyncedUid = null
         com.example.billing.SubscriptionEnforcementService.stopMonitoring()
         RealtimeSyncManager.stop()
-        activeBroadcastDialog?.dismiss()
-        activeBroadcastDialog = null
+        runCatching { SmokedSapphirePopupDialogFragment.dismissIfShowing(supportFragmentManager) }
+        activeBroadcastPopupId = null
         (supportFragmentManager.findFragmentByTag(CustomAdPopupDialog.TAG) as? CustomAdPopupDialog)
             ?.dismissAllowingStateLoss()
         lastTriggeredAppOpenAdKey = null

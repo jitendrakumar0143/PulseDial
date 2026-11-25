@@ -29,6 +29,7 @@ import android.view.MotionEvent
 import android.view.SoundEffectConstants
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.view.animation.PathInterpolator
@@ -201,18 +202,6 @@ class Floating3DCallPillView @JvmOverloads constructor(
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
     }
-    private val capsuleAvatarFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-    private val capsuleAvatarStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f * density
-    }
-    private val capsuleInitialsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-    }
 
     // Subviews inside the pill
     private val incomingStageContainer: FrameLayout
@@ -254,6 +243,9 @@ class Floating3DCallPillView @JvmOverloads constructor(
         setWillNotDraw(false)
         clipChildren = false
         clipToPadding = false
+        outlineProvider = null
+        elevation = OVERLAY_ELEVATION_DP * density
+        translationZ = OVERLAY_TRANSLATION_Z_DP * density
         visibility = View.GONE
 
         // 3D perspective: equivalent to CSS perspective: 1000px
@@ -464,8 +456,27 @@ class Floating3DCallPillView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        ensureHighZOverlayLayer()
         if (currentMode != PillMode.HIDDEN) {
             startAmbientLoop()
+        }
+    }
+
+    /**
+     * Prevents rendering/clipping conflicts with host Activity layouts (AppBarLayout, FAB,
+     * BottomNavigationView, or Full-Screen Call containers) by guaranteeing non-clipping parent
+     * bounds and a dedicated high-Z overlay elevation (total Z = 34dp, cleanly above standard
+     * UI and blocked overlays while staying beneath the 40dp ear-proximity blackout).
+     */
+    private fun ensureHighZOverlayLayer() {
+        clipChildren = false
+        clipToPadding = false
+        outlineProvider = null
+        elevation = OVERLAY_ELEVATION_DP * density
+        translationZ = OVERLAY_TRANSLATION_Z_DP * density
+        (parent as? ViewGroup)?.let { host ->
+            if (host.clipChildren) host.clipChildren = false
+            if (host.clipToPadding) host.clipToPadding = false
         }
     }
 
@@ -555,6 +566,7 @@ class Floating3DCallPillView @JvmOverloads constructor(
         cancelAllAnimations()
         removeCallbacks(clearNudgeRunnable)
         resetDragVisualsImmediate()
+        ensureHighZOverlayLayer()
 
         visibility = View.VISIBLE
         incomingStageContainer.visibility = View.VISIBLE
@@ -679,6 +691,7 @@ class Floating3DCallPillView @JvmOverloads constructor(
         resetDragVisualsImmediate()
 
         currentMode = PillMode.ACTIVE_CALL
+        ensureHighZOverlayLayer()
         visibility = View.VISIBLE
         unfoldProgress = 1f
         seamGlintProgress = 0f
@@ -1633,6 +1646,8 @@ class Floating3DCallPillView @JvmOverloads constructor(
         const val DISMISS_COLLAPSE_MS = 340L
         const val DISMISS_RETRACT_MS = 280L
         const val DRAG_TRIGGER_THRESHOLD = 0.55f
+        const val OVERLAY_ELEVATION_DP = 28f
+        const val OVERLAY_TRANSLATION_Z_DP = 6f
         private const val SHADOW_PADDING_VERTICAL_DP = 10f
 
         private val COLOR_SMOKED_SAPPHIRE = Color.argb(200, 15, 18, 28) // rgba(15, 18, 28, 0.78)

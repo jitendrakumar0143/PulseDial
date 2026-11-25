@@ -6,6 +6,8 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/md_theme_background"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     tools:context=".ui.MainActivity">
 
     <com.google.android.material.appbar.AppBarLayout
@@ -270,15 +272,6 @@
         app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav_menu" />
 
-    <!-- Ultra-Premium 3D Floating Dynamic Island Incoming & Active Call Popup -->
-    <com.example.ui.incall.Floating3DCallPillView
-        android:id="@+id/floating_3d_call_pill"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|center_horizontal"
-        android:elevation="20dp"
-        android:visibility="gone" />
-
     <!-- Full-Screen "Account Blocked by Admin" Real-Time Overlay -->
     <FrameLayout
         android:id="@+id/blocked_overlay_container"
@@ -360,5 +353,17 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
     </FrameLayout>
+
+    <!-- Dedicated High-Z Non-Clipping Overlay Layer for 3D Floating Dynamic Island Incoming & Active Call Popup -->
+    <com.example.ui.incall.Floating3DCallPillView
+        android:id="@+id/floating_3d_call_pill"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:elevation="28dp"
+        android:translationZ="6dp"
+        android:visibility="gone" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

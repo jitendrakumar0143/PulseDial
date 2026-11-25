@@ -621,31 +621,6 @@ class DialerPreferences(context: Context) {
         refreshIntegritySeal()
     }
 
-    /**
-     * Full local session cleanup executed immediately when the user's account is permanently
-     * deleted by an Admin from the server.
-     */
-    fun clearSessionForAdminRemoval() {
-        prefs.edit {
-            putBoolean(KEY_IS_LOGGED_IN, false)
-            remove(KEY_LOGGED_IN_USER_ID)
-            putBoolean(KEY_IS_PREMIUM_USER, false)
-            putLong(KEY_SUBSCRIPTION_EXPIRES_AT_MS, 0L)
-            putBoolean(KEY_ADMIN_BLOCKED_USER, false)
-            putBoolean(KEY_HIDE_SUBSCRIPTION_UI, false)
-            putInt(KEY_ADMIN_BONUS_TRIAL_DAYS, 0)
-            putBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
-            putString(KEY_DELEGATED_ADMIN_GRANTED_BY, "")
-            putBoolean(KEY_TAMPER_DETECTED, false)
-            putBoolean(KEY_INITIAL_DEVICE_REGISTERED_RTDB, false)
-            putBoolean(KEY_TRIAL_BLOCKED_BY_DEVICE, false)
-            remove(KEY_USER_EMAIL)
-            remove(KEY_USER_NAME)
-            remove(KEY_USER_NUMBER)
-        }
-        refreshIntegritySeal()
-    }
-
     val delegatedAdminAuthorized: Boolean
         get() = prefs.getBoolean(KEY_DELEGATED_ADMIN_AUTHORIZED, false)
 
