@@ -18,8 +18,11 @@ data class CustomPopupAd(
     val targetUrl: String = "",
     val countdownSeconds: Int = DEFAULT_COUNTDOWN_SECONDS,
     val impressionsCount: Long = 0L,
-    val clicksCount: Long = 0L
+    val clicksCount: Long = 0L,
+    val popupSize: String = SIZE_MEDIUM
 ) : Serializable {
+
+    fun normalizedPopupSize(): String = normalizedPopupSize(popupSize)
 
     fun matchesTrigger(trigger: String): Boolean {
         val mode = normalizedTriggerMode(triggerMode)
@@ -38,7 +41,8 @@ data class CustomPopupAd(
     }
 
     fun effectiveCampaignKey(): String {
-        return adId.ifBlank { "${title.trim()}|${message.trim()}|${targetUrl.trim()}" }
+        val cleanImageKey = if (imageUrl.length > 120) "img_${imageUrl.hashCode()}" else imageUrl.trim()
+        return adId.ifBlank { "${title.trim()}|${message.trim()}|${targetUrl.trim()}|$cleanImageKey" }
     }
 
     fun toBundle(): Bundle = Bundle().apply {
@@ -54,6 +58,7 @@ data class CustomPopupAd(
         putInt(KEY_COUNTDOWN_SECONDS, countdownSeconds.coerceIn(0, MAX_COUNTDOWN_SECONDS))
         putLong(KEY_IMPRESSIONS_COUNT, impressionsCount)
         putLong(KEY_CLICKS_COUNT, clicksCount)
+        putString(KEY_POPUP_SIZE, normalizedPopupSize(popupSize))
     }
 
     companion object {
@@ -62,6 +67,11 @@ data class CustomPopupAd(
         const val TRIGGER_ON_APP_OPEN = "ON_APP_OPEN"
         const val TRIGGER_AFTER_CALL_END = "AFTER_CALL_END"
         const val TRIGGER_BOTH = "BOTH"
+
+        const val SIZE_SMALL = "small"
+        const val SIZE_MEDIUM = "medium"
+        const val SIZE_LARGE = "large"
+        const val SIZE_FULLSCREEN = "fullscreen"
 
         const val DEFAULT_BUTTON_TEXT = "Open"
         const val DEFAULT_COUNTDOWN_SECONDS = 5
@@ -79,6 +89,7 @@ data class CustomPopupAd(
         private const val KEY_COUNTDOWN_SECONDS = "countdownSeconds"
         private const val KEY_IMPRESSIONS_COUNT = "impressionsCount"
         private const val KEY_CLICKS_COUNT = "clicksCount"
+        private const val KEY_POPUP_SIZE = "popupSize"
 
         fun normalizedTriggerMode(raw: String?): String {
             return when (raw?.trim()?.uppercase()) {
@@ -86,6 +97,16 @@ data class CustomPopupAd(
                 TRIGGER_AFTER_CALL_END -> TRIGGER_AFTER_CALL_END
                 TRIGGER_BOTH -> TRIGGER_BOTH
                 else -> TRIGGER_BOTH
+            }
+        }
+
+        fun normalizedPopupSize(raw: String?): String {
+            return when (raw?.trim()?.lowercase()) {
+                SIZE_SMALL -> SIZE_SMALL
+                SIZE_MEDIUM -> SIZE_MEDIUM
+                SIZE_LARGE -> SIZE_LARGE
+                SIZE_FULLSCREEN -> SIZE_FULLSCREEN
+                else -> SIZE_MEDIUM
             }
         }
 
@@ -117,7 +138,8 @@ data class CustomPopupAd(
                 countdownSeconds = bundle.getInt(KEY_COUNTDOWN_SECONDS, DEFAULT_COUNTDOWN_SECONDS)
                     .coerceIn(0, MAX_COUNTDOWN_SECONDS),
                 impressionsCount = bundle.getLong(KEY_IMPRESSIONS_COUNT, 0L),
-                clicksCount = bundle.getLong(KEY_CLICKS_COUNT, 0L)
+                clicksCount = bundle.getLong(KEY_CLICKS_COUNT, 0L),
+                popupSize = normalizedPopupSize(bundle.getString(KEY_POPUP_SIZE))
             )
         }
     }

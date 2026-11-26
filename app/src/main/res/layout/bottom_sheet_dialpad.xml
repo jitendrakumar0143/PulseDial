@@ -5,16 +5,16 @@
     android:layout_height="wrap_content"
     android:background="@drawable/bg_bottom_sheet_surface"
     android:orientation="vertical"
-    android:paddingHorizontal="20dp"
-    android:paddingTop="12dp"
-    android:paddingBottom="24dp">
+    android:paddingHorizontal="16dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="18dp">
 
     <!-- Minimalist M3 Drag Handle -->
     <View
-        android:layout_width="36dp"
+        android:layout_width="34dp"
         android:layout_height="4dp"
         android:layout_gravity="center_horizontal"
-        android:layout_marginBottom="12dp"
+        android:layout_marginBottom="8dp"
         android:background="@drawable/bg_bottom_sheet_handle" />
 
     <!-- Live T9 Contact & History Suggestions -->
@@ -94,9 +94,9 @@
         android:id="@+id/card_dialpad_display"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="14dp"
+        android:layout_marginBottom="10dp"
         app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-        app:cardCornerRadius="24dp"
+        app:cardCornerRadius="18dp"
         app:cardElevation="0dp"
         app:strokeColor="@color/md_theme_surfaceVariant"
         app:strokeWidth="1dp">
@@ -105,16 +105,16 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingVertical="4dp">
+            android:paddingVertical="2dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
-                android:minHeight="52dp"
+                android:minHeight="46dp"
                 android:orientation="horizontal"
-                android:paddingStart="16dp"
-                android:paddingEnd="6dp">
+                android:paddingStart="14dp"
+                android:paddingEnd="4dp">
 
                 <EditText
                     android:id="@+id/et_dialpad_input"
@@ -174,14 +174,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_1"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="1"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -198,7 +198,7 @@
                     android:layout_height="wrap_content"
                     android:text="1"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -215,14 +215,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_2"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="2 ABC"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -239,7 +239,7 @@
                     android:layout_height="wrap_content"
                     android:text="2"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -256,14 +256,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_3"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="3 DEF"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -280,7 +280,7 @@
                     android:layout_height="wrap_content"
                     android:text="3"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -297,14 +297,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_4"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="4 GHI"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -321,7 +321,7 @@
                     android:layout_height="wrap_content"
                     android:text="4"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -338,14 +338,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_5"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="5 JKL"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -362,7 +362,7 @@
                     android:layout_height="wrap_content"
                     android:text="5"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -379,14 +379,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_6"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="6 MNO"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -403,7 +403,7 @@
                     android:layout_height="wrap_content"
                     android:text="6"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -420,14 +420,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_7"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="7 PQRS"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -444,7 +444,7 @@
                     android:layout_height="wrap_content"
                     android:text="7"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -461,14 +461,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_8"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="8 TUV"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -485,7 +485,7 @@
                     android:layout_height="wrap_content"
                     android:text="8"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -502,14 +502,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_9"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="9 WXYZ"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -526,7 +526,7 @@
                     android:layout_height="wrap_content"
                     android:text="9"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -543,14 +543,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_star"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="Star"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -583,14 +583,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_0"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="0 plus"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -607,7 +607,7 @@
                     android:layout_height="wrap_content"
                     android:text="0"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -624,14 +624,14 @@
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/btn_key_hash"
             android:layout_width="0dp"
-            android:layout_height="64dp"
+            android:layout_height="54dp"
             android:layout_columnWeight="1"
-            android:layout_margin="5dp"
+            android:layout_margin="4dp"
             android:clickable="true"
             android:contentDescription="Pound"
             android:focusable="true"
             app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-            app:cardCornerRadius="32dp"
+            app:cardCornerRadius="27dp"
             app:cardElevation="0dp"
             app:rippleColor="@color/md_theme_primaryContainer"
             app:strokeColor="@color/md_theme_surfaceVariant"
@@ -648,7 +648,7 @@
                     android:layout_height="wrap_content"
                     android:text="#"
                     android:textColor="@color/md_theme_onSurface"
-                    android:textSize="24sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -664,7 +664,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="14dp"
+        android:layout_marginTop="10dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
@@ -673,12 +673,12 @@
             style="@style/Widget.Material3.Chip.Assist"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="10dp"
+            android:layout_marginEnd="8dp"
             android:contentDescription="@string/dialpad_sim_chip_default"
-            android:minHeight="48dp"
+            android:minHeight="44dp"
             android:text="@string/dialpad_sim_chip_default"
             android:visibility="gone"
-            app:chipCornerRadius="24dp"
+            app:chipCornerRadius="20dp"
             app:chipIcon="@drawable/ic_sim_card"
             app:chipIconTint="@color/md_theme_primary" />
 
@@ -686,17 +686,19 @@
             android:id="@+id/btn_dialpad_call"
             style="@style/Widget.Material3.Button"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="48dp"
             android:layout_weight="1"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
             android:text="@string/action_call"
-            android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
             android:textColor="#FFFFFF"
+            android:textSize="15sp"
             android:textStyle="bold"
             app:backgroundTint="@color/call_accept_green"
-            app:cornerRadius="28dp"
+            app:cornerRadius="24dp"
             app:icon="@drawable/ic_call"
             app:iconGravity="textStart"
-            app:iconPadding="10dp"
+            app:iconPadding="8dp"
             app:iconTint="#FFFFFF" />
     </LinearLayout>
 </LinearLayout>

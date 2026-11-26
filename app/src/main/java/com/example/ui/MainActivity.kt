@@ -347,6 +347,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        RealtimeSyncManager.stopPublicWelcomeSync()
         if (::binding.isInitialized) {
             binding.floating3dCallPill.hideImmediately()
         }
@@ -371,17 +372,42 @@ class MainActivity : AppCompatActivity() {
         outState.putString(KEY_LAST_APP_OPEN_AD_KEY, lastTriggeredAppOpenAdKey)
     }
 
+    private fun renderWelcomeScreenBranding(
+        welcome: com.example.data.firebase.WelcomeScreenConfig = RealtimeSyncManager.welcomeScreenState.value
+    ) {
+        if (!::binding.isInitialized) return
+        binding.tvAuthGateTitle.text = welcome.resolveTitle(getString(R.string.auth_gate_title))
+        binding.chipAuthGateTrialBadge.text = welcome.resolveTrialBadge()
+        binding.tvAuthGateSubtitle.text = welcome.resolveSubtitle()
+        val customBtn = welcome.welcomeButtonText.trim()
+        if (customBtn.isNotEmpty()) {
+            binding.btnGoogleSignIn.text = welcome.resolveButtonText(getString(R.string.auth_gate_btn_google))
+        } else {
+            refreshAuthGateDeviceAccountButton()
+        }
+    }
+
     private fun refreshAuthGateDeviceAccountButton() {
         if (!::binding.isInitialized) return
+        val customBtn = RealtimeSyncManager.welcomeScreenState.value.welcomeButtonText.trim()
+        if (customBtn.isNotEmpty()) {
+            binding.btnGoogleSignIn.text = RealtimeSyncManager.welcomeScreenState.value
+                .resolveButtonText(getString(R.string.auth_gate_btn_google))
+            return
+        }
         lifecycleScope.launch {
             val deviceEmails = withContext(Dispatchers.IO) {
                 GoogleAuthHelper.getDeviceSignedInGoogleEmails(this@MainActivity)
             }
             if (isFinishing || isDestroyed || !::binding.isInitialized) return@launch
-            binding.btnGoogleSignIn.text = if (deviceEmails.size == 1) {
-                getString(R.string.auth_gate_btn_google_with_email, deviceEmails.first())
-            } else {
-                getString(R.string.auth_gate_btn_google)
+            val latestCustomBtn = RealtimeSyncManager.welcomeScreenState.value.welcomeButtonText.trim()
+            binding.btnGoogleSignIn.text = when {
+                latestCustomBtn.isNotEmpty() -> RealtimeSyncManager.welcomeScreenState.value
+                    .resolveButtonText(getString(R.string.auth_gate_btn_google))
+                deviceEmails.size == 1 ->
+                    getString(R.string.auth_gate_btn_google_with_email, deviceEmails.first())
+                else ->
+                    getString(R.string.auth_gate_btn_google)
             }
         }
     }
@@ -501,7 +527,8 @@ class MainActivity : AppCompatActivity() {
                 binding.fabDialpad.visibility = View.GONE
             }
             binding.topAppBar.title = getString(R.string.app_name)
-            refreshAuthGateDeviceAccountButton()
+            RealtimeSyncManager.startPublicWelcomeSync(this)
+            renderWelcomeScreenBranding()
 
             if (!attemptedSilentSignIn) {
                 attemptedSilentSignIn = true
@@ -526,6 +553,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        RealtimeSyncManager.stopPublicWelcomeSync()
         binding.authGateContainer.visibility = View.GONE
         binding.mainContentContainer.visibility = View.VISIBLE
         binding.bottomNavigation.visibility = View.VISIBLE
@@ -621,6 +649,11 @@ class MainActivity : AppCompatActivity() {
                                 refreshCurrentFragment()
                             }
                         }
+                    }
+                }
+                launch {
+                    RealtimeSyncManager.welcomeScreenState.collect { welcome ->
+                        renderWelcomeScreenBranding(welcome)
                     }
                 }
                 launch {
@@ -805,7 +838,10 @@ class MainActivity : AppCompatActivity() {
             binding.tvLiveBannerAdText.text = broadcast.bannerText.ifBlank { getString(R.string.custom_tab_default_title) }
             if (broadcast.bannerImageUrl.isNotBlank()) {
                 binding.ivLiveBannerAd.visibility = View.VISIBLE
-                binding.ivLiveBannerAd.load(broadcast.bannerImageUrl) { crossfade(true) }
+                com.example.ui.common.PopupImageHelper.loadPopupImage(
+                    binding.ivLiveBannerAd,
+                    broadcast.bannerImageUrl
+                )
             } else {
                 binding.ivLiveBannerAd.visibility = View.GONE
             }
@@ -936,7 +972,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyEdgeToEdgeInsets() {
-        val extraTopPx = (6f * resources.displayMetrics.density).toInt()
+        val density = resources.displayMetrics.density
+        val extraTopPx = (6f * density).toInt()
+        val baseNavHeightPx = (60f * density).toInt()
+        val baseFabMarginBottomPx = (74f * density).toInt()
         ViewCompat.setOnApplyWindowInsetsListener(binding.mainRoot) { _, insets ->
             val topInset = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
             val bottomInset = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
@@ -953,6 +992,20 @@ class MainActivity : AppCompatActivity() {
             }
             if (binding.bottomNavigation.paddingBottom != bottomInset) {
                 binding.bottomNavigation.updatePadding(bottom = bottomInset)
+            }
+            val targetContentBottom = baseNavHeightPx + bottomInset
+            val contentLp = binding.mainContentContainer.layoutParams as? ViewGroup.MarginLayoutParams
+            if (contentLp != null && contentLp.bottomMargin != targetContentBottom) {
+                binding.mainContentContainer.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                    bottomMargin = targetContentBottom
+                }
+            }
+            val targetFabBottom = baseFabMarginBottomPx + bottomInset
+            val fabLp = binding.fabDialpad.layoutParams as? ViewGroup.MarginLayoutParams
+            if (fabLp != null && fabLp.bottomMargin != targetFabBottom) {
+                binding.fabDialpad.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                    bottomMargin = targetFabBottom
+                }
             }
             insets
         }

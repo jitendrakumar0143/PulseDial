@@ -3,38 +3,39 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:layout_marginEnd="8dp"
+    android:layout_marginEnd="6dp"
     android:clickable="true"
     android:focusable="true"
-    android:minHeight="48dp"
+    android:minHeight="42dp"
     app:cardBackgroundColor="@color/md_theme_surfaceContainer"
-    app:cardCornerRadius="16dp"
+    app:cardCornerRadius="12dp"
     app:cardElevation="0dp"
     app:strokeColor="@color/md_theme_outline"
-    app:strokeWidth="1dp">
+    app:strokeWidth="0.75dp">
 
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="12dp"
-        android:paddingVertical="8dp">
+        android:paddingHorizontal="9dp"
+        android:paddingVertical="5dp">
 
         <TextView
             android:id="@+id/tv_t9_initial"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
             android:background="@drawable/bg_circle_avatar"
             android:gravity="center"
-            android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+            android:includeFontPadding="false"
             android:textColor="@color/md_theme_onPrimaryContainer"
+            android:textSize="12sp"
             android:textStyle="bold" />
 
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="8dp"
             android:orientation="vertical">
 
             <TextView
@@ -42,18 +43,22 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
+                android:includeFontPadding="false"
                 android:maxEms="10"
                 android:maxLines="1"
-                android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
-                android:textColor="@color/md_theme_onSurface" />
+                android:textColor="@color/md_theme_onSurface"
+                android:textSize="13sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tv_t9_number"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
+                android:includeFontPadding="false"
                 android:maxLines="1"
-                android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-                android:textColor="@color/md_theme_onSurfaceVariant" />
+                android:textColor="@color/md_theme_onSurfaceVariant"
+                android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

@@ -1,5 +1,6 @@
 package com.example.data.firebase
 
+import androidx.annotation.Keep
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
@@ -162,6 +163,10 @@ data class AppConfig(
     val enableCustomGateway: Boolean = false,
     val customGatewayName: String = "",
     val customGatewayUrl: String = "",
+    val welcomeTitle: String = "",
+    val welcomeTrialBadge: String = "",
+    val welcomeSubtitle: String = "",
+    val welcomeButtonText: String = "",
     val updatedByUid: String = "",
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -171,11 +176,79 @@ data class AppConfig(
     val adminUpiId: String
         get() = upiVpa
 
+    fun toWelcomeScreenConfig(): WelcomeScreenConfig = WelcomeScreenConfig(
+        trialDays = trialDays,
+        subscriptionPriceInr = subscriptionPriceInr,
+        welcomeTitle = welcomeTitle,
+        welcomeTrialBadge = welcomeTrialBadge,
+        welcomeSubtitle = welcomeSubtitle,
+        welcomeButtonText = welcomeButtonText,
+        updatedByUid = updatedByUid,
+        updatedAt = updatedAt
+    )
+
     companion object {
         const val DOC_GLOBAL_SETTINGS = "global_settings"
+        const val DOC_WELCOME_SCREEN = "welcome_screen"
         const val THEME_USER = "user"
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
+    }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class WelcomeScreenConfig(
+    val trialDays: Long = 7L,
+    val subscriptionPriceInr: Long = 299L,
+    val welcomeTitle: String = "",
+    val welcomeTrialBadge: String = "",
+    val welcomeSubtitle: String = "",
+    val welcomeButtonText: String = "",
+    val updatedByUid: String = "",
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun resolveTitle(defaultTitle: String): String =
+        welcomeTitle.trim().ifBlank { defaultTitle }
+
+    fun resolveTrialBadge(): String {
+        val days = trialDays.coerceIn(1L, 365L)
+        val price = subscriptionPriceInr.coerceIn(1L, 100000L)
+        val custom = welcomeTrialBadge.trim()
+        return if (custom.isNotEmpty()) {
+            interpolate(custom, days, price)
+        } else {
+            "$days-Day Free Trial • One Per Device"
+        }
+    }
+
+    fun resolveSubtitle(): String {
+        val days = trialDays.coerceIn(1L, 365L)
+        val price = subscriptionPriceInr.coerceIn(1L, 100000L)
+        val custom = welcomeSubtitle.trim()
+        return if (custom.isNotEmpty()) {
+            interpolate(custom, days, price)
+        } else {
+            "New users enjoy $days days completely free, then ₹$price/month. Sign in with the Google Account currently logged in on this mobile device to activate your trial."
+        }
+    }
+
+    fun resolveButtonText(defaultText: String): String {
+        val days = trialDays.coerceIn(1L, 365L)
+        val price = subscriptionPriceInr.coerceIn(1L, 100000L)
+        val custom = welcomeButtonText.trim()
+        return if (custom.isNotEmpty()) {
+            interpolate(custom, days, price)
+        } else {
+            defaultText
+        }
+    }
+
+    private fun interpolate(template: String, days: Long, price: Long): String {
+        return template
+            .replace("{days}", days.toString(), ignoreCase = true)
+            .replace("{trialDays}", days.toString(), ignoreCase = true)
+            .replace("{price}", price.toString(), ignoreCase = true)
     }
 }
 

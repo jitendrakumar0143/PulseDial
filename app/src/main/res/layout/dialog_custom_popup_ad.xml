@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/ad_root_frame"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@android:color/transparent"
@@ -17,6 +18,7 @@
         app:strokeWidth="1.25dp">
 
         <LinearLayout
+            android:id="@+id/layout_ad_card_content"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
@@ -100,6 +102,7 @@
             </FrameLayout>
 
             <LinearLayout
+                android:id="@+id/layout_ad_text_container"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"

@@ -1,0 +1,747 @@
+# AI Studio Update Prompt: Ultra-Premium 3D Incoming Call Popup
+
+Upgrade my existing Call App's incoming call notification to the exact ultra-premium 3D floating incoming call popup implemented in the reference code below.
+
+### Integration Instructions
+1. Keep all my existing call logic, incoming call listeners, ringtone/audio handlers, and caller data intact.
+2. Adapt the HTML/CSS/JS below to my project's framework (React / Vite / HTML / WebView) while preserving:
+   - The exact visual design (smoked-sapphire frosted glass, animated liquid-platinum conic-gradient rim, subtle emerald left wing & crimson right wing glow).
+   - The 3-stage 3D animation: **68px circular avatar orb drop** (`rotateX` + spring bounce) → **center-to-sides 76px pill unfold** with center-seam glint → **drag-ready** with pulsing directional chevrons.
+   - Smooth Pointer Event sideways drag physics: **Green (Left)** dragged **rightward** to answer, **Red (Right)** dragged **leftward** to decline, **55% threshold** with luminous glass trails + tick/haptic feedback, elastic snap-back if released early, and tap-to-nudge `"DRAG SIDEWAYS"` hint.
+   - The **Active "On Call" Bar** (avatar with emerald halo, caller name, pulsing green dot, live timer `00:00`, mini waveform, Mute, Speaker, and glossy 3D Red End Call button).
+   - The **Collapse-to-Orb Exit** animation (collapses both sides back into the 68px circular orb, then retracts upward off the top of the screen).
+3. Connect the hooks (`onAnswerCall`, `onDeclineCall`, `onEndCall`, `onToggleMute`, `onToggleSpeaker`) and dynamic `caller` data (`name`, `initials`, `subtitle`) directly to my existing Call App state.
+
+---
+
+### Complete Reference Implementation Code
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>3D Incoming Call Popup</title>
+<style>
+  :root {
+    --pill-h: 76px;
+    --orb-size: 68px;
+    --btn-size: 52px;
+    --emerald: #10b981;
+    --emerald-bright: #34d399;
+    --crimson: #ef4444;
+    --crimson-bright: #fb7185;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+
+  /* Fixed top overlay container (mount this over your Call App) */
+  .call-popup-stage {
+    position: fixed;
+    top: max(14px, env(safe-area-inset-top));
+    left: 0;
+    right: 0;
+    z-index: 99999;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    perspective: 1100px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* Liquid-platinum outer rim wrapper */
+  .call-pill-shell {
+    position: relative;
+    width: var(--orb-size);
+    height: var(--orb-size);
+    border-radius: 999px;
+    padding: 1.5px;
+    pointer-events: auto;
+    transform-style: preserve-3d;
+    transform: translateY(-140px) rotateX(38deg) scale(0.8);
+    opacity: 0;
+    will-change: transform, width, height, opacity;
+    background: conic-gradient(
+      from var(--rim-angle, 0deg),
+      rgba(255,255,255,0.12),
+      rgba(226,232,240,0.65),
+      rgba(148,163,184,0.18),
+      rgba(255,255,255,0.75),
+      rgba(148,163,184,0.15),
+      rgba(255,255,255,0.12)
+    );
+    box-shadow:
+      0 22px 48px rgba(0, 0, 0, 0.65),
+      0 6px 18px rgba(0, 0, 0, 0.45),
+      0 0 0 1px rgba(255, 255, 255, 0.06);
+    animation: spinRim 5s linear infinite;
+    transition:
+      transform 460ms cubic-bezier(0.22, 1.24, 0.36, 1),
+      opacity 260ms ease,
+      width 920ms cubic-bezier(0.22, 1, 0.36, 1),
+      height 700ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 260ms ease;
+  }
+
+  @property --rim-angle {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+  }
+  @keyframes spinRim { to { --rim-angle: 360deg; } }
+
+  /* Stage 1: Drop down as 68x68 circular RV orb */
+  .call-pill-shell.state-drop {
+    opacity: 1;
+    transform: translateY(0) rotateX(0deg) scale(1);
+  }
+
+  /* Stage 2 & 3: Expanded 76px pill */
+  .call-pill-shell.state-expanded,
+  .call-pill-shell.state-active {
+    opacity: 1;
+    width: min(94vw, 390px);
+    height: var(--pill-h);
+    transform: translateY(0) rotateX(0deg) scale(1);
+  }
+
+  /* Collapse back to orb then retract upward */
+  .call-pill-shell.state-collapse {
+    opacity: 1;
+    width: var(--orb-size);
+    height: var(--orb-size);
+    transform: translateY(0) rotateX(0deg) scale(1);
+    transition:
+      width 420ms cubic-bezier(0.4, 0, 0.2, 1),
+      height 420ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 420ms ease;
+  }
+  .call-pill-shell.state-retract {
+    opacity: 0;
+    width: var(--orb-size);
+    height: var(--orb-size);
+    transform: translateY(-140px) rotateX(34deg) scale(0.8);
+    transition: transform 380ms cubic-bezier(0.5, 0, 0.75, 0), opacity 280ms ease;
+  }
+
+  /* Dynamic rim glow on drag threshold */
+  .call-pill-shell.glow-emerald {
+    box-shadow: 0 20px 50px rgba(16, 185, 129, 0.42), 0 0 24px rgba(52, 211, 153, 0.55);
+  }
+  .call-pill-shell.glow-crimson {
+    box-shadow: 0 20px 50px rgba(239, 68, 68, 0.42), 0 0 24px rgba(251, 113, 133, 0.55);
+  }
+
+  /* Smoked-sapphire glass interior */
+  .call-pill-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 999px;
+    overflow: hidden;
+    background: linear-gradient(165deg, rgba(22, 28, 46, 0.88) 0%, rgba(10, 14, 24, 0.94) 100%);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.22), inset 0 -6px 14px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Left emerald & right crimson subtle wing tints */
+  .wing-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 600ms ease;
+    background:
+      radial-gradient(circle at 12% 50%, rgba(16, 185, 129, 0.22), transparent 40%),
+      radial-gradient(circle at 88% 50%, rgba(239, 68, 68, 0.22), transparent 40%);
+  }
+  .state-expanded .wing-glow { opacity: 1; }
+
+  /* Center-seam platinum glint during unfold */
+  .seam-glint {
+    position: absolute;
+    top: 8%;
+    bottom: 8%;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%) scaleY(0);
+    background: linear-gradient(to bottom, transparent, #fff, transparent);
+    box-shadow: 0 0 16px 3px rgba(255, 255, 255, 0.8);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .seam-glint.flash { animation: seamFlash 750ms ease-out forwards; }
+  @keyframes seamFlash {
+    0% { opacity: 0; transform: translateX(-50%) scaleY(0.2); }
+    25% { opacity: 1; transform: translateX(-50%) scaleY(1); }
+    100% { opacity: 0; transform: translateX(-50%) scaleY(1.2); }
+  }
+
+  /* Dynamic drag glass trails */
+  .drag-trail {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    pointer-events: none;
+    opacity: 0;
+    border-radius: 999px;
+  }
+  .drag-trail.emerald {
+    left: 0;
+    background: linear-gradient(90deg, rgba(16, 185, 129, 0.45), rgba(52, 211, 153, 0.14));
+  }
+  .drag-trail.crimson {
+    right: 0;
+    background: linear-gradient(270deg, rgba(239, 68, 68, 0.45), rgba(251, 113, 133, 0.14));
+  }
+
+  /* Stage 1 & Exit: Circular Avatar Orb Content */
+  .orb-avatar {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #f8fafc;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+    transition: opacity 260ms ease, transform 320ms ease;
+  }
+  .state-expanded .orb-avatar,
+  .state-active .orb-avatar {
+    opacity: 0;
+    transform: scale(0.65);
+    pointer-events: none;
+  }
+
+  /* Incoming Call Layer */
+  .incoming-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 320ms ease;
+  }
+  .state-expanded .incoming-layer {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Caller Info Center */
+  .caller-center {
+    text-align: center;
+    max-width: 52%;
+    transition: opacity 180ms ease, transform 180ms ease;
+    pointer-events: none;
+  }
+  .caller-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .caller-sub {
+    margin-top: 2px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #94a3b8;
+  }
+
+  /* Live mini waveform */
+  .mini-wave { display: inline-flex; align-items: center; gap: 2px; height: 12px; }
+  .mini-wave span {
+    width: 2px;
+    height: 4px;
+    border-radius: 2px;
+    background: #38bdf8;
+    animation: waveBar 0.9s ease-in-out infinite;
+  }
+  .mini-wave span:nth-child(2) { animation-delay: 0.15s; }
+  .mini-wave span:nth-child(3) { animation-delay: 0.3s; }
+  .mini-wave span:nth-child(4) { animation-delay: 0.45s; }
+  @keyframes waveBar {
+    0%, 100% { height: 4px; opacity: 0.55; }
+    50% { height: 12px; opacity: 1; }
+  }
+
+  /* Drag Status Hint Text */
+  .drag-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #e2e8f0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease, color 150ms ease;
+  }
+  .drag-hint.visible { opacity: 1; }
+  .drag-hint.ready-emerald { color: #6ee7b7; }
+  .drag-hint.ready-crimson { color: #fda4af; }
+
+  /* Directional Chevrons */
+  .chevrons {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 250ms ease;
+  }
+  .state-expanded .chevrons { opacity: 0.85; }
+  .chevrons.left-chev {
+    left: 70px;
+    color: #34d399;
+    animation: pulseRight 1.4s ease-in-out infinite;
+  }
+  .chevrons.right-chev {
+    right: 70px;
+    color: #fb7185;
+    animation: pulseLeft 1.4s ease-in-out infinite;
+  }
+  @keyframes pulseRight {
+    0%, 100% { transform: translate(0, -50%); opacity: 0.4; }
+    50% { transform: translate(5px, -50%); opacity: 1; }
+  }
+  @keyframes pulseLeft {
+    0%, 100% { transform: translate(0, -50%); opacity: 0.4; }
+    50% { transform: translate(-5px, -50%); opacity: 1; }
+  }
+
+  /* Sculpted 3D Jewel Drag Buttons */
+  .drag-btn {
+    position: absolute;
+    top: 50%;
+    width: var(--btn-size);
+    height: var(--btn-size);
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    touch-action: none;
+    z-index: 4;
+    color: #fff;
+    will-change: transform, opacity;
+    transition: transform 780ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
+  }
+  .drag-btn:active { cursor: grabbing; }
+  .drag-btn.dragging { transition: none !important; }
+
+  /* Start from center during unfold, glide out to edges */
+  .drag-btn.btn-pick {
+    left: 12px;
+    transform: translate(calc(50% + 90px), -50%) scale(0.5);
+    background: radial-gradient(circle at 30% 25%, #6ee7b7 0%, #10b981 48%, #047857 100%);
+    box-shadow:
+      0 8px 20px rgba(16, 185, 129, 0.5),
+      inset 0 2px 4px rgba(255, 255, 255, 0.55),
+      inset 0 -4px 8px rgba(0, 0, 0, 0.35);
+  }
+  .drag-btn.btn-decline {
+    right: 12px;
+    transform: translate(calc(-50% - 90px), -50%) scale(0.5);
+    background: radial-gradient(circle at 30% 25%, #fda4af 0%, #ef4444 48%, #991b1b 100%);
+    box-shadow:
+      0 8px 20px rgba(239, 68, 68, 0.5),
+      inset 0 2px 4px rgba(255, 255, 255, 0.5),
+      inset 0 -4px 8px rgba(0, 0, 0, 0.35);
+  }
+
+  .state-expanded .drag-btn.btn-pick,
+  .state-expanded .drag-btn.btn-decline {
+    transform: translate(0, -50%) scale(1);
+  }
+
+  /* Active "On Call" Bar Layer */
+  .active-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 300ms ease;
+  }
+  .state-active .active-layer {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .active-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .active-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.75), 0 0 14px rgba(16, 185, 129, 0.35);
+  }
+  .active-meta { min-width: 0; }
+  .active-timer-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #34d399;
+    margin-top: 2px;
+  }
+  .live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
+    animation: blinkDot 1.2s ease-in-out infinite;
+  }
+  @keyframes blinkDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  .active-actions { display: flex; align-items: center; gap: 8px; }
+  .mini-ctrl {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 180ms ease, transform 120ms ease;
+  }
+  .mini-ctrl:active { transform: scale(0.92); }
+  .mini-ctrl.on { background: rgba(56, 189, 248, 0.28); border-color: rgba(56, 189, 248, 0.65); color: #fff; }
+  .mini-ctrl.end-btn {
+    width: 44px;
+    height: 44px;
+    border: none;
+    background: radial-gradient(circle at 30% 25%, #fda4af 0%, #ef4444 50%, #991b1b 100%);
+    box-shadow: 0 6px 16px rgba(239, 68, 68, 0.45), inset 0 1px 3px rgba(255, 255, 255, 0.45);
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<div class="call-popup-stage">
+  <div id="callPill" class="call-pill-shell">
+    <div class="call-pill-inner">
+      <div class="wing-glow"></div>
+      <div id="seamGlint" class="seam-glint"></div>
+      <div id="trailEmerald" class="drag-trail emerald"></div>
+      <div id="trailCrimson" class="drag-trail crimson"></div>
+
+      <!-- Stage 1 & Collapse Orb Avatar -->
+      <div id="orbAvatar" class="orb-avatar">RV</div>
+
+      <!-- Incoming Call Layer -->
+      <div class="incoming-layer">
+        <button id="btnPick" class="drag-btn btn-pick" aria-label="Drag right to answer">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1C10.61 21 3 13.39 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z"/>
+          </svg>
+        </button>
+
+        <span id="chevLeft" class="chevrons left-chev">&raquo;</span>
+
+        <div id="callerCenter" class="caller-center">
+          <div id="callerName" class="caller-name">Rahul Verma</div>
+          <div class="caller-sub">
+            <span id="callerSub">Incoming Call</span>
+            <span class="mini-wave"><span></span><span></span><span></span><span></span></span>
+          </div>
+        </div>
+
+        <div id="dragHint" class="drag-hint">SLIDE TO ANSWER</div>
+
+        <span id="chevRight" class="chevrons right-chev">&laquo;</span>
+
+        <button id="btnDecline" class="drag-btn btn-decline" aria-label="Drag left to decline">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" style="transform: rotate(135deg);">
+            <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1C10.61 21 3 13.39 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Active "On Call" Bar Layer -->
+      <div class="active-layer">
+        <div class="active-left">
+          <div id="activeAvatar" class="active-avatar">RV</div>
+          <div class="active-meta">
+            <div id="activeName" class="caller-name">Rahul Verma</div>
+            <div class="active-timer-row">
+              <span class="live-dot"></span>
+              <span id="callTimer">00:00</span>
+              <span class="mini-wave"><span></span><span></span><span></span><span></span></span>
+            </div>
+          </div>
+        </div>
+        <div class="active-actions">
+          <button id="btnMute" class="mini-ctrl" aria-label="Mute">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+          </button>
+          <button id="btnSpeaker" class="mini-ctrl" aria-label="Speaker">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+          </button>
+          <button id="btnEnd" class="mini-ctrl end-btn" aria-label="End Call">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="transform: rotate(135deg);">
+              <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1C10.61 21 3 13.39 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const pill = document.getElementById('callPill');
+  const seamGlint = document.getElementById('seamGlint');
+  const trailEmerald = document.getElementById('trailEmerald');
+  const trailCrimson = document.getElementById('trailCrimson');
+  const btnPick = document.getElementById('btnPick');
+  const btnDecline = document.getElementById('btnDecline');
+  const callerCenter = document.getElementById('callerCenter');
+  const dragHint = document.getElementById('dragHint');
+  const chevLeft = document.getElementById('chevLeft');
+  const chevRight = document.getElementById('chevRight');
+  const callTimer = document.getElementById('callTimer');
+  const btnMute = document.getElementById('btnMute');
+  const btnSpeaker = document.getElementById('btnSpeaker');
+  const btnEnd = document.getElementById('btnEnd');
+
+  let timerInterval = null;
+  let seconds = 0;
+  let audioCtx = null;
+
+  // Hook these into your existing Call App functions
+  const CallHooks = {
+    onAnswerCall: () => console.log('Answer call triggered'),
+    onDeclineCall: () => console.log('Decline call triggered'),
+    onEndCall: () => console.log('End call triggered'),
+    onToggleMute: (muted) => console.log('Mute:', muted),
+    onToggleSpeaker: (speaker) => console.log('Speaker:', speaker),
+  };
+
+  function playTick(freq = 880) {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.06);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.06);
+      if (navigator.vibrate) navigator.vibrate(14);
+    } catch {}
+  }
+
+  function showIncomingCall({ name = 'Rahul Verma', initials = 'RV', subtitle = 'Incoming Call' } = {}) {
+    clearInterval(timerInterval);
+    document.getElementById('orbAvatar').textContent = initials;
+    document.getElementById('activeAvatar').textContent = initials;
+    document.getElementById('callerName').textContent = name;
+    document.getElementById('activeName').textContent = name;
+    document.getElementById('callerSub').textContent = subtitle;
+
+    pill.className = 'call-pill-shell';
+    resetDragVisuals();
+
+    // Stage 1: Drop 68x68 RV orb
+    requestAnimationFrame(() => {
+      pill.classList.add('state-drop');
+      // Stage 2: Unfold center-to-sides
+      setTimeout(() => {
+        seamGlint.classList.remove('flash');
+        void seamGlint.offsetWidth;
+        seamGlint.classList.add('flash');
+        pill.classList.remove('state-drop');
+        pill.classList.add('state-expanded');
+      }, 460);
+    });
+  }
+
+  function answerCall() {
+    CallHooks.onAnswerCall();
+    resetDragVisuals();
+    pill.classList.remove('state-expanded');
+    pill.classList.add('state-active');
+    seconds = 0;
+    callTimer.textContent = '00:00';
+    clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      seconds++;
+      const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+      const s = String(seconds % 60).padStart(2, '0');
+      callTimer.textContent = `${m}:${s}`;
+    }, 1000);
+  }
+
+  function dismissCall(isEndCall = false) {
+    clearInterval(timerInterval);
+    isEndCall ? CallHooks.onEndCall() : CallHooks.onDeclineCall();
+    resetDragVisuals();
+    // Collapse both sides back into 68x68 RV orb, then retract upward
+    pill.classList.remove('state-expanded', 'state-active');
+    pill.classList.add('state-collapse');
+    setTimeout(() => {
+      pill.classList.remove('state-collapse');
+      pill.classList.add('state-retract');
+    }, 430);
+  }
+
+  function resetDragVisuals() {
+    [btnPick, btnDecline].forEach((b) => {
+      b.classList.remove('dragging');
+      b.style.transform = '';
+      b.style.opacity = '';
+    });
+    trailEmerald.style.width = '0px'; trailEmerald.style.opacity = '0';
+    trailCrimson.style.width = '0px'; trailCrimson.style.opacity = '0';
+    callerCenter.style.opacity = '';
+    chevLeft.style.opacity = '';
+    chevRight.style.opacity = '';
+    dragHint.className = 'drag-hint';
+    pill.classList.remove('glow-emerald', 'glow-crimson');
+  }
+
+  function attachDrag(btn, type) {
+    const isPick = type === 'pick';
+    const otherBtn = isPick ? btnDecline : btnPick;
+    const trail = isPick ? trailEmerald : trailCrimson;
+    let startX = 0, currentDx = 0, maxTravel = 180, crossed = false, moved = false;
+
+    btn.addEventListener('pointerdown', (e) => {
+      if (!pill.classList.contains('state-expanded')) return;
+      btn.setPointerCapture(e.pointerId);
+      btn.classList.add('dragging');
+      startX = e.clientX;
+      currentDx = 0;
+      crossed = false;
+      moved = false;
+      maxTravel = Math.max(120, pill.clientWidth - 76);
+    });
+
+    btn.addEventListener('pointermove', (e) => {
+      if (!btn.classList.contains('dragging')) return;
+      const rawDx = e.clientX - startX;
+      const dx = isPick ? Math.max(0, Math.min(maxTravel, rawDx)) : Math.min(0, Math.max(-maxTravel, rawDx));
+      if (Math.abs(dx) > 4) moved = true;
+      currentDx = dx;
+
+      const progress = Math.abs(dx) / maxTravel;
+      btn.style.transform = `translate(${dx}px, -50%) scale(${1 + progress * 0.08})`;
+      otherBtn.style.opacity = String(Math.max(0, 1 - progress * 2.2));
+      callerCenter.style.opacity = String(Math.max(0, 1 - progress * 3));
+      chevLeft.style.opacity = '0';
+      chevRight.style.opacity = '0';
+
+      trail.style.width = `${Math.abs(dx) + 64}px`;
+      trail.style.opacity = String(Math.min(1, progress * 1.4));
+
+      dragHint.classList.add('visible');
+      if (progress >= 0.55) {
+        if (!crossed) { crossed = true; playTick(isPick ? 980 : 520); }
+        dragHint.textContent = isPick ? 'RELEASE TO ANSWER' : 'RELEASE TO DECLINE';
+        dragHint.className = `drag-hint visible ${isPick ? 'ready-emerald' : 'ready-crimson'}`;
+        pill.classList.add(isPick ? 'glow-emerald' : 'glow-crimson');
+      } else {
+        crossed = false;
+        dragHint.textContent = isPick ? 'SLIDE TO ANSWER »' : '« SLIDE TO DECLINE';
+        dragHint.className = 'drag-hint visible';
+        pill.classList.remove('glow-emerald', 'glow-crimson');
+      }
+    });
+
+    function finishDrag() {
+      if (!btn.classList.contains('dragging')) return;
+      btn.classList.remove('dragging');
+      const progress = Math.abs(currentDx) / maxTravel;
+
+      if (!moved) {
+        // Tap-to-nudge hint
+        const nudge = isPick ? 18 : -18;
+        btn.style.transition = 'transform 160ms ease-out';
+        btn.style.transform = `translate(${nudge}px, -50%)`;
+        callerCenter.style.opacity = '0';
+        dragHint.textContent = 'DRAG SIDEWAYS';
+        dragHint.className = 'drag-hint visible';
+        setTimeout(() => {
+          btn.style.transition = '';
+          resetDragVisuals();
+        }, 650);
+        return;
+      }
+
+      if (progress >= 0.55) {
+        isPick ? answerCall() : dismissCall(false);
+      } else {
+        resetDragVisuals();
+      }
+    }
+
+    btn.addEventListener('pointerup', finishDrag);
+    btn.addEventListener('pointercancel', finishDrag);
+  }
+
+  attachDrag(btnPick, 'pick');
+  attachDrag(btnDecline, 'decline');
+
+  btnMute.addEventListener('click', () => {
+    const on = btnMute.classList.toggle('on');
+    CallHooks.onToggleMute(on);
+  });
+  btnSpeaker.addEventListener('click', () => {
+    const on = btnSpeaker.classList.toggle('on');
+    CallHooks.onToggleSpeaker(on);
+  });
+  btnEnd.addEventListener('click', () => dismissCall(true));
+
+  // Trigger demo on load (replace with your real incoming call event)
+  window.triggerIncomingCallPopup = showIncomingCall;
+  showIncomingCall();
+})();
+</script>
+</body>
+</html>
+```

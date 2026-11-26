@@ -15,29 +15,23 @@ import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
 import android.view.animation.OvershootInterpolator
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.FragmentManager
-import coil.load
 import com.example.R
 import com.example.data.DialerPreferences
 import com.example.data.firebase.LiveBroadcast
 import com.example.databinding.DialogLiveBroadcastBinding
+import com.example.ui.common.PopupImageHelper
 
 /**
  * Reusable Dark Smoked-Sapphire Glassmorphism DialogFragment for Admin Broadcast Popups
  * (App Update Popups with optional Force Update lock & Custom Ad Popups).
  *
- * Visual & behavioral highlights:
- * - Smoked-sapphire 3D glass card (`bg_sapphire_glass_popup`) with glowing cyan-platinum rim
- *   and top specular highlight.
- * - Real native Android 12+ (`API 31+`) window backdrop blur (`FLAG_BLUR_BEHIND` +
- *   `blurBehindRadius` + `setBackgroundBlurRadius`) paired with a deep smoked glass scrim
- *   for consistent premium contrast across Android 10–16+.
- * - Dynamic payload injection for Update vs. Ad popups (badges, version pill, optional hero
- *   image via Coil, Force Update close-lock, CTA tint).
- * - Strict One-Time Delivery: persists `popupId` to [DialerPreferences.markPopupIdSeen] on
- *   dismiss, cancel, or CTA click when not in Admin preview mode and not a Force Update.
+ * Supports 4 Admin-configurable popup sizes (`small`, `medium`, `large`, `fullscreen`)
+ * and renders both uploaded compressed photos (`data:image/...;base64,...`) and remote URLs.
  */
 class SmokedSapphirePopupDialogFragment : DialogFragment() {
 
@@ -102,17 +96,39 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
         super.onDestroyView()
     }
 
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
+
     private fun configureGlassmorphicWindow() {
         val window = dialog?.window ?: return
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
 
-        val maxWidthPx = (resources.displayMetrics.widthPixels * 0.92f).toInt()
-            .coerceAtMost((440f * resources.displayMetrics.density).toInt())
-        window.setLayout(maxWidthPx, ViewGroup.LayoutParams.WRAP_CONTENT)
+        val screenW = resources.displayMetrics.widthPixels
+        val screenH = resources.displayMetrics.heightPixels
+        val sizeMode = payload.normalizedPopupSize()
+
+        val (targetWidth, targetHeight) = when (sizeMode) {
+            LiveBroadcast.SIZE_SMALL -> Pair(
+                (screenW * 0.80f).toInt().coerceAtMost(dp(320f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            LiveBroadcast.SIZE_LARGE -> Pair(
+                (screenW * 0.96f).toInt().coerceAtMost(dp(480f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            LiveBroadcast.SIZE_FULLSCREEN -> Pair(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (screenH * 0.90f).toInt().coerceAtLeast(dp(480f))
+            )
+            else -> Pair(
+                (screenW * 0.91f).toInt().coerceAtMost(dp(410f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        window.setLayout(targetWidth, targetHeight)
 
         window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         val params = window.attributes
-        params.dimAmount = 0.68f
+        params.dimAmount = if (sizeMode == LiveBroadcast.SIZE_FULLSCREEN) 0.82f else 0.68f
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
@@ -126,6 +142,83 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
         val canDismiss = isPreviewMode || !payload.isForceUpdateActive()
         dialog?.setCancelable(canDismiss)
         dialog?.setCanceledOnTouchOutside(canDismiss)
+    }
+
+    private fun applySizeStyling(sizeMode: String, hasImage: Boolean, hasText: Boolean) {
+        val screenH = resources.displayMetrics.heightPixels
+
+        val rootPad = when (sizeMode) {
+            LiveBroadcast.SIZE_SMALL -> dp(10f)
+            LiveBroadcast.SIZE_LARGE -> dp(10f)
+            LiveBroadcast.SIZE_FULLSCREEN -> dp(8f)
+            else -> dp(14f)
+        }
+        binding.popupRootFrame.setPadding(rootPad, rootPad, rootPad, rootPad)
+
+        val cardPad = when (sizeMode) {
+            LiveBroadcast.SIZE_SMALL -> dp(14f)
+            LiveBroadcast.SIZE_LARGE -> dp(18f)
+            LiveBroadcast.SIZE_FULLSCREEN -> dp(16f)
+            else -> dp(18f)
+        }
+        binding.cardPopupGlass.setPadding(cardPad, cardPad, cardPad, cardPad)
+
+        val cardParams = binding.cardPopupGlass.layoutParams
+        cardParams.height = if (sizeMode == LiveBroadcast.SIZE_FULLSCREEN) {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        } else {
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        }
+        binding.cardPopupGlass.layoutParams = cardParams
+
+        when (sizeMode) {
+            LiveBroadcast.SIZE_SMALL -> {
+                binding.tvPopupTitle.textSize = 17f
+                binding.tvPopupMessage.textSize = 12.5f
+            }
+            LiveBroadcast.SIZE_LARGE -> {
+                binding.tvPopupTitle.textSize = 21f
+                binding.tvPopupMessage.textSize = 14.5f
+            }
+            LiveBroadcast.SIZE_FULLSCREEN -> {
+                binding.tvPopupTitle.textSize = 22f
+                binding.tvPopupMessage.textSize = 15f
+            }
+            else -> {
+                binding.tvPopupTitle.textSize = 20f
+                binding.tvPopupMessage.textSize = 14f
+            }
+        }
+
+        if (!hasImage) return
+
+        val wrapperParams = binding.cardPopupImageWrapper.layoutParams as LinearLayout.LayoutParams
+        val imgParams = binding.ivPopupImage.layoutParams
+
+        if (sizeMode == LiveBroadcast.SIZE_FULLSCREEN) {
+            wrapperParams.height = 0
+            wrapperParams.weight = 1f
+            binding.cardPopupImageWrapper.layoutParams = wrapperParams
+            imgParams.height = ViewGroup.LayoutParams.MATCH_PARENT
+            binding.ivPopupImage.layoutParams = imgParams
+            binding.ivPopupImage.scaleType = ImageView.ScaleType.FIT_CENTER
+        } else {
+            wrapperParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            wrapperParams.weight = 0f
+            binding.cardPopupImageWrapper.layoutParams = wrapperParams
+
+            val targetImgHeight = when (sizeMode) {
+                LiveBroadcast.SIZE_SMALL -> if (hasText) dp(126f) else dp(168f)
+                LiveBroadcast.SIZE_LARGE -> {
+                    val cap = (screenH * if (hasText) 0.44f else 0.56f).toInt()
+                    dp(if (hasText) 300f else 380f).coerceAtMost(cap.coerceAtLeast(dp(240f)))
+                }
+                else -> if (hasText) dp(200f) else dp(256f)
+            }
+            imgParams.height = targetImgHeight
+            binding.ivPopupImage.layoutParams = imgParams
+            binding.ivPopupImage.scaleType = ImageView.ScaleType.CENTER_CROP
+        }
     }
 
     private fun bindBroadcastPayload(broadcast: LiveBroadcast) {
@@ -177,12 +270,18 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
 
         binding.tvPopupForceNotice.visibility = if (isForceUpdate) View.VISIBLE else View.GONE
 
-        // 3. Optional Hero Image (Ad Banner or Update Visual)
+        val hasText = binding.tvPopupTitle.visibility == View.VISIBLE ||
+            binding.tvPopupMessage.visibility == View.VISIBLE
+
+        applySizeStyling(broadcast.normalizedPopupSize(), hasImage, hasText)
+
+        // 3. Optional Hero Image (Uploaded Photo or Remote URL)
         if (hasImage) {
             binding.cardPopupImageWrapper.visibility = View.VISIBLE
-            binding.ivPopupImage.load(broadcast.imageUrl.trim()) {
-                crossfade(true)
-            }
+            PopupImageHelper.loadPopupImage(
+                imageView = binding.ivPopupImage,
+                rawSource = broadcast.imageUrl.trim()
+            )
             binding.tvPopupImageLinkBadge.visibility = if (hasAction) View.VISIBLE else View.GONE
         } else {
             binding.cardPopupImageWrapper.visibility = View.GONE
@@ -201,8 +300,6 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
             Color.parseColor(if (isUpdate) "#10B981" else "#2563EB")
         )
 
-        // Hide close buttons strictly when Force Update is ON (even in preview, show accurate Force Update UI;
-        // preview still allows tapping outside / back button to exit safely).
         val showCloseControls = !isForceUpdate
         binding.btnPopupCloseIcon.visibility = if (showCloseControls) View.VISIBLE else View.GONE
         binding.btnPopupClose.visibility = if (showCloseControls) View.VISIBLE else View.GONE
@@ -287,6 +384,7 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
         private const val ARG_IS_PREVIEW = "arg_is_preview"
         private const val ARG_POPUP_ID = "arg_popup_id"
         private const val ARG_POPUP_TYPE = "arg_popup_type"
+        private const val ARG_POPUP_SIZE = "arg_popup_size"
         private const val ARG_VERSION = "arg_version"
         private const val ARG_FORCE_UPDATE = "arg_force_update"
         private const val ARG_SHOW_ONCE = "arg_show_once"
@@ -306,6 +404,7 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
                     putBoolean(ARG_IS_PREVIEW, isPreview)
                     putString(ARG_POPUP_ID, broadcast.effectivePopupId())
                     putString(ARG_POPUP_TYPE, broadcast.normalizedPopupType())
+                    putString(ARG_POPUP_SIZE, broadcast.normalizedPopupSize())
                     putString(ARG_VERSION, broadcast.version)
                     putBoolean(ARG_FORCE_UPDATE, broadcast.forceUpdate)
                     putBoolean(ARG_SHOW_ONCE, broadcast.showOnce)
@@ -362,7 +461,8 @@ class SmokedSapphirePopupDialogFragment : DialogFragment() {
                 imageUrl = args.getString(ARG_IMAGE_URL).orEmpty(),
                 buttonText = args.getString(ARG_BUTTON_TEXT).orEmpty(),
                 actionUrl = args.getString(ARG_ACTION_URL).orEmpty(),
-                isCancelable = args.getBoolean(ARG_IS_CANCELABLE, true)
+                isCancelable = args.getBoolean(ARG_IS_CANCELABLE, true),
+                popupSize = LiveBroadcast.normalizedPopupSize(args.getString(ARG_POPUP_SIZE))
             )
         }
     }

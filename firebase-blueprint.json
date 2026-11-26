@@ -325,6 +325,22 @@
           "type": "boolean",
           "description": "Global toggle making subscription cards and payment status UI disappear or appear in real-time."
         },
+        "welcomeTitle": {
+          "type": "string",
+          "description": "Admin-customizable heading displayed on the Welcome / Sign-In Gate screen."
+        },
+        "welcomeTrialBadge": {
+          "type": "string",
+          "description": "Admin-customizable trial badge text displayed on the Welcome / Sign-In Gate screen."
+        },
+        "welcomeSubtitle": {
+          "type": "string",
+          "description": "Admin-customizable description and price text displayed on the Welcome / Sign-In Gate screen."
+        },
+        "welcomeButtonText": {
+          "type": "string",
+          "description": "Admin-customizable sign-in button label displayed on the Welcome / Sign-In Gate screen."
+        },
         "updatedByUid": {
           "type": "string",
           "description": "Firebase Auth UID of the admin who updated the settings."
@@ -395,6 +411,8 @@
       "properties": {
         "showPopup": { "type": "boolean" },
         "popupId": { "type": "string" },
+        "popupType": { "type": "string", "enum": ["update", "ad"] },
+        "popupSize": { "type": "string", "enum": ["small", "medium", "large", "fullscreen"] },
         "title": { "type": "string" },
         "message": { "type": "string" },
         "imageUrl": { "type": "string" },

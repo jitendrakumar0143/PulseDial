@@ -447,10 +447,16 @@ class AdminRepository(
         val cleanPayuLink = config.payuPaymentLink.trim().take(500)
         val cleanCustomName = config.customGatewayName.trim().take(80)
         val cleanCustomUrl = config.customGatewayUrl.trim().take(500)
+        val cleanWelcomeTitle = config.welcomeTitle.trim().take(100)
+        val cleanWelcomeBadge = config.welcomeTrialBadge.trim().take(100)
+        val cleanWelcomeSubtitle = config.welcomeSubtitle.trim().take(400)
+        val cleanWelcomeButton = config.welcomeButtonText.trim().take(80)
+        val cleanTrialDays = config.trialDays.coerceIn(1L, 365L)
+        val cleanPriceInr = config.subscriptionPriceInr.coerceIn(1L, 100000L)
 
         val payload = mapOf(
-            "trialDays" to config.trialDays.coerceIn(1L, 365L),
-            "subscriptionPriceInr" to config.subscriptionPriceInr.coerceIn(1L, 100000L),
+            "trialDays" to cleanTrialDays,
+            "subscriptionPriceInr" to cleanPriceInr,
             "upiVpa" to cleanUpi,
             "whatsappNumber" to cleanWhatsapp,
             "enforceSingleDeviceTrial" to config.enforceSingleDeviceTrial,
@@ -473,6 +479,21 @@ class AdminRepository(
             "enableCustomGateway" to config.enableCustomGateway,
             "customGatewayName" to cleanCustomName,
             "customGatewayUrl" to cleanCustomUrl,
+            "welcomeTitle" to cleanWelcomeTitle,
+            "welcomeTrialBadge" to cleanWelcomeBadge,
+            "welcomeSubtitle" to cleanWelcomeSubtitle,
+            "welcomeButtonText" to cleanWelcomeButton,
+            "updatedByUid" to adminUid,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        val welcomeMirrorPayload = mapOf(
+            "trialDays" to cleanTrialDays,
+            "subscriptionPriceInr" to cleanPriceInr,
+            "welcomeTitle" to cleanWelcomeTitle,
+            "welcomeTrialBadge" to cleanWelcomeBadge,
+            "welcomeSubtitle" to cleanWelcomeSubtitle,
+            "welcomeButtonText" to cleanWelcomeButton,
             "updatedByUid" to adminUid,
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -480,6 +501,8 @@ class AdminRepository(
         return try {
             RealtimeDatabaseSync.pushAppConfig(
                 config.copy(
+                    trialDays = cleanTrialDays,
+                    subscriptionPriceInr = cleanPriceInr,
                     upiVpa = cleanUpi,
                     whatsappNumber = cleanWhatsapp,
                     forceThemeMode = cleanTheme,
@@ -488,14 +511,24 @@ class AdminRepository(
                     payuMerchantKey = cleanPayuKey,
                     payuPaymentLink = cleanPayuLink,
                     customGatewayName = cleanCustomName,
-                    customGatewayUrl = cleanCustomUrl
+                    customGatewayUrl = cleanCustomUrl,
+                    welcomeTitle = cleanWelcomeTitle,
+                    welcomeTrialBadge = cleanWelcomeBadge,
+                    welcomeSubtitle = cleanWelcomeSubtitle,
+                    welcomeButtonText = cleanWelcomeButton
                 ),
                 context = appContext
             )
             if (runCatching { auth.currentUser }.getOrNull() == null) {
                 return Result.success(Unit)
             }
-            docRef.set(payload).awaitTask()
+            val batch = db.batch()
+            batch.set(docRef, payload)
+            batch.set(
+                db.collection(COLLECTION_APP_CONFIG).document(AppConfig.DOC_WELCOME_SCREEN),
+                welcomeMirrorPayload
+            )
+            batch.commit().awaitTask()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -1188,19 +1221,145 @@ class AdminRepository(
             }
             userRef.delete().awaitTask()
 
-            // Purge all associated Firestore payment_requests created by this user
-            runCatching {
-                val paymentDocs = db.collection(PaymentRepository.COLLECTION_PAYMENT_REQUESTS)
-                    .whereEqualTo("userId", targetUid)
-                    .get()
-                    .awaitTask()
-                for (doc in paymentDocs.documents) {
-                    runCatching { doc.reference.delete().awaitTask() }
+            val deletedUids = mutableSetOf(targetUid)
+            val cleanEmail = user.email.trim()
+            val cleanEmailLower = cleanEmail.lowercase()
+            val cleanDeviceHash = user.deviceHash.trim().lowercase()
+            val callerIsSuperAdmin = UpiPaymentHelper.isSuperAdminEmail(actingAdminEmail)
+
+            // 1. Purge any duplicate sibling Firestore /users docs matching email or deviceHash
+            val siblingUserRefs = linkedMapOf<String, com.google.firebase.firestore.DocumentReference>()
+            if (cleanEmail.isNotEmpty()) {
+                runCatching {
+                    val byExactEmail = db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                        .whereEqualTo("email", cleanEmail)
+                        .get()
+                        .awaitTask()
+                    byExactEmail.documents.forEach { doc ->
+                        val docEmail = doc.getString("email").orEmpty()
+                        val docIsDelegatedAdmin = UpiPaymentHelper.isDelegatedAdminAuthorized(
+                            doc.getBoolean("isAdmin") == true,
+                            doc.getString("adminGrantedBy").orEmpty()
+                        )
+                        if (doc.id != targetUid &&
+                            !UpiPaymentHelper.isSuperAdminEmail(docEmail) &&
+                            (!docIsDelegatedAdmin || callerIsSuperAdmin)
+                        ) {
+                            siblingUserRefs[doc.id] = doc.reference
+                        }
+                    }
+                }
+                if (cleanEmailLower != cleanEmail) {
+                    runCatching {
+                        val byLowerEmail = db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                            .whereEqualTo("email", cleanEmailLower)
+                            .get()
+                            .awaitTask()
+                        byLowerEmail.documents.forEach { doc ->
+                            val docEmail = doc.getString("email").orEmpty()
+                            val docIsDelegatedAdmin = UpiPaymentHelper.isDelegatedAdminAuthorized(
+                                doc.getBoolean("isAdmin") == true,
+                                doc.getString("adminGrantedBy").orEmpty()
+                            )
+                            if (doc.id != targetUid &&
+                                !UpiPaymentHelper.isSuperAdminEmail(docEmail) &&
+                                (!docIsDelegatedAdmin || callerIsSuperAdmin)
+                            ) {
+                                siblingUserRefs[doc.id] = doc.reference
+                            }
+                        }
+                    }
+                }
+            }
+            if (cleanDeviceHash.length == 64) {
+                runCatching {
+                    val byDevice = db.collection(DeviceTrialRepository.COLLECTION_USERS)
+                        .whereEqualTo("deviceHash", cleanDeviceHash)
+                        .get()
+                        .awaitTask()
+                    byDevice.documents.forEach { doc ->
+                        val docEmail = doc.getString("email").orEmpty()
+                        val docIsDelegatedAdmin = UpiPaymentHelper.isDelegatedAdminAuthorized(
+                            doc.getBoolean("isAdmin") == true,
+                            doc.getString("adminGrantedBy").orEmpty()
+                        )
+                        if (doc.id != targetUid &&
+                            !UpiPaymentHelper.isSuperAdminEmail(docEmail) &&
+                            (!docIsDelegatedAdmin || callerIsSuperAdmin)
+                        ) {
+                            siblingUserRefs[doc.id] = doc.reference
+                        }
+                    }
+                }
+            }
+            for ((siblingUid, ref) in siblingUserRefs) {
+                runCatching {
+                    ref.delete().awaitTask()
+                    deletedUids.add(siblingUid)
                 }
             }
 
-            // Purge associated Firestore device_trials doc if owned by this deleted user
-            val cleanDeviceHash = user.deviceHash.trim().lowercase()
+            // 2. Purge all associated Firestore payment_requests (by userId AND userEmail) + their UTR locks
+            val paymentDocsToDelete = linkedMapOf<String, com.google.firebase.firestore.DocumentSnapshot>()
+            for (uidToPurge in deletedUids) {
+                runCatching {
+                    val byUid = db.collection(PaymentRepository.COLLECTION_PAYMENT_REQUESTS)
+                        .whereEqualTo("userId", uidToPurge)
+                        .get()
+                        .awaitTask()
+                    byUid.documents.forEach { paymentDocsToDelete[it.id] = it }
+                }
+            }
+            if (cleanEmail.isNotEmpty()) {
+                runCatching {
+                    val byEmail = db.collection(PaymentRepository.COLLECTION_PAYMENT_REQUESTS)
+                        .whereEqualTo("userEmail", cleanEmail)
+                        .get()
+                        .awaitTask()
+                    byEmail.documents.forEach { paymentDocsToDelete[it.id] = it }
+                }
+                if (cleanEmailLower != cleanEmail) {
+                    runCatching {
+                        val byLowerEmail = db.collection(PaymentRepository.COLLECTION_PAYMENT_REQUESTS)
+                            .whereEqualTo("userEmail", cleanEmailLower)
+                            .get()
+                            .awaitTask()
+                        byLowerEmail.documents.forEach { paymentDocsToDelete[it.id] = it }
+                    }
+                }
+            }
+            val utrKeysToDelete = mutableSetOf<String>()
+            for (doc in paymentDocsToDelete.values) {
+                val canonicalUtr = doc.getString("upiTxnId").orEmpty().trim()
+                    .ifBlank { doc.getString("approvalRefNo").orEmpty().trim() }
+                    .ifBlank { doc.getString("txnRef").orEmpty().trim() }
+                val utrKey = PaymentRepository.normalizeUtrKey(canonicalUtr)
+                if (utrKey.isNotEmpty()) {
+                    utrKeysToDelete.add(utrKey)
+                }
+                runCatching { doc.reference.delete().awaitTask() }
+            }
+
+            // 3. Purge associated Firestore approved_utrs locks belonging to this deleted user
+            for (uidToPurge in deletedUids) {
+                runCatching {
+                    val utrDocs = db.collection(PaymentRepository.COLLECTION_APPROVED_UTRS)
+                        .whereEqualTo("userId", uidToPurge)
+                        .get()
+                        .awaitTask()
+                    utrDocs.documents.forEach { utrKeysToDelete.add(it.id) }
+                }
+            }
+            for (utrKey in utrKeysToDelete) {
+                runCatching {
+                    db.collection(PaymentRepository.COLLECTION_APPROVED_UTRS)
+                        .document(utrKey)
+                        .delete()
+                        .awaitTask()
+                }
+            }
+
+            // 4. Purge associated Firestore device_trials doc if owned/used by this deleted user
             if (cleanDeviceHash.length == 64) {
                 runCatching {
                     val deviceRef = db.collection(DeviceTrialRepository.COLLECTION_DEVICE_TRIALS)
@@ -1209,7 +1368,7 @@ class AdminRepository(
                     if (snap.exists()) {
                         val ownerUid = snap.getString("ownerUid").orEmpty()
                         val lastUid = snap.getString("lastUserId").orEmpty()
-                        if (ownerUid == targetUid || lastUid == targetUid) {
+                        if (ownerUid in deletedUids || lastUid in deletedUids || ownerUid.isEmpty()) {
                             deviceRef.delete().awaitTask()
                         }
                     }
@@ -1424,12 +1583,17 @@ class AdminRepository(
             return Result.failure(e)
         }
         val normalizedType = broadcast.normalizedPopupType()
+        val normalizedSize = broadcast.normalizedPopupSize()
         val effectiveForce = normalizedType == LiveBroadcast.TYPE_UPDATE && broadcast.forceUpdate
         val effectiveCancelable = if (effectiveForce) false else true
+        val maxImageChars = com.example.ui.common.PopupImageHelper.MAX_IMAGE_SOURCE_CHARS
         val normalizedBroadcast = broadcast.copy(
             popupType = normalizedType,
+            popupSize = normalizedSize,
             forceUpdate = effectiveForce,
-            isCancelable = effectiveCancelable
+            isCancelable = effectiveCancelable,
+            imageUrl = broadcast.imageUrl.trim().take(maxImageChars),
+            bannerImageUrl = broadcast.bannerImageUrl.trim().take(maxImageChars)
         )
         val docRef = db.collection(COLLECTION_APP_CONFIG)
             .document(LiveBroadcast.DOC_LIVE_BROADCAST)
@@ -1437,18 +1601,19 @@ class AdminRepository(
             "showPopup" to normalizedBroadcast.showPopup,
             "popupId" to normalizedBroadcast.popupId.trim().take(80),
             "popupType" to normalizedType,
+            "popupSize" to normalizedSize,
             "version" to normalizedBroadcast.version.trim().take(40),
             "forceUpdate" to effectiveForce,
             "showOnce" to normalizedBroadcast.showOnce,
             "title" to normalizedBroadcast.title.trim().take(140),
             "message" to normalizedBroadcast.message.trim().take(500),
-            "imageUrl" to normalizedBroadcast.imageUrl.trim().take(500),
+            "imageUrl" to normalizedBroadcast.imageUrl,
             "buttonText" to normalizedBroadcast.buttonText.trim().ifBlank { "Open" }.take(60),
             "actionUrl" to normalizedBroadcast.actionUrl.trim().take(500),
             "isCancelable" to effectiveCancelable,
             "showBannerAd" to normalizedBroadcast.showBannerAd,
             "bannerText" to normalizedBroadcast.bannerText.trim().take(180),
-            "bannerImageUrl" to normalizedBroadcast.bannerImageUrl.trim().take(500),
+            "bannerImageUrl" to normalizedBroadcast.bannerImageUrl,
             "bannerActionUrl" to normalizedBroadcast.bannerActionUrl.trim().take(500),
             "updatedByUid" to adminUid,
             "updatedAt" to FieldValue.serverTimestamp()
@@ -1475,6 +1640,7 @@ class AdminRepository(
         val cleared = current.copy(
             showPopup = false,
             popupId = "",
+            popupSize = LiveBroadcast.SIZE_MEDIUM,
             version = "",
             forceUpdate = false,
             showOnce = true,

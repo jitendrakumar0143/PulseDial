@@ -14,6 +14,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.view.ViewCompat
@@ -95,6 +97,32 @@ class AdminPanelActivity : AppCompatActivity() {
     private var currentBroadcast: LiveBroadcast = LiveBroadcast()
     private var currentCustomPopupAd: CustomPopupAd = CustomPopupAd()
     private var hasBoundInitialPopupAd = false
+
+    private var uploadedPopupAdImageDataUri: String = ""
+    private var uploadedBroadcastImageDataUri: String = ""
+    private var uploadedBannerImageDataUri: String = ""
+    private var suppressImageUrlTextWatcher = false
+
+    private val popupAdImagePickerLauncher =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri != null) handlePickedPopupImage(uri, ImageSlot.CUSTOM_POPUP_AD)
+        }
+
+    private val broadcastImagePickerLauncher =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri != null) handlePickedPopupImage(uri, ImageSlot.BROADCAST_POPUP)
+        }
+
+    private val bannerImagePickerLauncher =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri != null) handlePickedPopupImage(uri, ImageSlot.BANNER_AD)
+        }
+
+    private enum class ImageSlot {
+        CUSTOM_POPUP_AD,
+        BROADCAST_POPUP,
+        BANNER_AD
+    }
 
     private var suppressHideSubSwitchListener = false
 
@@ -368,6 +396,10 @@ class AdminPanelActivity : AppCompatActivity() {
             override fun onTabUnselected(tab: TabLayout.Tab) {}
             override fun onTabReselected(tab: TabLayout.Tab) {}
         })
+        binding.chipKpiUsers.setOnClickListener {
+            binding.chipGroupUserFilter.check(R.id.chip_user_filter_all)
+            binding.adminTabLayout.getTabAt(0)?.select()
+        }
         binding.chipKpiExpiring.setOnClickListener {
             binding.rgAdminSubscriberFilter.check(R.id.rb_subscriber_expiring_soon)
             binding.adminTabLayout.getTabAt(1)?.select()
@@ -375,6 +407,10 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.chipKpiPremium.setOnClickListener {
             binding.rgAdminSubscriberFilter.check(R.id.rb_subscriber_all_active)
             binding.adminTabLayout.getTabAt(1)?.select()
+        }
+        binding.chipKpiPending.setOnClickListener {
+            binding.chipGroupPaymentFilter.check(R.id.chip_pay_filter_pending)
+            binding.adminTabLayout.getTabAt(2)?.select()
         }
         showSection(0)
     }
@@ -707,6 +743,10 @@ class AdminPanelActivity : AppCompatActivity() {
                 }
             }
         }
+        binding.btnToggleUserDateFilters.setOnClickListener {
+            val show = binding.layoutUserDateFilters.visibility != View.VISIBLE
+            binding.layoutUserDateFilters.visibility = if (show) View.VISIBLE else View.GONE
+        }
         binding.chipDateFilterCustom.setOnClickListener {
             if (currentUserDateFilter == AdminUserDateFilter.CUSTOM_RANGE) {
                 showCustomUserDateRangePicker()
@@ -739,10 +779,15 @@ class AdminPanelActivity : AppCompatActivity() {
     private fun setupPaymentsTab() {
         paymentsAdapter = PaymentRequestsAdapter(
             onApproveClick = { request -> handleApprovePayment(request) },
-            onRejectClick = { request -> showDisapprovePaymentDialog(request) }
+            onRejectClick = { request -> showDisapprovePaymentDialog(request) },
+            onDeleteClick = { request -> confirmDeletePaymentRequest(request) }
         )
         binding.recyclerAdminPayments.layoutManager = LinearLayoutManager(this)
         binding.recyclerAdminPayments.adapter = paymentsAdapter
+
+        binding.btnAdminDeletePaymentHistory.setOnClickListener {
+            confirmClearPaymentHistory()
+        }
 
         binding.etAdminPaymentSearch.doAfterTextChanged { editable ->
             currentPaymentQuery = editable?.toString().orEmpty()
@@ -786,6 +831,109 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private var suppressBroadcastActiveSwitchListener = false
 
+    private fun handlePickedPopupImage(uri: android.net.Uri, slot: ImageSlot) {
+        Toast.makeText(this, R.string.admin_popup_image_uploading, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val encoded = com.example.ui.common.PopupImageHelper.encodeImageUriToDataUri(
+                context = this@AdminPanelActivity,
+                uri = uri
+            )
+            if (encoded.isNullOrBlank()) {
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    R.string.admin_popup_image_upload_failed,
+                    Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
+            val kb = com.example.ui.common.PopupImageHelper.approxKilobytes(encoded)
+            when (slot) {
+                ImageSlot.CUSTOM_POPUP_AD -> {
+                    uploadedPopupAdImageDataUri = encoded
+                    suppressImageUrlTextWatcher = true
+                    binding.etPopupAdImageUrl.setText("")
+                    suppressImageUrlTextWatcher = false
+                    updatePopupAdImagePreview(encoded)
+                }
+                ImageSlot.BROADCAST_POPUP -> {
+                    uploadedBroadcastImageDataUri = encoded
+                    suppressImageUrlTextWatcher = true
+                    binding.etBroadcastImageUrl.setText("")
+                    suppressImageUrlTextWatcher = false
+                    updateBroadcastImagePreview(encoded)
+                }
+                ImageSlot.BANNER_AD -> {
+                    uploadedBannerImageDataUri = encoded
+                    suppressImageUrlTextWatcher = true
+                    binding.etBannerAdImageUrl.setText("")
+                    suppressImageUrlTextWatcher = false
+                    updateBannerImagePreview(encoded)
+                }
+            }
+            Toast.makeText(
+                this@AdminPanelActivity,
+                getString(R.string.admin_popup_image_uploaded_toast, kb),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun resolveEffectivePopupAdImage(): String {
+        return uploadedPopupAdImageDataUri.ifBlank {
+            binding.etPopupAdImageUrl.text?.toString()?.trim().orEmpty()
+        }
+    }
+
+    private fun resolveEffectiveBroadcastImage(): String {
+        return uploadedBroadcastImageDataUri.ifBlank {
+            binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty()
+        }
+    }
+
+    private fun resolveEffectiveBannerImage(): String {
+        return uploadedBannerImageDataUri.ifBlank {
+            binding.etBannerAdImageUrl.text?.toString()?.trim().orEmpty()
+        }
+    }
+
+    private fun selectedPopupAdSize(): String {
+        return when (binding.chipGroupPopupAdSize.checkedChipId) {
+            R.id.chip_popup_ad_size_small -> CustomPopupAd.SIZE_SMALL
+            R.id.chip_popup_ad_size_large -> CustomPopupAd.SIZE_LARGE
+            R.id.chip_popup_ad_size_fullscreen -> CustomPopupAd.SIZE_FULLSCREEN
+            else -> CustomPopupAd.SIZE_MEDIUM
+        }
+    }
+
+    private fun checkPopupAdSizeChip(size: String) {
+        val chipId = when (CustomPopupAd.normalizedPopupSize(size)) {
+            CustomPopupAd.SIZE_SMALL -> R.id.chip_popup_ad_size_small
+            CustomPopupAd.SIZE_LARGE -> R.id.chip_popup_ad_size_large
+            CustomPopupAd.SIZE_FULLSCREEN -> R.id.chip_popup_ad_size_fullscreen
+            else -> R.id.chip_popup_ad_size_medium
+        }
+        binding.chipGroupPopupAdSize.check(chipId)
+    }
+
+    private fun selectedBroadcastPopupSize(): String {
+        return when (binding.chipGroupBroadcastSize.checkedChipId) {
+            R.id.chip_broadcast_size_small -> LiveBroadcast.SIZE_SMALL
+            R.id.chip_broadcast_size_large -> LiveBroadcast.SIZE_LARGE
+            R.id.chip_broadcast_size_fullscreen -> LiveBroadcast.SIZE_FULLSCREEN
+            else -> LiveBroadcast.SIZE_MEDIUM
+        }
+    }
+
+    private fun checkBroadcastPopupSizeChip(size: String) {
+        val chipId = when (LiveBroadcast.normalizedPopupSize(size)) {
+            LiveBroadcast.SIZE_SMALL -> R.id.chip_broadcast_size_small
+            LiveBroadcast.SIZE_LARGE -> R.id.chip_broadcast_size_large
+            LiveBroadcast.SIZE_FULLSCREEN -> R.id.chip_broadcast_size_fullscreen
+            else -> R.id.chip_broadcast_size_medium
+        }
+        binding.chipGroupBroadcastSize.check(chipId)
+    }
+
     private fun selectedBroadcastPopupType(): String {
         return if (binding.chipGroupBroadcastType.checkedChipId == R.id.chip_broadcast_type_ad) {
             LiveBroadcast.TYPE_AD
@@ -798,12 +946,9 @@ class AdminPanelActivity : AppCompatActivity() {
         val isUpdate = popupType != LiveBroadcast.TYPE_AD
         binding.tilBroadcastVersion.visibility = if (isUpdate) View.VISIBLE else View.GONE
         binding.switchBroadcastForceUpdate.visibility = if (isUpdate) View.VISIBLE else View.GONE
-        binding.tilBroadcastImageUrl.visibility = if (isUpdate) View.GONE else View.VISIBLE
-        if (isUpdate) {
-            binding.cardBroadcastImagePreview.visibility = View.GONE
-        } else {
-            updateBroadcastImagePreview(binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty())
-        }
+        binding.tilBroadcastImageUrl.visibility = View.VISIBLE
+        binding.layoutBroadcastImageActions.visibility = View.VISIBLE
+        updateBroadcastImagePreview(resolveEffectiveBroadcastImage())
         binding.tilBroadcastTitle.hint = getString(
             if (isUpdate) R.string.admin_broadcast_title_hint else R.string.admin_broadcast_ad_title_hint
         )
@@ -862,10 +1007,25 @@ class AdminPanelActivity : AppCompatActivity() {
             }
         }
 
+        binding.btnBroadcastUploadImage.setOnClickListener {
+            broadcastImagePickerLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        }
+        binding.btnBroadcastClearImage.setOnClickListener {
+            uploadedBroadcastImageDataUri = ""
+            suppressImageUrlTextWatcher = true
+            binding.etBroadcastImageUrl.setText("")
+            suppressImageUrlTextWatcher = false
+            updateBroadcastImagePreview("")
+        }
         binding.etBroadcastImageUrl.doAfterTextChanged { editable ->
-            if (selectedBroadcastPopupType() == LiveBroadcast.TYPE_AD) {
-                updateBroadcastImagePreview(editable?.toString()?.trim().orEmpty())
+            if (suppressImageUrlTextWatcher) return@doAfterTextChanged
+            val url = editable?.toString()?.trim().orEmpty()
+            if (url.isNotEmpty()) {
+                uploadedBroadcastImageDataUri = ""
             }
+            updateBroadcastImagePreview(resolveEffectiveBroadcastImage())
         }
 
         binding.btnBroadcastPreview.setOnClickListener {
@@ -887,18 +1047,67 @@ class AdminPanelActivity : AppCompatActivity() {
             deleteLiveBroadcastPopup()
         }
 
+        binding.btnBannerAdUploadImage.setOnClickListener {
+            bannerImagePickerLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        }
+        binding.btnBannerAdClearImage.setOnClickListener {
+            uploadedBannerImageDataUri = ""
+            suppressImageUrlTextWatcher = true
+            binding.etBannerAdImageUrl.setText("")
+            suppressImageUrlTextWatcher = false
+            updateBannerImagePreview("")
+        }
+        binding.etBannerAdImageUrl.doAfterTextChanged { editable ->
+            if (suppressImageUrlTextWatcher) return@doAfterTextChanged
+            val url = editable?.toString()?.trim().orEmpty()
+            if (url.isNotEmpty()) {
+                uploadedBannerImageDataUri = ""
+            }
+            updateBannerImagePreview(resolveEffectiveBannerImage())
+        }
+
         binding.btnBannerAdSave.setOnClickListener {
             val next = currentBroadcast.copy(
                 showBannerAd = binding.switchBannerAdEnable.isChecked,
                 bannerText = binding.etBannerAdText.text?.toString()?.trim().orEmpty(),
-                bannerImageUrl = binding.etBannerAdImageUrl.text?.toString()?.trim().orEmpty(),
+                bannerImageUrl = resolveEffectiveBannerImage(),
                 bannerActionUrl = binding.etBannerAdActionUrl.text?.toString()?.trim().orEmpty()
             )
             saveLiveBroadcast(next, R.string.admin_banner_saved_toast)
         }
 
-        // Initialize Custom Popup Ad live counters & publish button
+        // Initialize Custom Popup Ad upload, preview, live counters & publish buttons
         updatePopupAdCounters(0L, 0L)
+        binding.btnPopupAdUploadImage.setOnClickListener {
+            popupAdImagePickerLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        }
+        binding.btnPopupAdClearImage.setOnClickListener {
+            uploadedPopupAdImageDataUri = ""
+            suppressImageUrlTextWatcher = true
+            binding.etPopupAdImageUrl.setText("")
+            suppressImageUrlTextWatcher = false
+            updatePopupAdImagePreview("")
+        }
+        binding.etPopupAdImageUrl.doAfterTextChanged { editable ->
+            if (suppressImageUrlTextWatcher) return@doAfterTextChanged
+            val url = editable?.toString()?.trim().orEmpty()
+            if (url.isNotEmpty()) {
+                uploadedPopupAdImageDataUri = ""
+            }
+            updatePopupAdImagePreview(resolveEffectivePopupAdImage())
+        }
+        binding.btnPopupAdPreview.setOnClickListener {
+            val previewAd = buildCustomPopupAdFromInputs(isForPreview = true) ?: return@setOnClickListener
+            com.example.ui.ads.CustomAdPopupDialog.showIfNotAlreadyVisible(
+                fragmentManager = supportFragmentManager,
+                ad = previewAd,
+                isPreview = true
+            )
+        }
         binding.btnPublishCustomPopupAd.setOnClickListener {
             publishCustomPopupAdFromInputs()
         }
@@ -909,14 +1118,15 @@ class AdminPanelActivity : AppCompatActivity() {
 
     private fun buildBroadcastFromInputs(generateFreshId: Boolean = true): LiveBroadcast? {
         val popupType = selectedBroadcastPopupType()
+        val popupSize = selectedBroadcastPopupSize()
         val isUpdate = popupType == LiveBroadcast.TYPE_UPDATE
         val title = binding.etBroadcastTitle.text?.toString()?.trim().orEmpty()
         val version = if (isUpdate) binding.etBroadcastVersion.text?.toString()?.trim().orEmpty() else ""
         val message = binding.etBroadcastMessage.text?.toString()?.trim().orEmpty()
-        val imageUrl = if (isUpdate) "" else binding.etBroadcastImageUrl.text?.toString()?.trim().orEmpty()
+        val imageUrl = resolveEffectiveBroadcastImage()
         val actionUrl = binding.etBroadcastActionUrl.text?.toString()?.trim().orEmpty()
         if (title.isBlank() && message.isBlank() && imageUrl.isBlank()) {
-            Toast.makeText(this, "Enter popup image URL, title, or message", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Upload a photo or enter image URL, title, or message", Toast.LENGTH_SHORT).show()
             return null
         }
         val forceUpdate = isUpdate && binding.switchBroadcastForceUpdate.isChecked
@@ -932,6 +1142,7 @@ class AdminPanelActivity : AppCompatActivity() {
             showPopup = true,
             popupId = resolvedPopupId,
             popupType = popupType,
+            popupSize = popupSize,
             version = version,
             forceUpdate = forceUpdate,
             showOnce = true,
@@ -945,7 +1156,8 @@ class AdminPanelActivity : AppCompatActivity() {
     }
 
     private fun sendCustomPopupAdAsLiveBroadcastNow() {
-        val imageUrl = binding.etPopupAdImageUrl.text?.toString()?.trim().orEmpty()
+        val imageUrl = resolveEffectivePopupAdImage()
+        val popupSize = selectedPopupAdSize()
         val title = binding.etPopupAdTitle.text?.toString()?.trim().orEmpty()
         val message = binding.etPopupAdMessage.text?.toString()?.trim().orEmpty()
         val targetUrl = binding.etPopupAdTargetUrl.text?.toString()?.trim().orEmpty()
@@ -964,6 +1176,7 @@ class AdminPanelActivity : AppCompatActivity() {
             showPopup = true,
             popupId = LiveBroadcast.generatePopupId(),
             popupType = LiveBroadcast.TYPE_AD,
+            popupSize = popupSize,
             version = "",
             forceUpdate = false,
             showOnce = true,
@@ -978,23 +1191,94 @@ class AdminPanelActivity : AppCompatActivity() {
         saveLiveBroadcast(livePopup, R.string.admin_broadcast_sent_toast)
     }
 
-    private fun updateBroadcastImagePreview(imageUrl: String) {
-        if (imageUrl.isBlank()) {
+    private fun updateBroadcastImagePreview(imageSource: String) {
+        if (imageSource.isBlank()) {
             binding.cardBroadcastImagePreview.visibility = View.GONE
+            binding.btnBroadcastClearImage.visibility = View.GONE
             return
         }
+        binding.btnBroadcastClearImage.visibility = View.VISIBLE
         binding.cardBroadcastImagePreview.visibility = View.VISIBLE
-        binding.ivBroadcastImagePreview.load(imageUrl) {
-            crossfade(true)
-            listener(
-                onError = { _, _ ->
-                    binding.cardBroadcastImagePreview.visibility = View.GONE
-                },
-                onSuccess = { _, _ ->
-                    binding.cardBroadcastImagePreview.visibility = View.VISIBLE
-                }
+        binding.tvBroadcastImageStatus.text = if (com.example.ui.common.PopupImageHelper.isDataImageUri(imageSource)) {
+            getString(
+                R.string.admin_popup_image_uploaded_status,
+                com.example.ui.common.PopupImageHelper.approxKilobytes(imageSource)
             )
+        } else {
+            getString(R.string.admin_popup_image_url_status)
         }
+        com.example.ui.common.PopupImageHelper.loadPopupImage(
+            imageView = binding.ivBroadcastImagePreview,
+            rawSource = imageSource,
+            onSuccess = {
+                binding.cardBroadcastImagePreview.visibility = View.VISIBLE
+            },
+            onError = {
+                if (!com.example.ui.common.PopupImageHelper.isDataImageUri(imageSource)) {
+                    binding.cardBroadcastImagePreview.visibility = View.GONE
+                }
+            }
+        )
+    }
+
+    private fun updatePopupAdImagePreview(imageSource: String) {
+        if (imageSource.isBlank()) {
+            binding.cardPopupAdImagePreview.visibility = View.GONE
+            binding.btnPopupAdClearImage.visibility = View.GONE
+            return
+        }
+        binding.btnPopupAdClearImage.visibility = View.VISIBLE
+        binding.cardPopupAdImagePreview.visibility = View.VISIBLE
+        binding.tvPopupAdImageStatus.text = if (com.example.ui.common.PopupImageHelper.isDataImageUri(imageSource)) {
+            getString(
+                R.string.admin_popup_image_uploaded_status,
+                com.example.ui.common.PopupImageHelper.approxKilobytes(imageSource)
+            )
+        } else {
+            getString(R.string.admin_popup_image_url_status)
+        }
+        com.example.ui.common.PopupImageHelper.loadPopupImage(
+            imageView = binding.ivPopupAdImagePreview,
+            rawSource = imageSource,
+            onSuccess = {
+                binding.cardPopupAdImagePreview.visibility = View.VISIBLE
+            },
+            onError = {
+                if (!com.example.ui.common.PopupImageHelper.isDataImageUri(imageSource)) {
+                    binding.cardPopupAdImagePreview.visibility = View.GONE
+                }
+            }
+        )
+    }
+
+    private fun updateBannerImagePreview(imageSource: String) {
+        if (imageSource.isBlank()) {
+            binding.cardBannerAdImagePreview.visibility = View.GONE
+            binding.btnBannerAdClearImage.visibility = View.GONE
+            return
+        }
+        binding.btnBannerAdClearImage.visibility = View.VISIBLE
+        binding.cardBannerAdImagePreview.visibility = View.VISIBLE
+        binding.tvBannerAdImageStatus.text = if (com.example.ui.common.PopupImageHelper.isDataImageUri(imageSource)) {
+            getString(
+                R.string.admin_popup_image_uploaded_status,
+                com.example.ui.common.PopupImageHelper.approxKilobytes(imageSource)
+            )
+        } else {
+            getString(R.string.admin_popup_image_url_status)
+        }
+        com.example.ui.common.PopupImageHelper.loadPopupImage(
+            imageView = binding.ivBannerAdImagePreview,
+            rawSource = imageSource,
+            onSuccess = {
+                binding.cardBannerAdImagePreview.visibility = View.VISIBLE
+            },
+            onError = {
+                if (!com.example.ui.common.PopupImageHelper.isDataImageUri(imageSource)) {
+                    binding.cardBannerAdImagePreview.visibility = View.GONE
+                }
+            }
+        )
     }
 
     private fun showBroadcastPreviewDialog(broadcast: LiveBroadcast) {
@@ -1042,7 +1326,19 @@ class AdminPanelActivity : AppCompatActivity() {
                 else -> R.id.rb_popup_ad_trigger_both
             }
             binding.rgPopupAdTriggerMode.check(radioId)
-            binding.etPopupAdImageUrl.setText(ad.imageUrl)
+            checkPopupAdSizeChip(ad.normalizedPopupSize())
+
+            suppressImageUrlTextWatcher = true
+            if (com.example.ui.common.PopupImageHelper.isDataImageUri(ad.imageUrl)) {
+                uploadedPopupAdImageDataUri = ad.imageUrl
+                binding.etPopupAdImageUrl.setText("")
+            } else {
+                uploadedPopupAdImageDataUri = ""
+                binding.etPopupAdImageUrl.setText(ad.imageUrl)
+            }
+            suppressImageUrlTextWatcher = false
+            updatePopupAdImagePreview(ad.imageUrl)
+
             binding.etPopupAdTitle.setText(ad.title)
             binding.etPopupAdMessage.setText(ad.message)
             binding.etPopupAdButtonText.setText(ad.buttonText)
@@ -1051,11 +1347,12 @@ class AdminPanelActivity : AppCompatActivity() {
         }
     }
 
-    private fun publishCustomPopupAdFromInputs() {
+    private fun buildCustomPopupAdFromInputs(isForPreview: Boolean = false): CustomPopupAd? {
         val isEnabled = binding.switchPopupAdEnable.isChecked
         val showPremium = binding.switchPopupAdShowPremium.isChecked
         val triggerMode = selectedPopupAdTriggerMode()
-        val imageUrl = binding.etPopupAdImageUrl.text?.toString()?.trim().orEmpty()
+        val popupSize = selectedPopupAdSize()
+        val imageUrl = resolveEffectivePopupAdImage()
         val title = binding.etPopupAdTitle.text?.toString()?.trim().orEmpty()
         val message = binding.etPopupAdMessage.text?.toString()?.trim().orEmpty()
         val buttonText = binding.etPopupAdButtonText.text?.toString()?.trim()
@@ -1066,14 +1363,14 @@ class AdminPanelActivity : AppCompatActivity() {
             ?.coerceIn(0, CustomPopupAd.MAX_COUNTDOWN_SECONDS)
             ?: CustomPopupAd.DEFAULT_COUNTDOWN_SECONDS
 
-        if (isEnabled && title.isBlank() && message.isBlank() && imageUrl.isBlank()) {
+        if ((isEnabled || isForPreview) && title.isBlank() && message.isBlank() && imageUrl.isBlank()) {
             Toast.makeText(this, R.string.admin_popup_ad_validation_error, Toast.LENGTH_SHORT).show()
-            return
+            return null
         }
 
-        val updated = CustomPopupAd(
-            adId = "ad_${System.currentTimeMillis()}",
-            isEnabled = isEnabled,
+        return CustomPopupAd(
+            adId = if (isForPreview) "preview_${System.currentTimeMillis()}" else "ad_${System.currentTimeMillis()}",
+            isEnabled = if (isForPreview) true else isEnabled,
             showToPremiumUsers = showPremium,
             triggerMode = triggerMode,
             imageUrl = imageUrl,
@@ -1083,8 +1380,13 @@ class AdminPanelActivity : AppCompatActivity() {
             targetUrl = targetUrl,
             countdownSeconds = countdown,
             impressionsCount = currentCustomPopupAd.impressionsCount,
-            clicksCount = currentCustomPopupAd.clicksCount
+            clicksCount = currentCustomPopupAd.clicksCount,
+            popupSize = popupSize
         )
+    }
+
+    private fun publishCustomPopupAdFromInputs() {
+        val updated = buildCustomPopupAdFromInputs(isForPreview = false) ?: return
         val ok = RealtimeDatabaseSync.publishCustomPopupAd(updated, this)
         if (ok) {
             currentCustomPopupAd = updated
@@ -1146,25 +1448,41 @@ class AdminPanelActivity : AppCompatActivity() {
                 R.id.chip_broadcast_type_update
             }
         )
-        applyBroadcastTypeUi(resolvedType)
+        checkBroadcastPopupSizeChip(broadcast.normalizedPopupSize())
         updateBroadcastStatusHeader(broadcast)
 
         binding.etBroadcastTitle.setText(broadcast.title)
         binding.etBroadcastVersion.setText(broadcast.version)
         binding.etBroadcastMessage.setText(broadcast.message)
-        binding.etBroadcastImageUrl.setText(broadcast.imageUrl)
+
+        suppressImageUrlTextWatcher = true
+        if (com.example.ui.common.PopupImageHelper.isDataImageUri(broadcast.imageUrl)) {
+            uploadedBroadcastImageDataUri = broadcast.imageUrl
+            binding.etBroadcastImageUrl.setText("")
+        } else {
+            uploadedBroadcastImageDataUri = ""
+            binding.etBroadcastImageUrl.setText(broadcast.imageUrl)
+        }
+        if (com.example.ui.common.PopupImageHelper.isDataImageUri(broadcast.bannerImageUrl)) {
+            uploadedBannerImageDataUri = broadcast.bannerImageUrl
+            binding.etBannerAdImageUrl.setText("")
+        } else {
+            uploadedBannerImageDataUri = ""
+            binding.etBannerAdImageUrl.setText(broadcast.bannerImageUrl)
+        }
+        suppressImageUrlTextWatcher = false
+
+        applyBroadcastTypeUi(resolvedType)
         binding.etBroadcastBtnText.setText(broadcast.buttonText)
         binding.etBroadcastActionUrl.setText(broadcast.actionUrl)
         binding.switchBroadcastForceUpdate.isChecked = broadcast.isForceUpdateActive()
         binding.switchBroadcastCancelable.isChecked = !broadcast.isForceUpdateActive()
-        if (resolvedType == LiveBroadcast.TYPE_AD) {
-            updateBroadcastImagePreview(broadcast.imageUrl)
-        }
+        updateBroadcastImagePreview(broadcast.imageUrl)
 
         binding.switchBannerAdEnable.isChecked = broadcast.showBannerAd
         binding.etBannerAdText.setText(broadcast.bannerText)
-        binding.etBannerAdImageUrl.setText(broadcast.bannerImageUrl)
         binding.etBannerAdActionUrl.setText(broadcast.bannerActionUrl)
+        updateBannerImagePreview(broadcast.bannerImageUrl)
     }
 
     private fun setupTabsAndUiTab() {
@@ -1485,7 +1803,11 @@ class AdminPanelActivity : AppCompatActivity() {
                 payuPaymentLink = prefs.configuredPayuPaymentLink,
                 enableCustomGateway = prefs.enableCustomGateway,
                 customGatewayName = prefs.configuredCustomGatewayName,
-                customGatewayUrl = prefs.configuredCustomGatewayUrl
+                customGatewayUrl = prefs.configuredCustomGatewayUrl,
+                welcomeTitle = prefs.configuredWelcomeTitle,
+                welcomeTrialBadge = prefs.configuredWelcomeTrialBadge,
+                welcomeSubtitle = prefs.configuredWelcomeSubtitle,
+                welcomeButtonText = prefs.configuredWelcomeButtonText
             )
         )
 
@@ -1498,6 +1820,10 @@ class AdminPanelActivity : AppCompatActivity() {
         binding.etConfigPriceInr.setText(config.subscriptionPriceInr.toString())
         binding.etConfigUpiVpa.setText(config.upiVpa)
         binding.etConfigWhatsapp.setText(config.whatsappNumber)
+        binding.etConfigWelcomeTitle.setText(config.welcomeTitle)
+        binding.etConfigWelcomeBadge.setText(config.welcomeTrialBadge)
+        binding.etConfigWelcomeSubtitle.setText(config.welcomeSubtitle)
+        binding.etConfigWelcomeButton.setText(config.welcomeButtonText)
         binding.switchConfigSingleDevice.isChecked = config.enforceSingleDeviceTrial
         binding.switchConfigAllowRecording.isChecked = config.allowCallRecording
         binding.switchConfigAllowUtr.isChecked = config.allowManualUtr
@@ -1593,7 +1919,11 @@ class AdminPanelActivity : AppCompatActivity() {
             payuPaymentLink = payuLink,
             enableCustomGateway = enableCustom,
             customGatewayName = customName,
-            customGatewayUrl = customUrl
+            customGatewayUrl = customUrl,
+            welcomeTitle = binding.etConfigWelcomeTitle.text?.toString()?.trim().orEmpty().take(100),
+            welcomeTrialBadge = binding.etConfigWelcomeBadge.text?.toString()?.trim().orEmpty().take(100),
+            welcomeSubtitle = binding.etConfigWelcomeSubtitle.text?.toString()?.trim().orEmpty().take(400),
+            welcomeButtonText = binding.etConfigWelcomeButton.text?.toString()?.trim().orEmpty().take(80)
         )
 
         val desiredNightMode = if (binding.switchLocalDarkTheme.isChecked) {
@@ -1797,6 +2127,9 @@ class AdminPanelActivity : AppCompatActivity() {
             filter = currentPaymentFilter,
             query = currentPaymentQuery
         )
+        binding.tvAdminPaymentsCount.text = getString(R.string.admin_payments_count_format, filtered.size)
+        binding.btnAdminDeletePaymentHistory.isEnabled = filtered.isNotEmpty()
+        binding.btnAdminDeletePaymentHistory.alpha = if (filtered.isNotEmpty()) 1f else 0.45f
         binding.tvAdminPaymentsEmpty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
         paymentsAdapter.submitList(filtered)
     }
@@ -2594,10 +2927,36 @@ class AdminPanelActivity : AppCompatActivity() {
             context = this
         )
 
-        // 2. Immediate Admin UI removal
-        firestoreUsersById.remove(uid)
-        rtdbUsersById.remove(uid)
+        // 2. Immediate Admin UI removal (primary + email/device siblings + user's transactions)
+        val normEmail = user.email.trim().lowercase()
+        val normDevice = user.deviceHash.trim().lowercase().takeIf { it.length == 64 }.orEmpty()
+        val removedUserIds = mutableSetOf(uid)
+        fun shouldRemoveSiblingUser(candidate: UserEntitlement): Boolean {
+            if (candidate.uid == uid) return true
+            if (UpiPaymentHelper.isSuperAdminEmail(candidate.email)) return false
+            val emailMatch = normEmail.isNotEmpty() && candidate.email.trim().lowercase() == normEmail
+            val deviceMatch = normDevice.isNotEmpty() && candidate.deviceHash.trim().lowercase() == normDevice
+            return emailMatch || deviceMatch
+        }
+        firestoreUsersById.entries.removeAll { (k, v) ->
+            val remove = shouldRemoveSiblingUser(v)
+            if (remove) removedUserIds.add(k)
+            remove
+        }
+        rtdbUsersById.entries.removeAll { (k, v) ->
+            val remove = shouldRemoveSiblingUser(v)
+            if (remove) removedUserIds.add(k)
+            remove
+        }
+        fun shouldRemoveUserPayment(req: PaymentRequest): Boolean {
+            val uidMatch = req.userId in removedUserIds
+            val emailMatch = normEmail.isNotEmpty() && req.userEmail.trim().lowercase() == normEmail
+            return uidMatch || emailMatch
+        }
+        firestorePaymentsById.entries.removeAll { (_, req) -> shouldRemoveUserPayment(req) }
+        rtdbPaymentsById.entries.removeAll { (_, req) -> shouldRemoveUserPayment(req) }
         mergeAndPublishUsers()
+        mergeAndPublishPayments()
 
         // 3. Synchronize Firestore deletion
         lifecycleScope.launch {
@@ -2617,6 +2976,90 @@ class AdminPanelActivity : AppCompatActivity() {
             }
         }
         return true
+    }
+
+    private fun confirmDeletePaymentRequest(request: PaymentRequest) {
+        val label = request.userName.ifBlank { request.userEmail.ifBlank { request.userId } }
+        val utr = PaymentRepository.extractCanonicalUtr(request).ifBlank { "—" }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.admin_delete_payment_title)
+            .setMessage(getString(R.string.admin_delete_payment_message, label, request.amountInr, utr))
+            .setPositiveButton(R.string.admin_delete_payment_confirm) { _, _ ->
+                deleteSinglePaymentRequest(request)
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
+    }
+
+    private fun deleteSinglePaymentRequest(request: PaymentRequest) {
+        val id = request.id.trim()
+        if (id.isEmpty()) return
+        firestorePaymentsById.remove(id)
+        rtdbPaymentsById.remove(id)
+        mergeAndPublishPayments()
+
+        lifecycleScope.launch {
+            val result = paymentRepository.deletePaymentRequest(request, clearUtrLock = true)
+            result.onSuccess {
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    R.string.admin_delete_payment_success,
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { err ->
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun confirmClearPaymentHistory() {
+        val targets = AdminRepository.filterPaymentRequests(
+            requests = allPayments,
+            filter = currentPaymentFilter,
+            query = currentPaymentQuery
+        )
+        if (targets.isEmpty()) return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.admin_clear_payments_title)
+            .setMessage(getString(R.string.admin_clear_payments_message, targets.size))
+            .setPositiveButton(getString(R.string.admin_clear_payments_confirm, targets.size)) { _, _ ->
+                deletePaymentHistoryBatch(targets)
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
+    }
+
+    private fun deletePaymentHistoryBatch(targets: List<PaymentRequest>) {
+        if (targets.isEmpty()) return
+        targets.forEach { req ->
+            val id = req.id.trim()
+            if (id.isNotEmpty()) {
+                firestorePaymentsById.remove(id)
+                rtdbPaymentsById.remove(id)
+            }
+        }
+        mergeAndPublishPayments()
+
+        lifecycleScope.launch {
+            val result = paymentRepository.deletePaymentRequests(targets, clearUtrLocks = true)
+            result.onSuccess { count ->
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_clear_payments_success, count),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { err ->
+                Toast.makeText(
+                    this@AdminPanelActivity,
+                    getString(R.string.admin_action_failed, err.localizedMessage ?: "Error"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private fun handleApprovePayment(request: PaymentRequest) {

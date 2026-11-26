@@ -16,10 +16,12 @@
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/top_app_bar"
             android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
+            android:layout_height="50dp"
+            android:minHeight="50dp"
             app:navigationContentDescription="@string/call_detail_navigate_up"
             app:navigationIcon="@drawable/ic_arrow_back"
             app:title="@string/call_detail_title"
+            app:titleTextAppearance="@style/TextAppearance.PulseDial.ToolbarTitle"
             app:titleTextColor="@color/md_theme_onSurface" />
     </com.google.android.material.appbar.AppBarLayout>
 
@@ -34,25 +36,25 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingHorizontal="16dp"
-            android:paddingTop="12dp"
-            android:paddingBottom="28dp">
+            android:paddingHorizontal="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="22dp">
 
             <!-- Caller Info Header Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 app:cardBackgroundColor="@color/md_theme_surface"
-                app:cardCornerRadius="20dp"
+                app:cardCornerRadius="16dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/md_theme_outline"
-                app:strokeWidth="1dp">
+                app:strokeWidth="0.75dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="20dp">
+                    android:padding="14dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -62,18 +64,19 @@
 
                         <TextView
                             android:id="@+id/tv_detail_avatar"
-                            android:layout_width="64dp"
-                            android:layout_height="64dp"
+                            android:layout_width="50dp"
+                            android:layout_height="50dp"
                             android:background="@drawable/bg_circle_avatar"
                             android:gravity="center"
-                            android:textAppearance="@style/TextAppearance.Material3.HeadlineSmall"
+                            android:includeFontPadding="false"
                             android:textColor="@color/md_theme_onPrimaryContainer"
+                            android:textSize="19sp"
                             android:textStyle="bold" />
 
                         <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="16dp"
+                            android:layout_marginStart="12dp"
                             android:layout_weight="1"
                             android:orientation="vertical">
 
@@ -84,22 +87,22 @@
                                 android:ellipsize="end"
                                 android:maxLines="2"
                                 android:text="@string/detail_unsaved_number"
-                                android:textAppearance="@style/TextAppearance.Material3.HeadlineSmall"
                                 android:textColor="@color/md_theme_onSurface"
+                                android:textSize="18sp"
                                 android:textStyle="bold" />
 
                             <TextView
                                 android:id="@+id/tv_detail_number"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="4dp"
-                                android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-                                android:textColor="@color/md_theme_onSurfaceVariant" />
+                                android:layout_marginTop="2dp"
+                                android:textColor="@color/md_theme_onSurfaceVariant"
+                                android:textSize="13.5sp" />
 
                             <LinearLayout
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="8dp"
+                                android:layout_marginTop="6dp"
                                 android:gravity="center_vertical"
                                 android:orientation="horizontal">
 
@@ -145,11 +148,14 @@
                         android:id="@+id/btn_save_contact"
                         style="@style/Widget.Material3.Button"
                         android:layout_width="match_parent"
-                        android:layout_height="52dp"
-                        android:layout_marginTop="16dp"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="12dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
                         android:text="@string/call_detail_save_contact_button"
+                        android:textSize="13.5sp"
                         app:backgroundTint="@color/md_theme_primary"
-                        app:cornerRadius="14dp"
+                        app:cornerRadius="12dp"
                         app:icon="@drawable/ic_person_add"
                         app:iconGravity="textStart" />
                 </LinearLayout>
@@ -160,18 +166,18 @@
                 android:id="@+id/card_caller_identification"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="10dp"
                 app:cardBackgroundColor="@color/md_theme_surface"
-                app:cardCornerRadius="20dp"
+                app:cardCornerRadius="16dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/md_theme_outline"
-                app:strokeWidth="1dp">
+                app:strokeWidth="0.75dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="13dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -631,18 +637,18 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="10dp"
                 app:cardBackgroundColor="@color/md_theme_surface"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="16dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/md_theme_outline"
-                app:strokeWidth="1dp">
+                app:strokeWidth="0.75dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="13dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"

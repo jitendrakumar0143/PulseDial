@@ -25,7 +25,8 @@ import kotlinx.coroutines.flow.map
 class PaymentRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth,
-    private val fallbackUidProvider: () -> String? = { null }
+    private val fallbackUidProvider: () -> String? = { null },
+    private val appContext: Context? = null
 ) {
 
     constructor(context: Context) : this(
@@ -33,7 +34,8 @@ class PaymentRepository(
             context.applicationContext.getString(R.string.firestore_database_id)
         ),
         auth = Firebase.auth,
-        fallbackUidProvider = { GoogleAuthHelper.resolveActiveUid(context.applicationContext) }
+        fallbackUidProvider = { GoogleAuthHelper.resolveActiveUid(context.applicationContext) },
+        appContext = context.applicationContext
     )
 
     private fun requireUserId(): String {
@@ -597,6 +599,108 @@ class PaymentRepository(
             }
             val actualError = firestoreError ?: e
             handleFirestoreError(actualError, OperationType.UPDATE, reqRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    /**
+     * Permanently deletes a single payment transaction from both Firebase RTDB and Firestore
+     * (plus its approved_utrs lock if requested). Admin-only operation enforced by Firestore rules.
+     */
+    suspend fun deletePaymentRequest(
+        request: PaymentRequest,
+        clearUtrLock: Boolean = true
+    ): Result<Unit> {
+        try {
+            requireUserId()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        val cleanId = request.id.trim()
+        require(cleanId.isNotBlank()) { "Payment request ID must not be blank" }
+
+        val utrKey = if (clearUtrLock) normalizeUtrKey(extractCanonicalUtr(request)) else ""
+        val reqRef = db.collection(COLLECTION_PAYMENT_REQUESTS).document(cleanId)
+
+        return try {
+            RealtimeDatabaseSync.deletePaymentRequest(
+                requestId = cleanId,
+                utrKey = utrKey,
+                context = appContext
+            )
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(Unit)
+            }
+            reqRef.delete().awaitTask()
+            if (utrKey.isNotEmpty()) {
+                runCatching {
+                    db.collection(COLLECTION_APPROVED_UTRS).document(utrKey).delete().awaitTask()
+                }
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                return Result.success(Unit)
+            }
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.DELETE, reqRef.path, auth)
+            Result.failure(actualError)
+        }
+    }
+
+    /**
+     * Permanently deletes a list of payment transactions from both Firebase RTDB and Firestore
+     * in chunked batches (safe for Firestore's 500-write batch limit).
+     */
+    suspend fun deletePaymentRequests(
+        requests: List<PaymentRequest>,
+        clearUtrLocks: Boolean = true
+    ): Result<Int> {
+        try {
+            requireUserId()
+        } catch (e: Exception) {
+            return Result.failure(e)
+        }
+        val validRequests = requests.filter { it.id.isNotBlank() }.distinctBy { it.id.trim() }
+        if (validRequests.isEmpty()) return Result.success(0)
+
+        return try {
+            RealtimeDatabaseSync.deletePaymentRequests(
+                requests = validRequests,
+                clearUtrLocks = clearUtrLocks,
+                context = appContext
+            )
+            if (runCatching { auth.currentUser }.getOrNull() == null) {
+                return Result.success(validRequests.size)
+            }
+            val refsToDelete = mutableListOf<com.google.firebase.firestore.DocumentReference>()
+            val seenUtrs = mutableSetOf<String>()
+            for (req in validRequests) {
+                refsToDelete.add(db.collection(COLLECTION_PAYMENT_REQUESTS).document(req.id.trim()))
+                if (clearUtrLocks) {
+                    val utrKey = normalizeUtrKey(extractCanonicalUtr(req))
+                    if (utrKey.isNotEmpty() && seenUtrs.add(utrKey)) {
+                        refsToDelete.add(db.collection(COLLECTION_APPROVED_UTRS).document(utrKey))
+                    }
+                }
+            }
+            for (chunk in refsToDelete.chunked(400)) {
+                val batch = db.batch()
+                chunk.forEach { ref -> batch.delete(ref) }
+                batch.commit().awaitTask()
+            }
+            Result.success(validRequests.size)
+        } catch (e: Exception) {
+            val firestoreError = generateSequence<Throwable>(e) { it.cause }
+                .filterIsInstance<FirebaseFirestoreException>()
+                .firstOrNull()
+            if (firestoreError == null && e is CancellationException) throw e
+            val actualError = firestoreError ?: e
+            handleFirestoreError(actualError, OperationType.DELETE, COLLECTION_PAYMENT_REQUESTS, auth)
             Result.failure(actualError)
         }
     }

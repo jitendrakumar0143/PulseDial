@@ -13,20 +13,20 @@
         android:clickable="true"
         android:focusable="true"
         android:gravity="center_vertical"
-        android:minHeight="72dp"
+        android:minHeight="54dp"
         android:orientation="horizontal"
-        android:paddingHorizontal="16dp"
-        android:paddingVertical="14dp">
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="9dp">
 
         <FrameLayout
-            android:layout_width="42dp"
-            android:layout_height="42dp"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
             android:background="@drawable/bg_icon_pill_tonal">
 
             <ImageView
                 android:id="@+id/iv_setting_icon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
                 android:layout_gravity="center"
                 android:contentDescription="@null"
                 app:tint="@color/md_theme_primary" />
@@ -35,7 +35,7 @@
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="14dp"
+            android:layout_marginStart="11dp"
             android:layout_weight="1"
             android:orientation="vertical">
 
@@ -43,17 +43,18 @@
                 android:id="@+id/tv_setting_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                android:includeFontPadding="false"
                 android:textColor="@color/md_theme_onSurface"
+                android:textSize="14sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tv_setting_desc"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-                android:textColor="@color/md_theme_onSurfaceVariant" />
+                android:layout_marginTop="2dp"
+                android:textColor="@color/md_theme_onSurfaceVariant"
+                android:textSize="11.5sp" />
         </LinearLayout>
 
         <com.google.android.material.materialswitch.MaterialSwitch
@@ -69,5 +70,5 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         app:dividerColor="@color/md_theme_surfaceVariant"
-        app:dividerInsetStart="72dp" />
+        app:dividerInsetStart="56dp" />
 </LinearLayout>

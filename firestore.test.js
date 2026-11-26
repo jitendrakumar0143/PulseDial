@@ -798,20 +798,47 @@ test("Verified Admin can permanently clean up user payment_requests and device_t
     })
   );
 
-  // Verified Admin CAN push Custom Ad Popup with popupType = "ad"
+  // Verified Admin CAN push Custom Ad Popup with popupType = "ad", popupSize = "fullscreen", and uploaded Base64 image
+  const sampleDataUri = "data:image/jpeg;base64," + "A".repeat(2048);
   await assertSucceeds(
     adminDb.collection("app_config").doc("live_broadcast").set({
       showPopup: true,
       popupId: "popup_1700000000002",
       popupType: "ad",
+      popupSize: "fullscreen",
       version: "",
       forceUpdate: false,
       showOnce: true,
       title: "Special Offer",
       message: "Check out our new launch!",
-      imageUrl: "https://example.com/ad.png",
+      imageUrl: sampleDataUri,
       buttonText: "Check Now",
       actionUrl: "https://example.com/offer",
+      isCancelable: true,
+      showBannerAd: false,
+      bannerText: "",
+      bannerImageUrl: sampleDataUri,
+      bannerActionUrl: "",
+      updatedByUid: ADMIN_UID,
+      updatedAt: ts,
+    })
+  );
+
+  // Invalid popupSize must fail validation
+  await assertFails(
+    adminDb.collection("app_config").doc("live_broadcast").set({
+      showPopup: true,
+      popupId: "popup_bad_size",
+      popupType: "ad",
+      popupSize: "enormous",
+      version: "",
+      forceUpdate: false,
+      showOnce: true,
+      title: "Bad Size",
+      message: "",
+      imageUrl: "",
+      buttonText: "Go",
+      actionUrl: "",
       isCancelable: true,
       showBannerAd: false,
       bannerText: "",
@@ -850,3 +877,106 @@ test("Verified Admin can permanently clean up user payment_requests and device_t
   await assertFails(aliceDb.collection("app_config").doc("live_broadcast").delete());
   await assertSucceeds(adminDb.collection("app_config").doc("live_broadcast").delete());
 });
+
+test("Welcome screen customization: zero-secret welcome_screen is readable pre-auth while global_settings stays auth-gated; admin can delete approved_utrs", async () => {
+  const ts = pastDate();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: "jitendrakumar888126@gmail.com",
+    email_verified: true,
+  }).firestore();
+
+  // Admin writes global_settings with welcome text AND zero-secret welcome_screen mirror
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("global_settings").set({
+      trialDays: 14,
+      subscriptionPriceInr: 199,
+      upiVpa: "elx@ptaxis",
+      whatsappNumber: "9012634797",
+      enforceSingleDeviceTrial: true,
+      allowCallRecording: true,
+      allowManualUtr: true,
+      maintenanceMode: false,
+      maintenanceMessage: "",
+      announcementText: "",
+      welcomeTitle: "Welcome to PulseDial Pro",
+      welcomeTrialBadge: "14-Day Free Trial • Special Launch",
+      welcomeSubtitle: "Try 14 days free, then just ₹199/month.",
+      welcomeButtonText: "Continue with Google",
+      updatedByUid: ADMIN_UID,
+      updatedAt: ts,
+    })
+  );
+
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("welcome_screen").set({
+      trialDays: 14,
+      subscriptionPriceInr: 199,
+      welcomeTitle: "Welcome to PulseDial Pro",
+      welcomeTrialBadge: "14-Day Free Trial • Special Launch",
+      welcomeSubtitle: "Try 14 days free, then just ₹199/month.",
+      welcomeButtonText: "Continue with Google",
+      updatedByUid: ADMIN_UID,
+      updatedAt: ts,
+    })
+  );
+
+  // Unauthenticated user CAN read public welcome_screen, CANNOT read global_settings, CANNOT write welcome_screen
+  await assertSucceeds(unauthDb.collection("app_config").doc("welcome_screen").get());
+  await assertFails(unauthDb.collection("app_config").doc("global_settings").get());
+  await assertFails(
+    unauthDb.collection("app_config").doc("welcome_screen").set({
+      trialDays: 99,
+      subscriptionPriceInr: 1,
+      welcomeTitle: "Hacked",
+      welcomeTrialBadge: "",
+      welcomeSubtitle: "",
+      welcomeButtonText: "",
+      updatedByUid: ADMIN_UID,
+      updatedAt: ts,
+    })
+  );
+
+  // Regular signed-in user CANNOT write welcome_screen or include secret keys in welcome_screen
+  await assertFails(
+    aliceDb.collection("app_config").doc("welcome_screen").set({
+      trialDays: 14,
+      subscriptionPriceInr: 199,
+      welcomeTitle: "Hacked",
+      welcomeTrialBadge: "",
+      welcomeSubtitle: "",
+      welcomeButtonText: "",
+      updatedByUid: ALICE_UID,
+      updatedAt: ts,
+    })
+  );
+  await assertFails(
+    adminDb.collection("app_config").doc("welcome_screen").set({
+      trialDays: 14,
+      subscriptionPriceInr: 199,
+      welcomeTitle: "Valid",
+      welcomeTrialBadge: "",
+      welcomeSubtitle: "",
+      welcomeButtonText: "",
+      razorpayKeyId: "rzp_secret_leak",
+      updatedByUid: ADMIN_UID,
+      updatedAt: ts,
+    })
+  );
+
+  // Admin can create and permanently delete approved_utrs during transaction/user purge; non-admin cannot
+  await assertSucceeds(
+    adminDb.collection("approved_utrs").doc("412345678901").set({
+      utr: "412345678901",
+      rawUtr: "412345678901",
+      userId: ALICE_UID,
+      requestId: "pay_alice_1",
+      approvedByUid: ADMIN_UID,
+      approvedAt: ts,
+    })
+  );
+  await assertFails(aliceDb.collection("approved_utrs").doc("412345678901").delete());
+  await assertSucceeds(adminDb.collection("approved_utrs").doc("412345678901").delete());
+});
+

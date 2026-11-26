@@ -24,7 +24,7 @@
             app:title="@string/admin_control_title"
             app:titleTextColor="@color/md_theme_onSurface" />
 
-        <!-- Compact Live KPI Strip -->
+        <!-- Compact Interactive KPI Strip (1-Tap Tab Shortcuts) -->
         <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -34,58 +34,74 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:paddingHorizontal="16dp"
-                android:paddingBottom="10dp">
+                android:paddingHorizontal="14dp"
+                android:paddingBottom="6dp">
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_kpi_users"
                     style="@style/Widget.Material3.Chip.Assist"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:clickable="false"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
                     app:chipBackgroundColor="@color/md_theme_primaryContainer"
-                    app:chipStrokeWidth="0dp" />
+                    app:chipMinHeight="32dp"
+                    app:chipStrokeWidth="0dp"
+                    app:ensureMinTouchTargetSize="false" />
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_kpi_premium"
                     style="@style/Widget.Material3.Chip.Assist"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="6dp"
                     android:clickable="true"
                     android:focusable="true"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
                     app:chipBackgroundColor="@color/premium_badge_bg"
-                    app:chipStrokeWidth="0dp" />
+                    app:chipMinHeight="32dp"
+                    app:chipStrokeWidth="0dp"
+                    app:ensureMinTouchTargetSize="false" />
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_kpi_expiring"
                     style="@style/Widget.Material3.Chip.Assist"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="6dp"
                     android:clickable="true"
                     android:focusable="true"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
                     app:chipBackgroundColor="@color/md_theme_errorContainer"
-                    app:chipStrokeWidth="0dp" />
+                    app:chipMinHeight="32dp"
+                    app:chipStrokeWidth="0dp"
+                    app:ensureMinTouchTargetSize="false" />
 
                 <com.google.android.material.chip.Chip
                     android:id="@+id/chip_kpi_pending"
                     style="@style/Widget.Material3.Chip.Assist"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:clickable="false"
+                    android:layout_marginStart="6dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
                     app:chipBackgroundColor="@color/md_theme_secondaryContainer"
-                    app:chipStrokeWidth="0dp" />
+                    app:chipMinHeight="32dp"
+                    app:chipStrokeWidth="0dp"
+                    app:ensureMinTouchTargetSize="false" />
             </LinearLayout>
         </HorizontalScrollView>
 
         <com.google.android.material.tabs.TabLayout
             android:id="@+id/admin_tab_layout"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="44dp"
             android:background="@color/md_theme_surface"
             app:tabIndicatorColor="@color/md_theme_primary"
+            app:tabIndicatorFullWidth="false"
+            app:tabIndicatorHeight="3dp"
             app:tabMode="scrollable"
             app:tabSelectedTextColor="@color/md_theme_primary"
             app:tabTextColor="@color/md_theme_onSurfaceVariant">
@@ -127,14 +143,14 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <!-- TAB 1: ALL USERS + ALL USER FILTERS -->
+        <!-- TAB 0: CLEAN USERS LIST -->
         <LinearLayout
             android:id="@+id/container_admin_users"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:paddingHorizontal="16dp"
-            android:paddingTop="12dp">
+            android:paddingHorizontal="14dp"
+            android:paddingTop="10dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -143,14 +159,14 @@
                 android:orientation="horizontal">
 
                 <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    app:boxBackgroundMode="outline"
-                    app:boxCornerRadiusBottomEnd="16dp"
-                    app:boxCornerRadiusBottomStart="16dp"
-                    app:boxCornerRadiusTopEnd="16dp"
-                    app:boxCornerRadiusTopStart="16dp"
+                    app:boxCornerRadiusBottomEnd="14dp"
+                    app:boxCornerRadiusBottomStart="14dp"
+                    app:boxCornerRadiusTopEnd="14dp"
+                    app:boxCornerRadiusTopStart="14dp"
                     app:endIconMode="clear_text"
                     app:startIconDrawable="@drawable/ic_search">
 
@@ -161,85 +177,29 @@
                         android:hint="@string/admin_search_users_hint"
                         android:imeOptions="actionSearch"
                         android:inputType="text"
-                        android:maxLines="1" />
+                        android:maxLines="1"
+                        android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_admin_add_user"
                     style="@style/Widget.Material3.Button"
                     android:layout_width="wrap_content"
-                    android:layout_height="52dp"
+                    android:layout_height="48dp"
                     android:layout_marginStart="8dp"
                     android:contentDescription="@string/admin_add_user_title"
+                    android:minWidth="0dp"
+                    android:paddingHorizontal="14dp"
                     android:text="@string/admin_add_user_btn"
-                    app:cornerRadius="16dp"
+                    app:cornerRadius="14dp"
                     app:icon="@drawable/ic_person_add" />
             </LinearLayout>
 
+            <!-- Single Clean Row: Status Chips + Date Filter Toggle -->
             <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:scrollbars="none">
-
-                <com.google.android.material.chip.ChipGroup
-                    android:id="@+id/chip_group_user_filter"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    app:checkedChip="@id/chip_user_filter_all"
-                    app:selectionRequired="true"
-                    app:singleLine="true"
-                    app:singleSelection="true">
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_user_filter_all"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_all" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_user_filter_expiring"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_expiring" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_user_filter_trial"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_trial_active" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_user_filter_expired"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_expired" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_user_filter_premium"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_premium" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_user_filter_blocked"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_blocked" />
-                </com.google.android.material.chip.ChipGroup>
-            </HorizontalScrollView>
-
-            <!-- DATE FILTER BAR FOR USERS (Join Date / Expiry Date + Range Presets & Calendar Picker) -->
-            <HorizontalScrollView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:scrollbars="none">
 
                 <LinearLayout
@@ -249,76 +209,209 @@
                     android:orientation="horizontal">
 
                     <com.google.android.material.chip.Chip
-                        android:id="@+id/chip_date_field_toggle"
+                        android:id="@+id/btn_toggle_user_date_filters"
                         style="@style/Widget.Material3.Chip.Assist"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginEnd="8dp"
-                        android:text="📅 By: Join Date"
+                        android:layout_marginEnd="6dp"
+                        android:text="@string/admin_users_date_filter_btn"
                         app:chipBackgroundColor="@color/md_theme_secondaryContainer"
-                        app:chipStrokeWidth="0dp" />
+                        app:chipMinHeight="34dp"
+                        app:chipStrokeWidth="0dp"
+                        app:ensureMinTouchTargetSize="false" />
 
                     <com.google.android.material.chip.ChipGroup
-                        android:id="@+id/chip_group_user_date_filter"
+                        android:id="@+id/chip_group_user_filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        app:checkedChip="@id/chip_user_filter_all"
                         app:selectionRequired="true"
                         app:singleLine="true"
                         app:singleSelection="true">
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chip_date_filter_all"
+                            android:id="@+id/chip_user_filter_all"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:checked="true"
-                            android:text="All Dates" />
+                            android:text="@string/admin_filter_all"
+                            app:chipMinHeight="34dp"
+                            app:ensureMinTouchTargetSize="false" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chip_date_filter_today"
+                            android:id="@+id/chip_user_filter_premium"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Today" />
+                            android:text="@string/admin_filter_premium"
+                            app:chipMinHeight="34dp"
+                            app:ensureMinTouchTargetSize="false" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chip_date_filter_7d"
+                            android:id="@+id/chip_user_filter_trial"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Last 7 Days" />
+                            android:text="@string/admin_filter_trial_active"
+                            app:chipMinHeight="34dp"
+                            app:ensureMinTouchTargetSize="false" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chip_date_filter_30d"
+                            android:id="@+id/chip_user_filter_expiring"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Last 30 Days" />
+                            android:text="@string/admin_filter_expiring"
+                            app:chipMinHeight="34dp"
+                            app:ensureMinTouchTargetSize="false" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chip_date_filter_custom"
+                            android:id="@+id/chip_user_filter_expired"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Custom Date Range" />
+                            android:text="@string/admin_filter_expired"
+                            app:chipMinHeight="34dp"
+                            app:ensureMinTouchTargetSize="false" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chip_user_filter_blocked"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/admin_filter_blocked"
+                            app:chipMinHeight="34dp"
+                            app:ensureMinTouchTargetSize="false" />
                     </com.google.android.material.chip.ChipGroup>
                 </LinearLayout>
             </HorizontalScrollView>
 
-            <TextView
-                android:id="@+id/tv_admin_user_date_summary"
+            <!-- Collapsible Date Filters Drawer (Hidden by default to keep Users list clean & roomy) -->
+            <LinearLayout
+                android:id="@+id/layout_user_date_filters"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="Showing all users • Tap 'By: Join Date' to switch between Join Date &amp; Expiry Date"
-                android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
-                android:textColor="@color/md_theme_onSurfaceVariant" />
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_admin_meta_pill"
+                android:orientation="vertical"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="6dp"
+                android:visibility="gone">
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chip_date_field_toggle"
+                            style="@style/Widget.Material3.Chip.Assist"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="6dp"
+                            android:text="📅 By: Join Date"
+                            app:chipBackgroundColor="@color/md_theme_secondaryContainer"
+                            app:chipMinHeight="32dp"
+                            app:chipStrokeWidth="0dp"
+                            app:ensureMinTouchTargetSize="false" />
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/chip_group_user_date_filter"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:selectionRequired="true"
+                            app:singleLine="true"
+                            app:singleSelection="true">
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_date_filter_all"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true"
+                                android:text="All Dates"
+                                app:chipMinHeight="32dp"
+                                app:ensureMinTouchTargetSize="false" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_date_filter_today"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Today"
+                                app:chipMinHeight="32dp"
+                                app:ensureMinTouchTargetSize="false" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_date_filter_7d"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="7 Days"
+                                app:chipMinHeight="32dp"
+                                app:ensureMinTouchTargetSize="false" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_date_filter_30d"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="30 Days"
+                                app:chipMinHeight="32dp"
+                                app:ensureMinTouchTargetSize="false" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_date_filter_custom"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Custom"
+                                app:chipMinHeight="32dp"
+                                app:ensureMinTouchTargetSize="false" />
+                        </com.google.android.material.chip.ChipGroup>
+                    </LinearLayout>
+                </HorizontalScrollView>
+            </LinearLayout>
+
+            <!-- Compact Live Count & Hint Line -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_admin_user_date_summary"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+                    android:textColor="@color/md_theme_onSurfaceVariant" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/admin_users_expand_hint"
+                    android:textColor="@color/md_theme_primary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/tv_admin_users_empty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="32dp"
                 android:gravity="center"
                 android:text="@string/admin_users_empty"
                 android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
@@ -329,113 +422,122 @@
                 android:id="@+id/recycler_admin_users"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:layout_weight="1"
                 android:clipToPadding="false"
                 android:paddingBottom="24dp" />
         </LinearLayout>
 
-        <!-- TAB 2: EXPIRING & ACTIVE SUBSCRIBERS (SEARCH + RADIO FILTER + FIRESTORE QUERY) -->
+        <!-- TAB 1: CLEAN SUBSCRIBERS LIST (EXPIRING / ACTIVE PRO / EXPIRED / TRIAL) -->
         <LinearLayout
             android:id="@+id/container_admin_expiring"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:paddingHorizontal="16dp"
-            android:paddingTop="12dp"
+            android:paddingHorizontal="14dp"
+            android:paddingTop="10dp"
             android:visibility="gone">
 
-            <com.google.android.material.textfield.TextInputLayout
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:boxBackgroundMode="outline"
-                app:boxCornerRadiusBottomEnd="16dp"
-                app:boxCornerRadiusBottomStart="16dp"
-                app:boxCornerRadiusTopEnd="16dp"
-                app:boxCornerRadiusTopStart="16dp"
-                app:endIconMode="clear_text"
-                app:startIconDrawable="@drawable/ic_search">
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/et_admin_expiring_search"
-                    android:layout_width="match_parent"
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:hint="@string/admin_search_subscribers_hint"
-                    android:imeOptions="actionSearch"
-                    android:inputType="text"
-                    android:maxLines="1" />
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:layout_weight="1"
+                    app:boxCornerRadiusBottomEnd="14dp"
+                    app:boxCornerRadiusBottomStart="14dp"
+                    app:boxCornerRadiusTopEnd="14dp"
+                    app:boxCornerRadiusTopStart="14dp"
+                    app:endIconMode="clear_text"
+                    app:startIconDrawable="@drawable/ic_search">
 
-            <com.google.android.material.card.MaterialCardView
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/et_admin_expiring_search"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/admin_search_subscribers_hint"
+                        android:imeOptions="actionSearch"
+                        android:inputType="text"
+                        android:maxLines="1"
+                        android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_refresh_expiring"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="0dp"
+                    android:paddingHorizontal="14dp"
+                    android:text="@string/admin_expiring_refresh"
+                    app:cornerRadius="14dp" />
+            </LinearLayout>
+
+            <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                app:cardBackgroundColor="@color/md_theme_surface"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp"
-                app:strokeColor="@color/md_theme_outline"
-                app:strokeWidth="1dp">
+                android:layout_marginTop="6dp"
+                android:scrollbars="none">
 
-                <HorizontalScrollView
-                    android:layout_width="match_parent"
+                <RadioGroup
+                    android:id="@+id/rg_admin_subscriber_filter"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:scrollbars="none">
+                    android:orientation="horizontal">
 
-                    <RadioGroup
-                        android:id="@+id/rg_admin_subscriber_filter"
+                    <com.google.android.material.radiobutton.MaterialRadioButton
+                        android:id="@+id/rb_subscriber_expiring_soon"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:paddingHorizontal="10dp"
-                        android:paddingVertical="4dp">
+                        android:checked="true"
+                        android:minHeight="40dp"
+                        android:paddingEnd="12dp"
+                        android:text="@string/admin_filter_radio_expiring_soon"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
 
-                        <com.google.android.material.radiobutton.MaterialRadioButton
-                            android:id="@+id/rb_subscriber_expiring_soon"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true"
-                            android:minHeight="48dp"
-                            android:paddingEnd="12dp"
-                            android:text="@string/admin_filter_radio_expiring_soon"
-                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
+                    <com.google.android.material.radiobutton.MaterialRadioButton
+                        android:id="@+id/rb_subscriber_all_active"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
+                        android:paddingEnd="12dp"
+                        android:text="@string/admin_filter_radio_all_active"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
 
-                        <com.google.android.material.radiobutton.MaterialRadioButton
-                            android:id="@+id/rb_subscriber_all_active"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:paddingEnd="12dp"
-                            android:text="@string/admin_filter_radio_all_active"
-                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
+                    <com.google.android.material.radiobutton.MaterialRadioButton
+                        android:id="@+id/rb_subscriber_old_expired"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
+                        android:paddingEnd="12dp"
+                        android:text="@string/admin_filter_radio_old_expired"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
 
-                        <com.google.android.material.radiobutton.MaterialRadioButton
-                            android:id="@+id/rb_subscriber_old_expired"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:paddingEnd="12dp"
-                            android:text="@string/admin_filter_radio_old_expired"
-                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
+                    <com.google.android.material.radiobutton.MaterialRadioButton
+                        android:id="@+id/rb_subscriber_new_trial"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
+                        android:paddingEnd="6dp"
+                        android:text="@string/admin_filter_radio_new_trial"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
+                </RadioGroup>
+            </HorizontalScrollView>
 
-                        <com.google.android.material.radiobutton.MaterialRadioButton
-                            android:id="@+id/rb_subscriber_new_trial"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:minHeight="48dp"
-                            android:paddingEnd="8dp"
-                            android:text="@string/admin_filter_radio_new_trial"
-                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
-                    </RadioGroup>
-                </HorizontalScrollView>
-            </com.google.android.material.card.MaterialCardView>
-
+            <!-- Compact 1-Line Subscriber Status Strip -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/card_subscriber_summary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="4dp"
                 app:cardBackgroundColor="@color/md_theme_errorContainer"
-                app:cardCornerRadius="18dp"
+                app:cardCornerRadius="12dp"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/md_theme_error"
                 app:strokeWidth="1dp">
@@ -443,54 +545,37 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="14dp">
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="8dp">
 
-                    <LinearLayout
-                        android:layout_width="match_parent"
+                    <TextView
+                        android:id="@+id/tv_subscriber_banner_title"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/admin_expiring_banner_title"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                        android:textColor="@color/md_theme_onErrorContainer"
+                        android:textStyle="bold" />
 
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:id="@+id/tv_subscriber_banner_title"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/admin_expiring_banner_title"
-                                android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
-                                android:textColor="@color/md_theme_onErrorContainer" />
-
-                            <TextView
-                                android:id="@+id/tv_expiring_query_count"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
-                                android:textColor="@color/md_theme_onErrorContainer" />
-                        </LinearLayout>
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btn_refresh_expiring"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="48dp"
-                            android:text="@string/admin_expiring_refresh" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/tv_expiring_query_count"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                        android:textColor="@color/md_theme_onErrorContainer"
+                        android:textStyle="bold" />
 
                     <TextView
                         android:id="@+id/tv_subscriber_banner_desc"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="@string/admin_expiring_banner_desc"
-                        android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-                        android:textColor="@color/md_theme_onErrorContainer" />
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="gone" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -498,7 +583,7 @@
                 android:id="@+id/progress_admin_expiring"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="6dp"
                 android:indeterminate="true"
                 android:visibility="gone" />
 
@@ -517,50 +602,30 @@
                 android:id="@+id/recycler_admin_expiring"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:layout_weight="1"
                 android:clipToPadding="false"
                 android:paddingBottom="24dp" />
         </LinearLayout>
 
-        <!-- TAB 2: ALL PAYMENT REQUESTS (APPROVE & DISAPPROVE + FILTER) -->
+        <!-- TAB 2: CLEAN DEPOSITS / PAYMENT REQUESTS LIST -->
         <LinearLayout
             android:id="@+id/container_admin_payments"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:paddingHorizontal="16dp"
-            android:paddingTop="12dp"
+            android:paddingHorizontal="14dp"
+            android:paddingTop="10dp"
             android:visibility="gone">
 
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="10dp"
-                app:cardBackgroundColor="@color/md_theme_surface"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp"
-                app:strokeColor="@color/md_theme_outline"
-                app:strokeWidth="1dp">
-
-                <com.google.android.material.materialswitch.MaterialSwitch
-                    android:id="@+id/switch_admin_hide_sub_ui"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:minHeight="48dp"
-                    android:paddingHorizontal="14dp"
-                    android:paddingVertical="8dp"
-                    android:text="@string/admin_hide_sub_ui_global" />
-            </com.google.android.material.card.MaterialCardView>
-
             <com.google.android.material.textfield.TextInputLayout
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:boxBackgroundMode="outline"
-                app:boxCornerRadiusBottomEnd="16dp"
-                app:boxCornerRadiusBottomStart="16dp"
-                app:boxCornerRadiusTopEnd="16dp"
-                app:boxCornerRadiusTopStart="16dp"
+                app:boxCornerRadiusBottomEnd="14dp"
+                app:boxCornerRadiusBottomStart="14dp"
+                app:boxCornerRadiusTopEnd="14dp"
+                app:boxCornerRadiusTopStart="14dp"
                 app:endIconMode="clear_text"
                 app:startIconDrawable="@drawable/ic_search">
 
@@ -571,13 +636,14 @@
                     android:hint="@string/admin_search_payments_hint"
                     android:imeOptions="actionSearch"
                     android:inputType="text"
-                    android:maxLines="1" />
+                    android:maxLines="1"
+                    android:textSize="14sp" />
             </com.google.android.material.textfield.TextInputLayout>
 
             <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="6dp"
                 android:scrollbars="none">
 
                 <com.google.android.material.chip.ChipGroup
@@ -594,36 +660,74 @@
                         style="@style/Widget.Material3.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_all" />
+                        android:text="@string/admin_filter_all"
+                        app:chipMinHeight="34dp"
+                        app:ensureMinTouchTargetSize="false" />
 
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_pay_filter_pending"
                         style="@style/Widget.Material3.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_pending" />
+                        android:text="@string/admin_filter_pending"
+                        app:chipMinHeight="34dp"
+                        app:ensureMinTouchTargetSize="false" />
 
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_pay_filter_approved"
                         style="@style/Widget.Material3.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_approved" />
+                        android:text="@string/admin_filter_approved"
+                        app:chipMinHeight="34dp"
+                        app:ensureMinTouchTargetSize="false" />
 
                     <com.google.android.material.chip.Chip
                         android:id="@+id/chip_pay_filter_disapproved"
                         style="@style/Widget.Material3.Chip.Filter"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/admin_filter_disapproved" />
+                        android:text="@string/admin_filter_disapproved"
+                        app:chipMinHeight="34dp"
+                        app:ensureMinTouchTargetSize="false" />
                 </com.google.android.material.chip.ChipGroup>
             </HorizontalScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_admin_payments_count"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                    android:textColor="@color/md_theme_onSurfaceVariant" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_admin_delete_payment_history"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:text="@string/admin_clear_payments_btn"
+                    android:textColor="@color/md_theme_error"
+                    app:cornerRadius="12dp"
+                    app:icon="@drawable/ic_delete"
+                    app:iconGravity="textStart"
+                    app:iconSize="18dp"
+                    app:iconTint="@color/md_theme_error"
+                    app:strokeColor="@color/md_theme_error" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/tv_admin_payments_empty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="32dp"
                 android:gravity="center"
                 android:text="@string/admin_payments_filter_empty"
                 android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
@@ -634,10 +738,32 @@
                 android:id="@+id/recycler_admin_payments"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:layout_weight="1"
                 android:clipToPadding="false"
-                android:paddingBottom="24dp" />
+                android:paddingBottom="12dp" />
+
+            <!-- Compact Footer Toggle (kept out of the way of the Deposit List) -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="8dp"
+                app:cardBackgroundColor="@color/md_theme_surface"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/md_theme_outline"
+                app:strokeWidth="1dp">
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switch_admin_hide_sub_ui"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:paddingHorizontal="12dp"
+                    android:text="@string/admin_hide_sub_ui_global"
+                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium" />
+            </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
 
         <!-- TAB 3: LIVE POPUP & CUSTOM ADS BROADCAST -->
@@ -788,6 +914,114 @@
                                 android:text="@string/admin_popup_ad_trigger_both" />
                         </RadioGroup>
 
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/admin_popup_size_label"
+                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                            android:textColor="@color/md_theme_onSurface" />
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/chip_group_popup_ad_size"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            app:selectionRequired="true"
+                            app:singleSelection="true">
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_popup_ad_size_small"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_popup_size_small" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_popup_ad_size_medium"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true"
+                                android:text="@string/admin_popup_size_medium" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_popup_ad_size_large"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_popup_size_large" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_popup_ad_size_fullscreen"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_popup_size_fullscreen" />
+                        </com.google.android.material.chip.ChipGroup>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btn_popup_ad_upload_image"
+                                style="@style/Widget.Material3.Button.TonalButton"
+                                android:layout_width="0dp"
+                                android:layout_height="48dp"
+                                android:layout_weight="1"
+                                android:text="@string/admin_popup_upload_image_btn" />
+
+                            <Space
+                                android:layout_width="8dp"
+                                android:layout_height="1dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btn_popup_ad_clear_image"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="48dp"
+                                android:text="@string/admin_popup_remove_image_btn"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                        <com.google.android.material.card.MaterialCardView
+                            android:id="@+id/card_popup_ad_image_preview"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:visibility="gone"
+                            app:cardBackgroundColor="@color/md_theme_surfaceVariant"
+                            app:cardCornerRadius="14dp"
+                            app:cardElevation="0dp"
+                            app:strokeWidth="0dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical">
+
+                                <ImageView
+                                    android:id="@+id/iv_popup_ad_image_preview"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="148dp"
+                                    android:adjustViewBounds="true"
+                                    android:contentDescription="@string/admin_popup_ad_image_hint"
+                                    android:scaleType="centerCrop" />
+
+                                <TextView
+                                    android:id="@+id/tv_popup_ad_image_status"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:paddingHorizontal="12dp"
+                                    android:paddingVertical="6dp"
+                                    android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+                                    android:textColor="@color/md_theme_onSurfaceVariant" />
+                            </LinearLayout>
+                        </com.google.android.material.card.MaterialCardView>
+
                         <com.google.android.material.textfield.TextInputLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
@@ -874,11 +1108,19 @@
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_popup_ad_preview"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/admin_popup_preview_ad_btn" />
+
+                        <com.google.android.material.button.MaterialButton
                             android:id="@+id/btn_publish_custom_popup_ad"
                             style="@style/Widget.Material3.Button"
                             android:layout_width="match_parent"
                             android:layout_height="48dp"
-                            android:layout_marginTop="14dp"
+                            android:layout_marginTop="8dp"
                             android:text="@string/admin_popup_ad_publish_btn"
                             android:textStyle="bold" />
 
@@ -1002,11 +1244,85 @@
                                 android:inputType="textCapSentences|textMultiLine" />
                         </com.google.android.material.textfield.TextInputLayout>
 
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/admin_popup_size_label"
+                            android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+                            android:textColor="@color/md_theme_onSurface" />
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/chip_group_broadcast_size"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            app:selectionRequired="true"
+                            app:singleSelection="true">
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_broadcast_size_small"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_popup_size_small" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_broadcast_size_medium"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true"
+                                android:text="@string/admin_popup_size_medium" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_broadcast_size_large"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_popup_size_large" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chip_broadcast_size_fullscreen"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/admin_popup_size_fullscreen" />
+                        </com.google.android.material.chip.ChipGroup>
+
+                        <LinearLayout
+                            android:id="@+id/layout_broadcast_image_actions"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btn_broadcast_upload_image"
+                                style="@style/Widget.Material3.Button.TonalButton"
+                                android:layout_width="0dp"
+                                android:layout_height="48dp"
+                                android:layout_weight="1"
+                                android:text="@string/admin_popup_upload_image_btn" />
+
+                            <Space
+                                android:layout_width="8dp"
+                                android:layout_height="1dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btn_broadcast_clear_image"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="48dp"
+                                android:text="@string/admin_popup_remove_image_btn"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
                         <com.google.android.material.textfield.TextInputLayout
                             android:id="@+id/til_broadcast_image_url"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             app:boxBackgroundMode="outline">
 
                             <com.google.android.material.textfield.TextInputEditText
@@ -1058,13 +1374,28 @@
                             app:cardElevation="0dp"
                             app:strokeWidth="0dp">
 
-                            <ImageView
-                                android:id="@+id/iv_broadcast_image_preview"
+                            <LinearLayout
                                 android:layout_width="match_parent"
-                                android:layout_height="150dp"
-                                android:adjustViewBounds="true"
-                                android:contentDescription="@string/admin_broadcast_image_hint"
-                                android:scaleType="centerCrop" />
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical">
+
+                                <ImageView
+                                    android:id="@+id/iv_broadcast_image_preview"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="150dp"
+                                    android:adjustViewBounds="true"
+                                    android:contentDescription="@string/admin_broadcast_image_hint"
+                                    android:scaleType="centerCrop" />
+
+                                <TextView
+                                    android:id="@+id/tv_broadcast_image_status"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:paddingHorizontal="12dp"
+                                    android:paddingVertical="6dp"
+                                    android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+                                    android:textColor="@color/md_theme_onSurfaceVariant" />
+                            </LinearLayout>
                         </com.google.android.material.card.MaterialCardView>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
@@ -1177,10 +1508,73 @@
                                 android:inputType="textCapSentences" />
                         </com.google.android.material.textfield.TextInputLayout>
 
-                        <com.google.android.material.textfield.TextInputLayout
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btn_banner_ad_upload_image"
+                                style="@style/Widget.Material3.Button.TonalButton"
+                                android:layout_width="0dp"
+                                android:layout_height="48dp"
+                                android:layout_weight="1"
+                                android:text="@string/admin_popup_upload_image_btn" />
+
+                            <Space
+                                android:layout_width="8dp"
+                                android:layout_height="1dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btn_banner_ad_clear_image"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="48dp"
+                                android:text="@string/admin_popup_remove_image_btn"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                        <com.google.android.material.card.MaterialCardView
+                            android:id="@+id/card_banner_ad_image_preview"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:visibility="gone"
+                            app:cardBackgroundColor="@color/md_theme_surfaceVariant"
+                            app:cardCornerRadius="12dp"
+                            app:cardElevation="0dp"
+                            app:strokeWidth="0dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal"
+                                android:padding="8dp">
+
+                                <ImageView
+                                    android:id="@+id/iv_banner_ad_image_preview"
+                                    android:layout_width="56dp"
+                                    android:layout_height="56dp"
+                                    android:contentDescription="@string/admin_banner_image_hint"
+                                    android:scaleType="centerCrop" />
+
+                                <TextView
+                                    android:id="@+id/tv_banner_ad_image_status"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="10dp"
+                                    android:layout_weight="1"
+                                    android:textAppearance="@style/TextAppearance.Material3.LabelMedium"
+                                    android:textColor="@color/md_theme_onSurfaceVariant" />
+                            </LinearLayout>
+                        </com.google.android.material.card.MaterialCardView>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
                             app:boxBackgroundMode="outline">
 
                             <com.google.android.material.textfield.TextInputEditText
@@ -1415,6 +1809,102 @@
                                 android:layout_height="wrap_content"
                                 android:hint="@string/admin_settings_whatsapp"
                                 android:inputType="phone" />
+                        </com.google.android.material.textfield.TextInputLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Card 1B: Welcome / Sign-In Screen Customization -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    app:cardBackgroundColor="@color/md_theme_surface"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/md_theme_outline"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/admin_settings_section_welcome"
+                            android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                            android:textColor="@color/md_theme_onSurface" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/admin_settings_welcome_note"
+                            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                            android:textColor="@color/md_theme_onSurfaceVariant" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_config_welcome_title"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_settings_welcome_title_hint"
+                                android:inputType="textCapWords"
+                                android:maxLength="100" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_config_welcome_badge"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_settings_welcome_badge_hint"
+                                android:inputType="textCapSentences"
+                                android:maxLength="100" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_config_welcome_subtitle"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:gravity="top|start"
+                                android:hint="@string/admin_settings_welcome_subtitle_hint"
+                                android:inputType="textCapSentences|textMultiLine"
+                                android:maxLength="400"
+                                android:minLines="3" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            app:boxBackgroundMode="outline">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/et_config_welcome_button"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/admin_settings_welcome_button_hint"
+                                android:inputType="textCapWords"
+                                android:maxLength="80" />
                         </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>

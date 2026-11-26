@@ -32,7 +32,7 @@ class ContactsRepository(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
             PackageManager.PERMISSION_GRANTED
 
-    suspend fun getRecentCalls(limit: Int = 100): List<CallLogEntry> = withContext(Dispatchers.IO) {
+    suspend fun getRecentCalls(limit: Int = 250): List<CallLogEntry> = withContext(Dispatchers.IO) {
         if (!hasCallLogPermission()) return@withContext emptyList()
 
         val result = mutableListOf<CallLogEntry>()

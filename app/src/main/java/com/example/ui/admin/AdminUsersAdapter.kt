@@ -1,5 +1,6 @@
 package com.example.ui.admin
 
+import android.content.res.ColorStateList
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -16,7 +17,6 @@ import com.example.data.firebase.DeviceIdentityProvider
 import com.example.data.firebase.PaymentRepository
 import com.example.data.firebase.UserEntitlement
 import com.example.databinding.ItemAdminUserBinding
-
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,6 +49,8 @@ class AdminUsersAdapter(
             }
         }
 
+    private val expandedKeys = mutableSetOf<String>()
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): UserViewHolder {
         val binding = ItemAdminUserBinding.inflate(
             LayoutInflater.from(parent.context),
@@ -68,10 +70,15 @@ class AdminUsersAdapter(
 
         fun bind(item: UserEntitlement) {
             val ctx = binding.root.context
+            val rowKey = item.userId.ifBlank { item.id }
+            val isExpanded = expandedKeys.contains(rowKey)
+
             val baseName = item.displayName.ifBlank { ctx.getString(R.string.account_default_name) }
             val isSuperAdmin = UpiPaymentHelper.isSuperAdminEmail(item.email)
             val isDelegatedAdmin = !isSuperAdmin &&
                 UpiPaymentHelper.isDelegatedAdminAuthorized(item.isAdmin, item.adminGrantedBy)
+
+            binding.tvAdminUserAvatar.text = extractInitials(baseName, item.email)
             binding.tvAdminUserName.text = when {
                 isSuperAdmin -> "$baseName [${ctx.getString(R.string.admin_user_badge_super_admin)}]"
                 isDelegatedAdmin -> "$baseName [${ctx.getString(R.string.admin_user_badge_admin)}]"
@@ -85,18 +92,20 @@ class AdminUsersAdapter(
             val effectiveExpiryMs = AdminRepository.resolveEffectiveExpiryMs(item)
             val isPendingUtr = item.subscriptionStatus == UserEntitlement.STATUS_PENDING_APPROVAL
 
-            val strokeDp = if (isPendingUtr || status == AdminUserAccountStatus.EXPIRING_SOON) 2 else 1
+            val strokeDp = if (isPendingUtr || status == AdminUserAccountStatus.EXPIRING_SOON) 1.5f else 1f
             binding.cardAdminUser.strokeWidth = (strokeDp * ctx.resources.displayMetrics.density).toInt()
+
             when {
                 isPendingUtr -> {
                     binding.cardAdminUser.setCardBackgroundColor(
-                        ContextCompat.getColor(ctx, R.color.md_theme_primaryContainer)
+                        ContextCompat.getColor(ctx, R.color.md_theme_surface)
                     )
                     binding.cardAdminUser.strokeColor =
                         ContextCompat.getColor(ctx, R.color.md_theme_primary)
+                    tintAvatar(R.color.md_theme_primaryContainer, R.color.md_theme_onPrimaryContainer)
                     binding.tvAdminUserExpiryBanner.visibility = View.VISIBLE
                     binding.tvAdminUserExpiryBanner.setTextColor(
-                        ContextCompat.getColor(ctx, R.color.md_theme_onPrimaryContainer)
+                        ContextCompat.getColor(ctx, R.color.md_theme_primary)
                     )
                     binding.tvAdminUserExpiryBanner.text = ctx.getString(
                         R.string.admin_pending_utr_banner,
@@ -112,6 +121,7 @@ class AdminUsersAdapter(
                 status == AdminUserAccountStatus.BLOCKED -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
+                    tintAvatar(R.color.md_theme_errorContainer, R.color.md_theme_onErrorContainer)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
                     binding.chipAdminUserStatus.setText(R.string.admin_user_status_blocked)
                     binding.chipAdminUserStatus.setChipBackgroundColorResource(R.color.md_theme_errorContainer)
@@ -120,21 +130,19 @@ class AdminUsersAdapter(
                     )
                 }
                 status == AdminUserAccountStatus.EXPIRING_SOON -> {
+                    binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.tvAdminUserExpiryBanner.visibility = View.VISIBLE
                     if (item.isPremiumUser) {
                         val safeDays = subDaysLeft.coerceAtLeast(1)
                         val fmtDate = if (effectiveExpiryMs > 0L) {
-                            SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(effectiveExpiryMs))
+                            SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date(effectiveExpiryMs))
                         } else {
                             "—"
                         }
-                        binding.cardAdminUser.setCardBackgroundColor(
-                            ContextCompat.getColor(ctx, R.color.md_theme_errorContainer)
-                        )
-                        binding.cardAdminUser.strokeColor =
-                            ContextCompat.getColor(ctx, R.color.md_theme_error)
+                        binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_error)
+                        tintAvatar(R.color.md_theme_errorContainer, R.color.md_theme_onErrorContainer)
                         binding.tvAdminUserExpiryBanner.setTextColor(
-                            ContextCompat.getColor(ctx, R.color.md_theme_onErrorContainer)
+                            ContextCompat.getColor(ctx, R.color.md_theme_error)
                         )
                         binding.tvAdminUserExpiryBanner.text = if (safeDays == 1) {
                             ctx.getString(R.string.admin_expiring_highlight_one_day, fmtDate)
@@ -151,13 +159,10 @@ class AdminUsersAdapter(
                         )
                     } else {
                         val safeDays = daysLeft.coerceAtLeast(1)
-                        binding.cardAdminUser.setCardBackgroundColor(
-                            ContextCompat.getColor(ctx, R.color.md_theme_tertiaryContainer)
-                        )
-                        binding.cardAdminUser.strokeColor =
-                            ContextCompat.getColor(ctx, R.color.md_theme_tertiary)
+                        binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_tertiary)
+                        tintAvatar(R.color.md_theme_tertiaryContainer, R.color.md_theme_onTertiaryContainer)
                         binding.tvAdminUserExpiryBanner.setTextColor(
-                            ContextCompat.getColor(ctx, R.color.md_theme_onTertiaryContainer)
+                            ContextCompat.getColor(ctx, R.color.md_theme_tertiary)
                         )
                         binding.tvAdminUserExpiryBanner.text = if (safeDays == 1) {
                             ctx.getString(R.string.admin_expiring_trial_one_day)
@@ -177,6 +182,7 @@ class AdminUsersAdapter(
                 status == AdminUserAccountStatus.PREMIUM -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
+                    tintAvatar(R.color.premium_badge_bg, R.color.premium_badge_text)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
                     binding.chipAdminUserStatus.text = if (subDaysLeft > 0) {
                         ctx.getString(R.string.badge_premium_monthly_days, subDaysLeft)
@@ -191,6 +197,7 @@ class AdminUsersAdapter(
                 status == AdminUserAccountStatus.EXPIRED -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
+                    tintAvatar(R.color.md_theme_surfaceContainer, R.color.md_theme_onSurfaceVariant)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
                     binding.chipAdminUserStatus.setText(
                         if (item.isPremiumUser) R.string.admin_user_status_sub_expired
@@ -204,6 +211,7 @@ class AdminUsersAdapter(
                 else -> {
                     binding.cardAdminUser.setCardBackgroundColor(ContextCompat.getColor(ctx, R.color.md_theme_surface))
                     binding.cardAdminUser.strokeColor = ContextCompat.getColor(ctx, R.color.md_theme_outline)
+                    tintAvatar(R.color.md_theme_primaryContainer, R.color.md_theme_onPrimaryContainer)
                     binding.tvAdminUserExpiryBanner.visibility = View.GONE
                     binding.chipAdminUserStatus.text = ctx.getString(R.string.admin_user_status_trial, daysLeft)
                     binding.chipAdminUserStatus.setChipBackgroundColorResource(R.color.md_theme_primaryContainer)
@@ -213,43 +221,58 @@ class AdminUsersAdapter(
                 }
             }
 
+            val joinMs = item.trialStartedAt?.toDate()?.time
+                ?: item.createdAt?.toDate()?.time
+                ?: item.updatedAt?.toDate()?.time
+                ?: 0L
+            val shortFmt = SimpleDateFormat("dd MMM", Locale.getDefault())
+            val fullFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+
+            // Clean 1-line summary visible even when collapsed
+            binding.tvAdminUserQuickInfo.text = buildString {
+                if (item.phoneNumber.isNotBlank()) {
+                    append(item.phoneNumber)
+                }
+                if (joinMs > 0L) {
+                    if (isNotEmpty()) append(" • ")
+                    append("Joined ").append(shortFmt.format(Date(joinMs)))
+                }
+                if (effectiveExpiryMs > 0L && item.isPremiumUser) {
+                    if (isNotEmpty()) append(" • ")
+                    append(if (subDaysLeft == 0) "Ended " else "Ends ").append(shortFmt.format(Date(effectiveExpiryMs)))
+                }
+                if (isEmpty()) {
+                    append("UID: ").append(item.userId.take(10))
+                }
+            }
+
+            // Full structured metadata inside the expandable drawer
             val deviceTag = if (item.deviceHash.length == 64) {
                 DeviceIdentityProvider.formatShortDeviceTag(item.deviceHash)
             } else {
                 "—"
             }
-            val joinMs = item.trialStartedAt?.toDate()?.time
-                ?: item.createdAt?.toDate()?.time
-                ?: item.updatedAt?.toDate()?.time
-                ?: 0L
-            val uidPreview = if (item.userId.length > 10) "${item.userId.take(10)}…" else item.userId
+            val uidPreview = if (item.userId.length > 12) "${item.userId.take(12)}…" else item.userId
             binding.tvAdminUserMeta.text = buildString {
-                if (item.phoneNumber.isNotBlank()) {
-                    append("Phone: ").append(item.phoneNumber).append(" • ")
-                }
+                append("UID: ").append(uidPreview).append(" • Device: ").append(deviceTag)
                 if (joinMs > 0L) {
-                    val fmtJoin = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-                        .format(Date(joinMs))
-                    append("Joined: ").append(fmtJoin).append(" • ")
+                    append("\nJoined: ").append(fullFmt.format(Date(joinMs)))
+                }
+                if (item.phoneNumber.isNotBlank()) {
+                    append(" • Phone: ").append(item.phoneNumber)
                 }
                 if (item.paymentRefId.isNotBlank()) {
-                    append("UTR: ").append(item.paymentRefId).append(" • ")
+                    append("\nUTR: ").append(item.paymentRefId)
                 }
-                append("UID: ").append(uidPreview)
-                append(" • Device: ").append(deviceTag)
                 if (effectiveExpiryMs > 0L && item.isPremiumUser) {
-                    val fmtDate = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-                        .format(Date(effectiveExpiryMs))
-                    append(" • ").append(if (subDaysLeft == 0) "Ended: " else "Ends: ").append(fmtDate)
+                    append(if (item.paymentRefId.isNotBlank()) " • " else "\n")
+                    append(if (subDaysLeft == 0) "Ended: " else "Ends: ").append(fullFmt.format(Date(effectiveExpiryMs)))
                 }
                 if (item.bonusTrialDays > 0L) {
                     append(" • Bonus: +").append(item.bonusTrialDays).append("d")
                 }
                 if (item.hideSubscriptionUI) {
                     append(" • ").append(ctx.getString(R.string.admin_hide_sub_ui_badge))
-                }
-                if (isPendingUtr) {
-                    append(" • Payment: Pending Approval")
                 }
                 if (item.subscriptionProductId.isNotBlank()) {
                     append(" • Plan: ").append(item.subscriptionProductId)
@@ -263,20 +286,16 @@ class AdminUsersAdapter(
                 binding.tvAdminUserNote.visibility = View.GONE
             }
 
+            // Expand / collapse drawer state
+            binding.layoutAdminUserControls.visibility = if (isExpanded) View.VISIBLE else View.GONE
+            binding.ivAdminUserExpand.rotation = if (isExpanded) 180f else 0f
+
             val canonicalUtr = item.paymentRefId.trim().ifBlank { item.purchaseToken.trim() }
             val utrKey = PaymentRepository.normalizeUtrKey(canonicalUtr)
             val isUtrLocked = utrKey.isNotEmpty() && approvedUtrKeys.contains(utrKey)
             val showUtrContainer = isPendingUtr || item.paymentRefId.isNotBlank()
-            binding.layoutAdminUserUtrActions.visibility = if (showUtrContainer) {
-                View.VISIBLE
-            } else {
-                View.GONE
-            }
-            binding.btnUserApproveUtr.visibility = if (showUtrContainer && !isUtrLocked) {
-                View.VISIBLE
-            } else {
-                View.GONE
-            }
+            binding.layoutAdminUserUtrActions.visibility = if (showUtrContainer) View.VISIBLE else View.GONE
+            binding.btnUserApproveUtr.visibility = if (showUtrContainer && !isUtrLocked) View.VISIBLE else View.GONE
             binding.btnUserApproveUtr.setOnClickListener { onApproveUtrClick(item) }
             binding.btnUserRejectUtr.setOnClickListener { onRejectUtrClick(item) }
 
@@ -308,8 +327,40 @@ class AdminUsersAdapter(
             binding.btnUserManage.setOnClickListener { onManageClick(item) }
             binding.btnUserDelete.visibility = if (isSuperAdmin) View.GONE else View.VISIBLE
             binding.btnUserDelete.setOnClickListener { onDeleteClick(item) }
-            binding.root.setOnClickListener { onManageClick(item) }
+
+            binding.cardAdminUser.setOnClickListener {
+                val nowExpanded = if (expandedKeys.contains(rowKey)) {
+                    expandedKeys.remove(rowKey)
+                    false
+                } else {
+                    expandedKeys.clear()
+                    expandedKeys.add(rowKey)
+                    true
+                }
+                binding.layoutAdminUserControls.visibility = if (nowExpanded) View.VISIBLE else View.GONE
+                binding.ivAdminUserExpand.animate().rotation(if (nowExpanded) 180f else 0f).setDuration(180L).start()
+                notifyDataSetChanged()
+            }
         }
+
+        private fun tintAvatar(bgRes: Int, textRes: Int) {
+            val ctx = binding.root.context
+            binding.tvAdminUserAvatar.backgroundTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(ctx, bgRes))
+            binding.tvAdminUserAvatar.setTextColor(ContextCompat.getColor(ctx, textRes))
+        }
+    }
+
+    private fun extractInitials(name: String, email: String): String {
+        val parts = name.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val chars = when {
+            parts.size >= 2 -> "${parts[0].first()}${parts[1].first()}"
+            parts.size == 1 && parts[0].length >= 2 -> parts[0].take(2)
+            parts.size == 1 -> parts[0].take(1)
+            email.isNotBlank() -> email.take(2)
+            else -> "U"
+        }
+        return chars.uppercase(Locale.getDefault())
     }
 
     private object DiffCallback : DiffUtil.ItemCallback<UserEntitlement>() {

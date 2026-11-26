@@ -264,7 +264,8 @@ data class LiveBroadcast(
     val bannerImageUrl: String = "",
     val bannerActionUrl: String = "",
     val updatedByUid: String = "",
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+    val popupSize: String = SIZE_MEDIUM
 ) {
     fun normalizedPopupType(): String {
         val clean = popupType.trim().lowercase()
@@ -274,6 +275,8 @@ data class LiveBroadcast(
             else -> if (version.isNotBlank() || forceUpdate || !isCancelable) TYPE_UPDATE else TYPE_AD
         }
     }
+
+    fun normalizedPopupSize(): String = normalizedPopupSize(popupSize)
 
     fun isUpdatePopup(): Boolean = normalizedPopupType() == TYPE_UPDATE
 
@@ -292,7 +295,8 @@ data class LiveBroadcast(
     fun effectivePopupId(): String {
         val explicit = popupId.trim()
         if (explicit.isNotEmpty()) return explicit
-        return listOf(normalizedPopupType(), version.trim(), title.trim(), message.trim(), imageUrl.trim())
+        val safeImageKey = if (imageUrl.length > 120) "img_${imageUrl.hashCode()}" else imageUrl.trim()
+        return listOf(normalizedPopupType(), version.trim(), title.trim(), message.trim(), safeImageKey)
             .joinToString("|")
     }
 
@@ -314,6 +318,21 @@ data class LiveBroadcast(
         const val DOC_LIVE_BROADCAST = "live_broadcast"
         const val TYPE_UPDATE = "update"
         const val TYPE_AD = "ad"
+
+        const val SIZE_SMALL = "small"
+        const val SIZE_MEDIUM = "medium"
+        const val SIZE_LARGE = "large"
+        const val SIZE_FULLSCREEN = "fullscreen"
+
+        fun normalizedPopupSize(raw: String?): String {
+            return when (raw?.trim()?.lowercase()) {
+                SIZE_SMALL -> SIZE_SMALL
+                SIZE_MEDIUM -> SIZE_MEDIUM
+                SIZE_LARGE -> SIZE_LARGE
+                SIZE_FULLSCREEN -> SIZE_FULLSCREEN
+                else -> SIZE_MEDIUM
+            }
+        }
 
         fun generatePopupId(nowMs: Long = System.currentTimeMillis()): String = "popup_$nowMs"
     }

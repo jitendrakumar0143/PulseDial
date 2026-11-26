@@ -51,6 +51,30 @@
         <item name="cornerSize">50%</item>
     </style>
 
+    <style name="TextAppearance.PulseDial.ToolbarTitle" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textSize">19sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextAppearance.PulseDial.BottomNavLabel" parent="TextAppearance.Material3.LabelMedium">
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="Widget.PulseDial.BottomNavigationView.ActiveIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:width">52dp</item>
+        <item name="android:height">26dp</item>
+    </style>
+
+    <style name="Widget.PulseDial.BottomNavigationView" parent="Widget.Material3.BottomNavigationView">
+        <item name="android:minHeight">58dp</item>
+        <item name="itemIconSize">21dp</item>
+        <item name="itemPaddingTop">6dp</item>
+        <item name="itemPaddingBottom">6dp</item>
+        <item name="itemActiveIndicatorStyle">@style/Widget.PulseDial.BottomNavigationView.ActiveIndicator</item>
+        <item name="itemTextAppearanceActive">@style/TextAppearance.PulseDial.BottomNavLabel</item>
+        <item name="itemTextAppearanceInactive">@style/TextAppearance.PulseDial.BottomNavLabel</item>
+    </style>
+
     <!-- Standard Theme Overlay -->
     <style name="ThemeOverlay.PulseDial.EmeraldPulse" parent="">
         <item name="colorPrimary">@color/md_theme_primary</item>

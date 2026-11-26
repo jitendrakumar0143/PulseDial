@@ -69,6 +69,9 @@ object RealtimeSyncManager {
     private val _events = MutableSharedFlow<RealtimeSyncEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<RealtimeSyncEvent> = _events.asSharedFlow()
 
+    private val _welcomeScreenState = MutableStateFlow(WelcomeScreenConfig())
+    val welcomeScreenState: StateFlow<WelcomeScreenConfig> = _welcomeScreenState.asStateFlow()
+
     private var appContext: Context? = null
     private var isInitialized = false
     private var activeUid: String? = null
@@ -80,6 +83,7 @@ object RealtimeSyncManager {
     private var navTabsListener: ListenerRegistration? = null
     private var settingsItemsListener: ListenerRegistration? = null
     private var liveBroadcastListener: ListenerRegistration? = null
+    private var publicWelcomeFirestoreListener: ListenerRegistration? = null
     private var rtdbConfigCleanup: (() -> Unit)? = null
     private var rtdbUserCleanup: (() -> Unit)? = null
     private var rtdbPaymentsCleanup: (() -> Unit)? = null
@@ -88,12 +92,15 @@ object RealtimeSyncManager {
     private var rtdbLiveBroadcastCleanup: (() -> Unit)? = null
     private var rtdbCustomPopupAdCleanup: (() -> Unit)? = null
     private var rtdbServerTimeOffsetCleanup: (() -> Unit)? = null
+    private var rtdbPublicWelcomeCleanup: (() -> Unit)? = null
 
     private var latestConfig: AppConfig = AppConfig(id = AppConfig.DOC_GLOBAL_SETTINGS)
     private var latestUser: UserEntitlement? = null
     private var latestRtdbUser: UserEntitlement? = null
     private var latestFirestoreUser: UserEntitlement? = null
     private var latestDevice: DeviceTrial? = null
+    private var latestRtdbPayments: List<PaymentRequest>? = null
+    private var latestFirestorePayments: List<PaymentRequest>? = null
     private var rtdbServerTimeOffsetMs: Long? = null
     private var hasReceivedInitialConfig = false
     private var hasReceivedInitialUser = false
@@ -104,6 +111,7 @@ object RealtimeSyncManager {
 
     fun init(context: Context) {
         appContext = context.applicationContext
+        _welcomeScreenState.value = DialerPreferences(context.applicationContext).currentWelcomeScreenConfig()
         if (isInitialized) return
         val firebaseAvailable = runCatching { FirebaseApp.getApps(context.applicationContext).isNotEmpty() }
             .getOrDefault(false)
@@ -134,10 +142,64 @@ object RealtimeSyncManager {
         GoogleAuthHelper.resolveActiveUid(context.applicationContext)?.let { startForUser(it) }
     }
 
+    /**
+     * Starts a lightweight public, zero-secret real-time sync for the Welcome / Sign-In Gate
+     * screen (`/app_config/welcome_screen` in Firestore & `/welcome_screen` in RTDB) so any
+     * price or text edit from the Admin Panel updates live even before the user signs in.
+     */
+    fun startPublicWelcomeSync(context: Context) {
+        val ctx = context.applicationContext
+        appContext = ctx
+        val prefs = DialerPreferences(ctx)
+        _welcomeScreenState.value = prefs.currentWelcomeScreenConfig()
+
+        val firebaseAvailable = runCatching { FirebaseApp.getApps(ctx).isNotEmpty() }.getOrDefault(false)
+        if (!firebaseAvailable) return
+
+        if (rtdbPublicWelcomeCleanup == null) {
+            RealtimeDatabaseSync.init(ctx)
+            rtdbPublicWelcomeCleanup = RealtimeDatabaseSync.attachWelcomeScreenListener(
+                context = ctx,
+                currentFallback = { _welcomeScreenState.value },
+                onUpdate = { welcome ->
+                    prefs.applyWelcomeScreenConfig(welcome)
+                    _welcomeScreenState.value = welcome
+                }
+            )
+        }
+        if (publicWelcomeFirestoreListener == null) {
+            val dbId = ctx.getString(R.string.firestore_database_id)
+            val db = runCatching { FirebaseFirestore.getInstance(dbId) }.getOrNull() ?: return
+            publicWelcomeFirestoreListener = db.collection(AdminRepository.COLLECTION_APP_CONFIG)
+                .document(AppConfig.DOC_WELCOME_SCREEN)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.d(TAG, "Public welcome config listener skipped: ${error.code}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val parsed = snapshot.toObject(
+                        WelcomeScreenConfig::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ) ?: return@addSnapshotListener
+                    prefs.applyWelcomeScreenConfig(parsed)
+                    _welcomeScreenState.value = parsed
+                }
+        }
+    }
+
+    fun stopPublicWelcomeSync() {
+        publicWelcomeFirestoreListener?.remove()
+        publicWelcomeFirestoreListener = null
+        rtdbPublicWelcomeCleanup?.invoke()
+        rtdbPublicWelcomeCleanup = null
+    }
+
     private fun applyIncomingAppConfig(config: AppConfig, prefs: DialerPreferences) {
         latestConfig = config
         val prevAllowRecording = prefs.allowCallRecordingConfig
         prefs.applyAppConfig(config)
+        _welcomeScreenState.value = config.toWelcomeScreenConfig()
 
         com.example.ui.theme.ThemeStudioManager.enforceEffectiveNightMode(prefs)
 
@@ -238,6 +300,27 @@ object RealtimeSyncManager {
         }
 
         bumpState(myPaymentRequests = requests)
+    }
+
+    private fun publishMergedPaymentRequests(prefs: DialerPreferences) {
+        val mergedById = LinkedHashMap<String, PaymentRequest>()
+        latestFirestorePayments?.forEach { req ->
+            if (req.id.isNotBlank()) mergedById[req.id] = req
+        }
+        latestRtdbPayments?.forEach { req ->
+            if (req.id.isNotBlank()) {
+                val existing = mergedById[req.id]
+                if (existing == null) {
+                    mergedById[req.id] = req
+                } else {
+                    val existingMs = existing.updatedAt?.toDate()?.time ?: existing.createdAt?.toDate()?.time ?: 0L
+                    val rtdbMs = req.updatedAt?.toDate()?.time ?: req.createdAt?.toDate()?.time ?: 0L
+                    if (rtdbMs >= existingMs) mergedById[req.id] = req
+                }
+            }
+        }
+        val merged = mergedById.values.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }
+        applyIncomingPaymentRequests(merged, prefs)
     }
 
     private fun applyIncomingSettingsItems(items: List<DynamicSettingItem>, prefs: DialerPreferences) {
@@ -383,9 +466,8 @@ object RealtimeSyncManager {
             uid = uid,
             userEmail = activeEmail,
             onUpdate = { rtdbRequests ->
-                if (rtdbRequests.isNotEmpty() || _syncState.value.myPaymentRequests.isEmpty()) {
-                    applyIncomingPaymentRequests(rtdbRequests, prefs)
-                }
+                latestRtdbPayments = rtdbRequests
+                publishMergedPaymentRequests(prefs)
             }
         )
         // Reconcile any Admin-granted Premium stored under a sibling UID with the same email or deviceHash
@@ -541,10 +623,8 @@ object RealtimeSyncManager {
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                     )
                 }.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }
-                if (requests.isEmpty() && _syncState.value.myPaymentRequests.isNotEmpty()) {
-                    return@addSnapshotListener
-                }
-                applyIncomingPaymentRequests(requests, prefs)
+                latestFirestorePayments = requests
+                publishMergedPaymentRequests(prefs)
             }
 
         // 5. Live /app_config/navigation_tabs dynamic bottom navigation push stream
@@ -855,6 +935,8 @@ object RealtimeSyncManager {
         latestRtdbUser = null
         latestFirestoreUser = null
         latestDevice = null
+        latestRtdbPayments = null
+        latestFirestorePayments = null
         rtdbServerTimeOffsetMs = null
         hasReceivedInitialConfig = false
         hasReceivedInitialUser = false

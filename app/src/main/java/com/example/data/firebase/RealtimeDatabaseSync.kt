@@ -60,6 +60,7 @@ object RealtimeDatabaseSync {
     const val NODE_CUSTOM_POPUP_AD = "custom_popup_ad"
     const val NODE_APPROVED_UTRS = "approved_utrs"
     const val NODE_CALLER_DIRECTORY = "caller_directory"
+    const val NODE_WELCOME_SCREEN = "welcome_screen"
 
     private val persistenceConfigured = AtomicBoolean(false)
 
@@ -96,6 +97,7 @@ object RealtimeDatabaseSync {
                         instance.getReference(NODE_APP_CONFIG).keepSynced(true)
                         instance.getReference(NODE_PAYMENT_REQUESTS).keepSynced(true)
                         instance.getReference(NODE_CUSTOM_POPUP_AD).keepSynced(true)
+                        instance.getReference(NODE_WELCOME_SCREEN).keepSynced(true)
                     }
                     databaseInstance = instance
                 }
@@ -625,6 +627,33 @@ object RealtimeDatabaseSync {
             if (!snapshot.exists()) return@onValue
             val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
             val parsed = parseAppConfigSnapshot(rawMap, currentFallback())
+            onUpdate(parsed)
+        }
+    }
+
+    /**
+     * Attaches a public, zero-secret `onValue` listener to `/welcome_screen` so the
+     * unauthenticated Welcome / Sign-In screen updates live whenever Admin edits price or text.
+     */
+    fun attachWelcomeScreenListener(
+        context: Context,
+        currentFallback: () -> WelcomeScreenConfig,
+        onUpdate: (WelcomeScreenConfig) -> Unit
+    ): (() -> Unit)? {
+        return onValue(NODE_WELCOME_SCREEN, context) { snapshot ->
+            if (!snapshot.exists()) return@onValue
+            val rawMap = snapshot.value as? Map<*, *> ?: return@onValue
+            val fallback = currentFallback()
+            val parsed = WelcomeScreenConfig(
+                trialDays = (asLong(rawMap["trialDays"]) ?: fallback.trialDays).coerceIn(1L, 365L),
+                subscriptionPriceInr = (asLong(rawMap["subscriptionPriceInr"])
+                    ?: asLong(rawMap["subscriptionPrice"])
+                    ?: fallback.subscriptionPriceInr).coerceIn(1L, 100000L),
+                welcomeTitle = (rawMap["welcomeTitle"] as? String) ?: fallback.welcomeTitle,
+                welcomeTrialBadge = (rawMap["welcomeTrialBadge"] as? String) ?: fallback.welcomeTrialBadge,
+                welcomeSubtitle = (rawMap["welcomeSubtitle"] as? String) ?: fallback.welcomeSubtitle,
+                welcomeButtonText = (rawMap["welcomeButtonText"] as? String) ?: fallback.welcomeButtonText
+            )
             onUpdate(parsed)
         }
     }
@@ -1259,7 +1288,7 @@ object RealtimeDatabaseSync {
         val normalizedEmail = email.trim().lowercase()
         val normalizedDevice = deviceHash.trim().lowercase().takeIf { it.length == 64 }.orEmpty()
 
-        // 1. Remove any duplicate sibling /users/{otherUid} matching email or deviceHash
+        // 1. Remove any duplicate sibling /users/{otherUid} matching email or deviceHash (never touch Super Admins)
         if (normalizedEmail.isNotEmpty() || normalizedDevice.isNotEmpty()) {
             val usersRef = refForPath(NODE_USERS, context)
             if (usersRef != null) {
@@ -1271,6 +1300,7 @@ object RealtimeDatabaseSync {
                                 val otherUid = child.key.orEmpty().trim()
                                 if (otherUid.isEmpty() || otherUid == cleanUid) continue
                                 val childEmail = (child.child("email").value as? String)?.trim()?.lowercase().orEmpty()
+                                if (com.example.billing.UpiPaymentHelper.isSuperAdminEmail(childEmail)) continue
                                 val childDevice = (child.child("deviceHash").value as? String)?.trim()?.lowercase().orEmpty()
                                 val matches = (normalizedEmail.isNotEmpty() && childEmail == normalizedEmail) ||
                                     (normalizedDevice.isNotEmpty() && childDevice == normalizedDevice)
@@ -1302,6 +1332,13 @@ object RealtimeDatabaseSync {
                                 val matches = (cleanUid.isNotEmpty() && reqUid == cleanUid) ||
                                     (normalizedEmail.isNotEmpty() && reqEmail == normalizedEmail)
                                 if (matches) {
+                                    val utrCandidate = (child.child("upiTxnId").value as? String).orEmpty()
+                                        .ifBlank { (child.child("approvalRefNo").value as? String).orEmpty() }
+                                        .ifBlank { (child.child("txnRef").value as? String).orEmpty() }
+                                    val utrKey = normalizeUtrKey(utrCandidate)
+                                    if (utrKey.isNotEmpty()) {
+                                        refForPath("$NODE_APPROVED_UTRS/$utrKey", context)?.removeValue()
+                                    }
                                     child.ref.removeValue()
                                 }
                             }
@@ -1315,7 +1352,31 @@ object RealtimeDatabaseSync {
             }
         }
 
-        // 3. Remove /device_trials/{deviceHash} if owned by this deleted user
+        // 3. Remove any /approved_utrs locks belonging to this user
+        if (cleanUid.isNotEmpty()) {
+            val utrsRef = refForPath(NODE_APPROVED_UTRS, context)
+            if (utrsRef != null) {
+                runCatching {
+                    utrsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            if (!snapshot.exists()) return
+                            for (child in snapshot.children) {
+                                val lockUid = (child.child("userId").value as? String)?.trim().orEmpty()
+                                if (lockUid == cleanUid) {
+                                    child.ref.removeValue()
+                                }
+                            }
+                        }
+
+                        override fun onCancelled(error: DatabaseError) {
+                            Log.d(TAG, "deleteUserAndSiblingsInRtdb approved_utrs scan cancelled: ${error.message}")
+                        }
+                    })
+                }
+            }
+        }
+
+        // 4. Remove /device_trials/{deviceHash} if owned by this deleted user
         if (normalizedDevice.isNotEmpty()) {
             val deviceTrialRef = refForPath("$NODE_DEVICE_TRIALS/$normalizedDevice", context)
             if (deviceTrialRef != null) {
@@ -1342,10 +1403,85 @@ object RealtimeDatabaseSync {
     }
 
     /**
-     * Updates global `AppConfig` under `/app_config` using `update`.
+     * Permanently deletes a single payment request node from RTDB `/payment_requests/{id}`
+     * and optionally removes its `/approved_utrs/{utrKey}` lock.
+     */
+    fun deletePaymentRequest(
+        requestId: String,
+        utrKey: String = "",
+        context: Context? = null
+    ): Boolean {
+        val cleanId = requestId.trim()
+        if (cleanId.isEmpty()) return false
+        return runCatching {
+            val root = rootRef(context) ?: return false
+            val updates = mutableMapOf<String, Any?>(
+                "$NODE_PAYMENT_REQUESTS/$cleanId" to null
+            )
+            val cleanUtr = normalizeUtrKey(utrKey)
+            if (cleanUtr.isNotEmpty()) {
+                updates["$NODE_APPROVED_UTRS/$cleanUtr"] = null
+            }
+            root.updateChildren(updates)
+            true
+        }.onFailure { e ->
+            Log.d(TAG, "RTDB deletePaymentRequest($cleanId) skipped: ${e.message}")
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Permanently deletes a batch of payment requests (and optionally their UTR locks)
+     * from Firebase Realtime Database atomically.
+     */
+    fun deletePaymentRequests(
+        requests: List<PaymentRequest>,
+        clearUtrLocks: Boolean = true,
+        context: Context? = null
+    ): Int {
+        if (requests.isEmpty()) return 0
+        val updates = mutableMapOf<String, Any?>()
+        var count = 0
+        for (req in requests) {
+            val id = req.id.trim()
+            if (id.isEmpty()) continue
+            updates["$NODE_PAYMENT_REQUESTS/$id"] = null
+            if (clearUtrLocks) {
+                val utrKey = normalizeUtrKey(PaymentRepository.extractCanonicalUtr(req))
+                if (utrKey.isNotEmpty()) {
+                    updates["$NODE_APPROVED_UTRS/$utrKey"] = null
+                }
+            }
+            count++
+        }
+        if (updates.isEmpty()) return 0
+        return runCatching {
+            val root = rootRef(context) ?: return 0
+            root.updateChildren(updates)
+            count
+        }.onFailure { e ->
+            Log.d(TAG, "RTDB deletePaymentRequests($count) skipped: ${e.message}")
+        }.getOrDefault(0)
+    }
+
+    /**
+     * Updates global `AppConfig` under `/app_config` AND mirrors non-secret welcome screen copy
+     * under `/welcome_screen` so unauthenticated login gates update in real time.
      */
     fun pushAppConfig(config: AppConfig, context: Context? = null) {
         update(NODE_APP_CONFIG, toRtdbConfigMap(config), context)
+        update(
+            NODE_WELCOME_SCREEN,
+            mapOf(
+                "trialDays" to config.trialDays.coerceIn(1L, 365L),
+                "subscriptionPriceInr" to config.subscriptionPriceInr.coerceIn(1L, 100000L),
+                "welcomeTitle" to config.welcomeTitle.trim().take(100),
+                "welcomeTrialBadge" to config.welcomeTrialBadge.trim().take(100),
+                "welcomeSubtitle" to config.welcomeSubtitle.trim().take(400),
+                "welcomeButtonText" to config.welcomeButtonText.trim().take(80),
+                "updatedAtMs" to System.currentTimeMillis()
+            ),
+            context
+        )
     }
 
     /**
@@ -1413,12 +1549,14 @@ object RealtimeDatabaseSync {
      */
     fun setLiveBroadcast(broadcast: LiveBroadcast, updatedByUid: String = "", context: Context? = null) {
         val normalizedType = broadcast.normalizedPopupType()
+        val normalizedSize = broadcast.normalizedPopupSize()
         val effectiveForce = normalizedType == LiveBroadcast.TYPE_UPDATE && broadcast.forceUpdate
         val effectiveCancelable = if (effectiveForce) false else true
         val payload = mapOf(
             "showPopup" to broadcast.showPopup,
             "popupId" to broadcast.popupId,
             "popupType" to normalizedType,
+            "popupSize" to normalizedSize,
             "version" to broadcast.version,
             "forceUpdate" to effectiveForce,
             "showOnce" to broadcast.showOnce,
@@ -1678,6 +1816,10 @@ object RealtimeDatabaseSync {
             "enableCustomGateway" to config.enableCustomGateway,
             "customGatewayName" to config.customGatewayName,
             "customGatewayUrl" to config.customGatewayUrl,
+            "welcomeTitle" to config.welcomeTitle,
+            "welcomeTrialBadge" to config.welcomeTrialBadge,
+            "welcomeSubtitle" to config.welcomeSubtitle,
+            "welcomeButtonText" to config.welcomeButtonText,
             "updatedAtMs" to System.currentTimeMillis()
         )
     }
@@ -1740,7 +1882,15 @@ object RealtimeDatabaseSync {
             customGatewayName = (map["customGatewayName"] as? String)
                 ?: fallback.customGatewayName,
             customGatewayUrl = (map["customGatewayUrl"] as? String)
-                ?: fallback.customGatewayUrl
+                ?: fallback.customGatewayUrl,
+            welcomeTitle = (map["welcomeTitle"] as? String)
+                ?: fallback.welcomeTitle,
+            welcomeTrialBadge = (map["welcomeTrialBadge"] as? String)
+                ?: fallback.welcomeTrialBadge,
+            welcomeSubtitle = (map["welcomeSubtitle"] as? String)
+                ?: fallback.welcomeSubtitle,
+            welcomeButtonText = (map["welcomeButtonText"] as? String)
+                ?: fallback.welcomeButtonText
         )
     }
 
@@ -1881,7 +2031,8 @@ object RealtimeDatabaseSync {
             bannerText = (map["bannerText"] as? String).orEmpty(),
             bannerImageUrl = (map["bannerImageUrl"] as? String).orEmpty(),
             bannerActionUrl = (map["bannerActionUrl"] as? String).orEmpty(),
-            updatedByUid = (map["updatedByUid"] as? String).orEmpty()
+            updatedByUid = (map["updatedByUid"] as? String).orEmpty(),
+            popupSize = LiveBroadcast.normalizedPopupSize(map["popupSize"] as? String)
         )
     }
 
@@ -1896,6 +2047,7 @@ object RealtimeDatabaseSync {
             "isEnabled" to ad.isEnabled,
             "showToPremiumUsers" to ad.showToPremiumUsers,
             "triggerMode" to CustomPopupAd.normalizedTriggerMode(ad.triggerMode),
+            "popupSize" to CustomPopupAd.normalizedPopupSize(ad.popupSize),
             "imageUrl" to ad.imageUrl.trim(),
             "title" to ad.title.trim(),
             "message" to ad.message.trim(),
@@ -1928,7 +2080,8 @@ object RealtimeDatabaseSync {
             targetUrl = (map["targetUrl"] as? String).orEmpty(),
             countdownSeconds = countdown,
             impressionsCount = (asLong(map["impressionsCount"]) ?: 0L).coerceAtLeast(0L),
-            clicksCount = (asLong(map["clicksCount"]) ?: 0L).coerceAtLeast(0L)
+            clicksCount = (asLong(map["clicksCount"]) ?: 0L).coerceAtLeast(0L),
+            popupSize = CustomPopupAd.normalizedPopupSize(map["popupSize"] as? String)
         )
     }
 

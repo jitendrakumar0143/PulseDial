@@ -225,6 +225,30 @@ service cloud.firestore {
              (!('enableCustomGateway' in data) || data.enableCustomGateway is bool) &&
              (!('customGatewayName' in data) || (data.customGatewayName is string && data.customGatewayName.size() <= 80)) &&
              (!('customGatewayUrl' in data) || (data.customGatewayUrl is string && data.customGatewayUrl.size() <= 500)) &&
+             (!('welcomeTitle' in data) || (data.welcomeTitle is string && data.welcomeTitle.size() <= 100)) &&
+             (!('welcomeTrialBadge' in data) || (data.welcomeTrialBadge is string && data.welcomeTrialBadge.size() <= 100)) &&
+             (!('welcomeSubtitle' in data) || (data.welcomeSubtitle is string && data.welcomeSubtitle.size() <= 400)) &&
+             (!('welcomeButtonText' in data) || (data.welcomeButtonText is string && data.welcomeButtonText.size() <= 80)) &&
+             isValidId(data.updatedByUid) &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidWelcomeScreenConfig(data) {
+      return data.trialDays is int &&
+             data.trialDays >= 1 &&
+             data.trialDays <= 365 &&
+             data.subscriptionPriceInr is int &&
+             data.subscriptionPriceInr >= 1 &&
+             data.subscriptionPriceInr <= 100000 &&
+             data.welcomeTitle is string &&
+             data.welcomeTitle.size() <= 100 &&
+             data.welcomeTrialBadge is string &&
+             data.welcomeTrialBadge.size() <= 100 &&
+             data.welcomeSubtitle is string &&
+             data.welcomeSubtitle.size() <= 400 &&
+             data.welcomeButtonText is string &&
+             data.welcomeButtonText.size() <= 80 &&
              isValidId(data.updatedByUid) &&
              data.updatedAt is timestamp &&
              data.updatedAt <= request.time;
@@ -252,6 +276,7 @@ service cloud.firestore {
              data.popupId is string &&
              data.popupId.size() <= 80 &&
              (!('popupType' in data) || (data.popupType is string && data.popupType in ['update', 'ad'])) &&
+             (!('popupSize' in data) || (data.popupSize is string && data.popupSize in ['small', 'medium', 'large', 'fullscreen'])) &&
              (!('version' in data) || (data.version is string && data.version.size() <= 40)) &&
              (!('forceUpdate' in data) || data.forceUpdate is bool) &&
              (!('showOnce' in data) || data.showOnce is bool) &&
@@ -260,7 +285,7 @@ service cloud.firestore {
              data.message is string &&
              data.message.size() <= 500 &&
              data.imageUrl is string &&
-             data.imageUrl.size() <= 500 &&
+             data.imageUrl.size() <= 350000 &&
              data.buttonText is string &&
              data.buttonText.size() <= 60 &&
              data.actionUrl is string &&
@@ -270,7 +295,7 @@ service cloud.firestore {
              data.bannerText is string &&
              data.bannerText.size() <= 180 &&
              data.bannerImageUrl is string &&
-             data.bannerImageUrl.size() <= 500 &&
+             data.bannerImageUrl.size() <= 350000 &&
              data.bannerActionUrl is string &&
              data.bannerActionUrl.size() <= 500 &&
              isValidId(data.updatedByUid) &&
@@ -482,7 +507,8 @@ service cloud.firestore {
                        incoming().approvedAt is timestamp &&
                        incoming().approvedAt <= request.time;
 
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isSignedIn() && isAdmin();
     }
 
     // UPI payment verification requests: user creates pending request matching configured UPI & price;
@@ -540,9 +566,10 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isAdmin();
     }
 
-    // Global app settings managed exclusively by verified admin; signed-in users can read config.
+    // Global app settings managed exclusively by verified admin.
+    // Only the zero-secret `welcome_screen` mirror is readable pre-auth; `global_settings` stays auth-gated.
     match /app_config/{configId} {
-      allow get: if isSignedIn() && isValidId(configId);
+      allow get: if isValidId(configId) && (configId == 'welcome_screen' || isSignedIn());
       allow list: if isAdmin();
 
       allow create, update: if isSignedIn() &&
@@ -568,7 +595,7 @@ service cloud.firestore {
                                      'updatedByUid', 'updatedAt'
                                    ]) &&
                                    incoming().keys().hasOnly([
-                                     'showPopup', 'popupId', 'popupType', 'version', 'forceUpdate', 'showOnce',
+                                     'showPopup', 'popupId', 'popupType', 'popupSize', 'version', 'forceUpdate', 'showOnce',
                                      'title', 'message', 'imageUrl',
                                      'buttonText', 'actionUrl', 'isCancelable',
                                      'showBannerAd', 'bannerText', 'bannerImageUrl', 'bannerActionUrl',
@@ -576,7 +603,20 @@ service cloud.firestore {
                                    ]) &&
                                    isValidLiveBroadcast(incoming())
                                  ) || (
-                                   !(configId in ['navigation_tabs', 'settings_items', 'live_broadcast']) &&
+                                   configId == 'welcome_screen' &&
+                                   incoming().keys().hasAll([
+                                     'trialDays', 'subscriptionPriceInr',
+                                     'welcomeTitle', 'welcomeTrialBadge', 'welcomeSubtitle', 'welcomeButtonText',
+                                     'updatedByUid', 'updatedAt'
+                                   ]) &&
+                                   incoming().keys().hasOnly([
+                                     'trialDays', 'subscriptionPriceInr',
+                                     'welcomeTitle', 'welcomeTrialBadge', 'welcomeSubtitle', 'welcomeButtonText',
+                                     'updatedByUid', 'updatedAt'
+                                   ]) &&
+                                   isValidWelcomeScreenConfig(incoming())
+                                 ) || (
+                                   !(configId in ['navigation_tabs', 'settings_items', 'live_broadcast', 'welcome_screen']) &&
                                    incoming().keys().hasAll([
                                      'trialDays', 'subscriptionPriceInr', 'upiVpa', 'whatsappNumber',
                                      'enforceSingleDeviceTrial', 'allowCallRecording', 'allowManualUtr',
@@ -593,6 +633,7 @@ service cloud.firestore {
                                      'razorpayKeyId', 'razorpayPaymentLink',
                                      'enablePayuGateway', 'payuMerchantKey', 'payuPaymentLink',
                                      'enableCustomGateway', 'customGatewayName', 'customGatewayUrl',
+                                     'welcomeTitle', 'welcomeTrialBadge', 'welcomeSubtitle', 'welcomeButtonText',
                                      'updatedByUid', 'updatedAt'
                                    ]) &&
                                    isValidAppConfig(incoming())

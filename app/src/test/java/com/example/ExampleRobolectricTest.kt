@@ -3793,19 +3793,27 @@ class ExampleRobolectricTest {
         val mainPill = mainRoot.findViewById<com.example.ui.incall.Floating3DCallPillView>(R.id.floating_3d_call_pill)
         assertTrue(mainPill != null)
 
-        // 2. Verify exact spec constants & responsive 94% width calculation
+        // 2. Verify exact spec constants & responsive min(94vw, 390dp) width calculation
         assertEquals(76f, com.example.ui.incall.Floating3DCallPillView.PILL_HEIGHT_DP)
-        assertEquals(64f, com.example.ui.incall.Floating3DCallPillView.COLLAPSED_WIDTH_DP)
+        assertEquals(68f, com.example.ui.incall.Floating3DCallPillView.ORB_SIZE_DP)
+        assertEquals(68f, com.example.ui.incall.Floating3DCallPillView.COLLAPSED_WIDTH_DP)
         assertEquals(38f, com.example.ui.incall.Floating3DCallPillView.PILL_CORNER_RADIUS_DP)
         assertEquals(52f, com.example.ui.incall.Floating3DCallPillView.JEWEL_BUTTON_SIZE_DP)
         assertEquals(0.94f, com.example.ui.incall.Floating3DCallPillView.MAX_WIDTH_FRACTION)
-        assertEquals(450L, com.example.ui.incall.Floating3DCallPillView.STAGE_1_DROP_MS)
-        assertEquals(1050L, com.example.ui.incall.Floating3DCallPillView.STAGE_2_UNFOLD_MS)
+        assertEquals(390f, com.example.ui.incall.Floating3DCallPillView.MAX_EXPANDED_WIDTH_DP)
+        assertEquals(460L, com.example.ui.incall.Floating3DCallPillView.STAGE_1_DROP_MS)
+        assertEquals(920L, com.example.ui.incall.Floating3DCallPillView.STAGE_2_UNFOLD_MS)
+        assertEquals(700L, com.example.ui.incall.Floating3DCallPillView.STAGE_2_HEIGHT_MS)
+        assertEquals(750L, com.example.ui.incall.Floating3DCallPillView.SEAM_GLINT_MS)
+        assertEquals(420L, com.example.ui.incall.Floating3DCallPillView.DISMISS_COLLAPSE_MS)
+        assertEquals(380L, com.example.ui.incall.Floating3DCallPillView.DISMISS_RETRACT_MS)
+        assertEquals(5000L, com.example.ui.incall.Floating3DCallPillView.RIM_SPIN_DURATION_MS)
         assertEquals(0.55f, com.example.ui.incall.Floating3DCallPillView.DRAG_TRIGGER_THRESHOLD)
 
         val pill = com.example.ui.incall.Floating3DCallPillView(themedCtx)
         val expectedWidth400 = pill.computeExpandedWidthPx(400)
         assertEquals(376f, expectedWidth400, 1.5f)
+        assertEquals(390f * themedCtx.resources.displayMetrics.density, pill.computeExpandedWidthPx(800), 1.5f)
 
         // Measure and layout on a compact 400px phone width
         pill.measure(

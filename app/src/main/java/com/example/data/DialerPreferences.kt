@@ -389,6 +389,52 @@ class DialerPreferences(context: Context) {
             refreshIntegritySeal()
         }
 
+    var configuredWelcomeTitle: String
+        get() = prefs.getString(KEY_CONFIG_WELCOME_TITLE, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_WELCOME_TITLE, value.trim().take(100)) }
+        }
+
+    var configuredWelcomeTrialBadge: String
+        get() = prefs.getString(KEY_CONFIG_WELCOME_TRIAL_BADGE, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_WELCOME_TRIAL_BADGE, value.trim().take(100)) }
+        }
+
+    var configuredWelcomeSubtitle: String
+        get() = prefs.getString(KEY_CONFIG_WELCOME_SUBTITLE, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_WELCOME_SUBTITLE, value.trim().take(400)) }
+        }
+
+    var configuredWelcomeButtonText: String
+        get() = prefs.getString(KEY_CONFIG_WELCOME_BUTTON_TEXT, "").orEmpty()
+        set(value) {
+            prefs.edit { putString(KEY_CONFIG_WELCOME_BUTTON_TEXT, value.trim().take(80)) }
+        }
+
+    fun currentWelcomeScreenConfig(): com.example.data.firebase.WelcomeScreenConfig =
+        com.example.data.firebase.WelcomeScreenConfig(
+            trialDays = configuredTrialDays.toLong(),
+            subscriptionPriceInr = configuredPriceInr,
+            welcomeTitle = configuredWelcomeTitle,
+            welcomeTrialBadge = configuredWelcomeTrialBadge,
+            welcomeSubtitle = configuredWelcomeSubtitle,
+            welcomeButtonText = configuredWelcomeButtonText
+        )
+
+    fun applyWelcomeScreenConfig(config: com.example.data.firebase.WelcomeScreenConfig) {
+        prefs.edit {
+            putInt(KEY_CONFIG_TRIAL_DAYS, config.trialDays.toInt().coerceIn(1, 365))
+            putLong(KEY_CONFIG_PRICE_INR, config.subscriptionPriceInr.coerceIn(1L, 100000L))
+            putString(KEY_CONFIG_WELCOME_TITLE, config.welcomeTitle.trim().take(100))
+            putString(KEY_CONFIG_WELCOME_TRIAL_BADGE, config.welcomeTrialBadge.trim().take(100))
+            putString(KEY_CONFIG_WELCOME_SUBTITLE, config.welcomeSubtitle.trim().take(400))
+            putString(KEY_CONFIG_WELCOME_BUTTON_TEXT, config.welcomeButtonText.trim().take(80))
+        }
+        refreshIntegritySeal()
+    }
+
     fun getEffectiveTrialDays(): Int = (configuredTrialDays + adminBonusTrialDays).coerceIn(1, 4000)
 
     fun getEffectiveTrialDurationMillis(): Long = getEffectiveTrialDays().toLong() * ONE_DAY_MILLIS
@@ -422,6 +468,10 @@ class DialerPreferences(context: Context) {
             putBoolean(KEY_CONFIG_ENABLE_CUSTOM_GW, config.enableCustomGateway)
             putString(KEY_CONFIG_CUSTOM_GW_NAME, config.customGatewayName.trim().take(80))
             putString(KEY_CONFIG_CUSTOM_GW_URL, config.customGatewayUrl.trim().take(500))
+            putString(KEY_CONFIG_WELCOME_TITLE, config.welcomeTitle.trim().take(100))
+            putString(KEY_CONFIG_WELCOME_TRIAL_BADGE, config.welcomeTrialBadge.trim().take(100))
+            putString(KEY_CONFIG_WELCOME_SUBTITLE, config.welcomeSubtitle.trim().take(400))
+            putString(KEY_CONFIG_WELCOME_BUTTON_TEXT, config.welcomeButtonText.trim().take(80))
             if (!prefs.getBoolean(KEY_USER_CUSTOM_DIALPAD_TONES, false)) {
                 putBoolean(KEY_DIALPAD_TONES, config.dialpadTonesDefault)
             }
@@ -1213,6 +1263,10 @@ class DialerPreferences(context: Context) {
         const val KEY_CONFIG_ENABLE_CUSTOM_GW = "config_enable_custom_gw"
         const val KEY_CONFIG_CUSTOM_GW_NAME = "config_custom_gw_name"
         const val KEY_CONFIG_CUSTOM_GW_URL = "config_custom_gw_url"
+        const val KEY_CONFIG_WELCOME_TITLE = "config_welcome_title"
+        const val KEY_CONFIG_WELCOME_TRIAL_BADGE = "config_welcome_trial_badge"
+        const val KEY_CONFIG_WELCOME_SUBTITLE = "config_welcome_subtitle"
+        const val KEY_CONFIG_WELCOME_BUTTON_TEXT = "config_welcome_button_text"
         const val KEY_HIDE_SUBSCRIPTION_UI = "hide_subscription_ui"
         private const val KEY_DISMISSED_POPUP_IDS = "dismissed_popup_ids"
         private const val KEY_DYNAMIC_TOGGLE_PREFIX = "dynamic_toggle_"

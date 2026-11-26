@@ -87,8 +87,9 @@
             app:strokeWidth="1dp">
 
             <FrameLayout
+                android:id="@+id/frame_popup_image_inner"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content">
+                android:layout_height="match_parent">
 
                 <ImageView
                     android:id="@+id/iv_popup_image"

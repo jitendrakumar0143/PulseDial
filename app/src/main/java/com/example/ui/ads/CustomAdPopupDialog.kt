@@ -12,18 +12,22 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.WindowManager
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.FragmentManager
-import coil.load
 import com.example.R
 import com.example.data.firebase.CustomPopupAd
 import com.example.data.firebase.RealtimeDatabaseSync
 import com.example.databinding.DialogCustomPopupAdBinding
+import com.example.ui.common.PopupImageHelper
 
 /**
  * Rounded Material 3 Popup Ad Dialog with transparent background overlay, Sponsored tag,
- * live skip countdown badge turning into clickable "✕ Close", async Coil banner image loading,
+ * live skip countdown badge turning into clickable "✕ Close", multi-size layouts
+ * (`small`, `medium`, `large`, `fullscreen`), uploaded photo & remote URL loading,
  * and atomic RTDB `/custom_popup_ad` impressionsCount & clicksCount tracking.
  */
 class CustomAdPopupDialog : DialogFragment() {
@@ -35,6 +39,10 @@ class CustomAdPopupDialog : DialogFragment() {
     private var remainingSeconds: Int = CustomPopupAd.DEFAULT_COUNTDOWN_SECONDS
     private var impressionRecorded: Boolean = false
     private var countdownRunning: Boolean = false
+
+    private val isPreviewMode: Boolean by lazy {
+        arguments?.getBoolean(ARG_IS_PREVIEW, false) ?: false
+    }
 
     private val adCampaign: CustomPopupAd by lazy {
         CustomPopupAd.fromBundle(arguments)
@@ -60,17 +68,21 @@ class CustomAdPopupDialog : DialogFragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        remainingSeconds = savedInstanceState?.getInt(
-            STATE_REMAINING_SECONDS,
-            adCampaign.countdownSeconds
-        ) ?: adCampaign.countdownSeconds.coerceIn(0, CustomPopupAd.MAX_COUNTDOWN_SECONDS)
+        remainingSeconds = if (isPreviewMode) {
+            0
+        } else {
+            savedInstanceState?.getInt(
+                STATE_REMAINING_SECONDS,
+                adCampaign.countdownSeconds
+            ) ?: adCampaign.countdownSeconds.coerceIn(0, CustomPopupAd.MAX_COUNTDOWN_SECONDS)
+        }
         impressionRecorded = savedInstanceState?.getBoolean(STATE_IMPRESSION_RECORDED, false) ?: false
     }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         val dialog = super.onCreateDialog(savedInstanceState)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        dialog.setCanceledOnTouchOutside(false)
+        dialog.setCanceledOnTouchOutside(isPreviewMode)
         return dialog
     }
 
@@ -95,20 +107,22 @@ class CustomAdPopupDialog : DialogFragment() {
 
         binding.btnAdCta.text = ad.buttonText.ifBlank { getString(R.string.custom_ad_default_cta) }
 
+        val hasText = ad.title.isNotBlank() || ad.message.isNotBlank()
+        applyPopupSizeLayout(ad.normalizedPopupSize(), hasText)
+
         val cleanImageUrl = ad.imageUrl.trim()
         if (cleanImageUrl.isNotBlank()) {
             binding.layoutAdPlaceholder.visibility = View.VISIBLE
-            binding.ivAdBanner.load(cleanImageUrl) {
-                crossfade(true)
-                listener(
-                    onSuccess = { _, _ ->
-                        _binding?.layoutAdPlaceholder?.visibility = View.GONE
-                    },
-                    onError = { _, _ ->
-                        _binding?.layoutAdPlaceholder?.visibility = View.VISIBLE
-                    }
-                )
-            }
+            PopupImageHelper.loadPopupImage(
+                imageView = binding.ivAdBanner,
+                rawSource = cleanImageUrl,
+                onSuccess = {
+                    _binding?.layoutAdPlaceholder?.visibility = View.GONE
+                },
+                onError = {
+                    _binding?.layoutAdPlaceholder?.visibility = View.VISIBLE
+                }
+            )
         } else {
             binding.layoutAdPlaceholder.visibility = View.VISIBLE
         }
@@ -118,7 +132,7 @@ class CustomAdPopupDialog : DialogFragment() {
         binding.ivAdBanner.setOnClickListener(clickHandler)
 
         binding.btnAdCloseBadge.setOnClickListener {
-            if (remainingSeconds <= 0) {
+            if (isPreviewMode || remainingSeconds <= 0) {
                 markCampaignSeen()
                 dismissAllowingStateLoss()
             }
@@ -127,7 +141,7 @@ class CustomAdPopupDialog : DialogFragment() {
         renderCountdownBadge(binding, remainingSeconds)
         startCountdownIfNeeded()
 
-        if (!impressionRecorded) {
+        if (!isPreviewMode && !impressionRecorded) {
             impressionRecorded = true
             RealtimeDatabaseSync.incrementCustomPopupAdImpression(requireContext())
         }
@@ -147,16 +161,119 @@ class CustomAdPopupDialog : DialogFragment() {
         }
     }
 
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun applyPopupSizeLayout(sizeMode: String, hasText: Boolean) {
+        val screenH = resources.displayMetrics.heightPixels
+
+        val rootPad = when (sizeMode) {
+            CustomPopupAd.SIZE_SMALL -> dp(10f)
+            CustomPopupAd.SIZE_LARGE -> dp(10f)
+            CustomPopupAd.SIZE_FULLSCREEN -> dp(8f)
+            else -> dp(14f)
+        }
+        binding.adRootFrame.setPadding(rootPad, rootPad, rootPad, rootPad)
+
+        val textPad = when (sizeMode) {
+            CustomPopupAd.SIZE_SMALL -> dp(14f)
+            CustomPopupAd.SIZE_LARGE -> dp(18f)
+            CustomPopupAd.SIZE_FULLSCREEN -> dp(16f)
+            else -> dp(18f)
+        }
+        binding.layoutAdTextContainer.setPadding(textPad, textPad, textPad, textPad)
+
+        val ctaParams = binding.btnAdCta.layoutParams as LinearLayout.LayoutParams
+        ctaParams.topMargin = if (hasText) dp(14f) else dp(4f)
+        binding.btnAdCta.layoutParams = ctaParams
+
+        binding.cardAdContainer.radius = when (sizeMode) {
+            CustomPopupAd.SIZE_SMALL -> dp(22f).toFloat()
+            CustomPopupAd.SIZE_FULLSCREEN -> dp(22f).toFloat()
+            else -> dp(28f).toFloat()
+        }
+
+        when (sizeMode) {
+            CustomPopupAd.SIZE_SMALL -> {
+                binding.tvAdTitle.textSize = 17f
+                binding.tvAdMessage.textSize = 12.5f
+            }
+            CustomPopupAd.SIZE_LARGE -> {
+                binding.tvAdTitle.textSize = 21f
+                binding.tvAdMessage.textSize = 14.5f
+            }
+            CustomPopupAd.SIZE_FULLSCREEN -> {
+                binding.tvAdTitle.textSize = 22f
+                binding.tvAdMessage.textSize = 15f
+            }
+            else -> {
+                binding.tvAdTitle.textSize = 20f
+                binding.tvAdMessage.textSize = 14f
+            }
+        }
+
+        val cardParams = binding.cardAdContainer.layoutParams
+        val contentParams = binding.layoutAdCardContent.layoutParams
+        val bannerParams = binding.frameAdBanner.layoutParams as LinearLayout.LayoutParams
+
+        if (sizeMode == CustomPopupAd.SIZE_FULLSCREEN) {
+            cardParams.height = ViewGroup.LayoutParams.MATCH_PARENT
+            contentParams.height = ViewGroup.LayoutParams.MATCH_PARENT
+            bannerParams.height = 0
+            bannerParams.weight = 1f
+            binding.ivAdBanner.scaleType = ImageView.ScaleType.FIT_CENTER
+        } else {
+            cardParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            contentParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            bannerParams.weight = 0f
+            bannerParams.height = when (sizeMode) {
+                CustomPopupAd.SIZE_SMALL -> if (hasText) dp(132f) else dp(176f)
+                CustomPopupAd.SIZE_LARGE -> {
+                    val cap = (screenH * if (hasText) 0.44f else 0.56f).toInt()
+                    dp(if (hasText) 304f else 390f).coerceAtMost(cap.coerceAtLeast(dp(240f)))
+                }
+                else -> if (hasText) dp(204f) else dp(264f)
+            }
+            binding.ivAdBanner.scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+        binding.cardAdContainer.layoutParams = cardParams
+        binding.layoutAdCardContent.layoutParams = contentParams
+        binding.frameAdBanner.layoutParams = bannerParams
+    }
+
     override fun onStart() {
         super.onStart()
-        dialog?.window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout(
+        val screenW = resources.displayMetrics.widthPixels
+        val screenH = resources.displayMetrics.heightPixels
+        val sizeMode = adCampaign.normalizedPopupSize()
+
+        val (targetWidth, targetHeight) = when (sizeMode) {
+            CustomPopupAd.SIZE_SMALL -> Pair(
+                (screenW * 0.80f).toInt().coerceAtMost(dp(320f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            CustomPopupAd.SIZE_LARGE -> Pair(
+                (screenW * 0.96f).toInt().coerceAtMost(dp(480f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            CustomPopupAd.SIZE_FULLSCREEN -> Pair(
                 ViewGroup.LayoutParams.MATCH_PARENT,
+                (screenH * 0.90f).toInt().coerceAtLeast(dp(480f))
+            )
+            else -> Pair(
+                (screenW * 0.91f).toInt().coerceAtMost(dp(410f)),
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        dialog?.setCanceledOnTouchOutside(false)
+
+        dialog?.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(targetWidth, targetHeight)
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val params = attributes
+            params.dimAmount = if (sizeMode == CustomPopupAd.SIZE_FULLSCREEN) 0.82f else 0.68f
+            attributes = params
+        }
+        dialog?.setCanceledOnTouchOutside(isPreviewMode)
         renderCountdownBadge(_binding, remainingSeconds)
     }
 
@@ -174,14 +291,14 @@ class CustomAdPopupDialog : DialogFragment() {
     }
 
     private fun startCountdownIfNeeded() {
-        if (remainingSeconds <= 0 || countdownRunning) return
+        if (isPreviewMode || remainingSeconds <= 0 || countdownRunning) return
         countdownRunning = true
         mainHandler.removeCallbacks(countdownTickRunnable)
         mainHandler.postDelayed(countdownTickRunnable, COUNTDOWN_STEP_MS)
     }
 
     private fun renderCountdownBadge(viewBinding: DialogCustomPopupAdBinding?, secondsLeft: Int) {
-        val canClose = secondsLeft <= 0
+        val canClose = isPreviewMode || secondsLeft <= 0
         isCancelable = canClose
         dialog?.setCancelable(canClose)
 
@@ -196,6 +313,7 @@ class CustomAdPopupDialog : DialogFragment() {
     }
 
     private fun markCampaignSeen() {
+        if (isPreviewMode) return
         val ctx = context ?: return
         val key = adCampaign.effectiveCampaignKey()
         if (key.isNotBlank()) {
@@ -205,8 +323,10 @@ class CustomAdPopupDialog : DialogFragment() {
 
     private fun handleAdActionClick() {
         val ctx = context ?: return
-        RealtimeDatabaseSync.incrementCustomPopupAdClick(ctx)
-        markCampaignSeen()
+        if (!isPreviewMode) {
+            RealtimeDatabaseSync.incrementCustomPopupAdClick(ctx)
+            markCampaignSeen()
+        }
 
         val normalizedUrl = CustomPopupAd.normalizeTargetUrl(adCampaign.targetUrl)
         if (normalizedUrl.isNotEmpty()) {
@@ -216,7 +336,7 @@ class CustomAdPopupDialog : DialogFragment() {
                 Toast.makeText(ctx, R.string.broadcast_invalid_link, Toast.LENGTH_SHORT).show()
             }
         }
-        if (remainingSeconds <= 0) {
+        if (isPreviewMode || remainingSeconds <= 0) {
             dismissAllowingStateLoss()
         }
     }
@@ -226,20 +346,28 @@ class CustomAdPopupDialog : DialogFragment() {
         private const val COUNTDOWN_STEP_MS = 1_000L
         private const val STATE_REMAINING_SECONDS = "state_remaining_seconds"
         private const val STATE_IMPRESSION_RECORDED = "state_impression_recorded"
+        private const val ARG_IS_PREVIEW = "arg_is_preview"
 
-        fun newInstance(ad: CustomPopupAd): CustomAdPopupDialog {
+        fun newInstance(ad: CustomPopupAd, isPreview: Boolean = false): CustomAdPopupDialog {
             return CustomAdPopupDialog().apply {
-                arguments = ad.toBundle()
+                arguments = ad.toBundle().apply {
+                    putBoolean(ARG_IS_PREVIEW, isPreview)
+                }
             }
         }
 
         fun showIfNotAlreadyVisible(
             fragmentManager: FragmentManager,
-            ad: CustomPopupAd
+            ad: CustomPopupAd,
+            isPreview: Boolean = false
         ): CustomAdPopupDialog? {
             if (fragmentManager.isStateSaved) return null
-            if (fragmentManager.findFragmentByTag(TAG) != null) return null
-            return newInstance(ad).also { dialog ->
+            val existing = fragmentManager.findFragmentByTag(TAG) as? CustomAdPopupDialog
+            if (existing != null) {
+                if (!isPreview) return null
+                existing.dismissAllowingStateLoss()
+            }
+            return newInstance(ad, isPreview).also { dialog ->
                 dialog.show(fragmentManager, TAG)
             }
         }

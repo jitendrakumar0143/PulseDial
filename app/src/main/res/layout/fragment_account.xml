@@ -4,37 +4,37 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:clipToPadding="false"
-    android:paddingBottom="96dp">
+    android:paddingBottom="72dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="12dp">
 
         <!-- Paywall Locked Banner (Shown automatically when 7-day trial expires and user hasn't paid) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/card_trial_locked_banner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="14dp"
+            android:layout_marginBottom="10dp"
             android:visibility="gone"
             app:cardBackgroundColor="@color/md_theme_errorContainer"
-            app:cardCornerRadius="20dp"
+            app:cardCornerRadius="16dp"
             app:cardElevation="0dp"
             app:strokeColor="@color/md_theme_error"
-            app:strokeWidth="1.5dp">
+            app:strokeWidth="1.25dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="top"
                 android:orientation="horizontal"
-                android:padding="18dp">
+                android:padding="12dp">
 
                 <ImageView
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
                     android:layout_marginTop="2dp"
                     android:contentDescription="@null"
                     android:src="@drawable/ic_lock"
@@ -43,7 +43,7 @@
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
+                    android:layout_marginStart="10dp"
                     android:layout_weight="1"
                     android:orientation="vertical">
 
@@ -52,17 +52,17 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/paywall_locked_title"
-                        android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
                         android:textColor="@color/md_theme_onErrorContainer"
+                        android:textSize="14sp"
                         android:textStyle="bold" />
 
                     <TextView
                         android:id="@+id/tv_paywall_locked_message"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
-                        android:textColor="@color/md_theme_onErrorContainer" />
+                        android:layout_marginTop="3dp"
+                        android:textColor="@color/md_theme_onErrorContainer"
+                        android:textSize="12.5sp" />
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -72,16 +72,16 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:cardBackgroundColor="@color/md_theme_surface"
-            app:cardCornerRadius="24dp"
+            app:cardCornerRadius="18dp"
             app:cardElevation="0dp"
             app:strokeColor="@color/md_theme_outline"
-            app:strokeWidth="1dp">
+            app:strokeWidth="0.75dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp">
+                android:padding="14dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -90,13 +90,13 @@
                     android:orientation="horizontal">
 
                     <FrameLayout
-                        android:layout_width="64dp"
-                        android:layout_height="64dp"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:background="@drawable/bg_circle_avatar">
 
                         <ImageView
-                            android:layout_width="36dp"
-                            android:layout_height="36dp"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
                             android:layout_gravity="center"
                             android:contentDescription="@string/account_title"
                             android:src="@drawable/ic_account"
@@ -106,7 +106,7 @@
                     <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="16dp"
+                        android:layout_marginStart="12dp"
                         android:layout_weight="1"
                         android:orientation="vertical">
 
@@ -115,40 +115,44 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/account_default_name"
-                            android:textAppearance="@style/TextAppearance.Material3.TitleLarge"
-                            android:textColor="@color/md_theme_onSurface" />
+                            android:textColor="@color/md_theme_onSurface"
+                            android:textSize="16.5sp"
+                            android:textStyle="bold" />
 
                         <TextView
                             android:id="@+id/tv_user_email"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                            android:layout_marginTop="1dp"
                             android:textColor="@color/md_theme_onSurfaceVariant"
+                            android:textSize="11.5sp"
                             android:visibility="gone" />
 
                         <TextView
                             android:id="@+id/tv_user_number"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
+                            android:layout_marginTop="1dp"
                             android:text="@string/account_default_number"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
-                            android:textColor="@color/md_theme_onSurfaceVariant" />
+                            android:textColor="@color/md_theme_onSurfaceVariant"
+                            android:textSize="12.5sp" />
                     </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_edit_profile"
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="48dp"
-                        android:text="@string/account_edit_profile" />
+                        android:layout_height="40dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:text="@string/account_edit_profile"
+                        android:textSize="12.5sp" />
                 </LinearLayout>
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="8dp"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
@@ -159,11 +163,13 @@
                         android:layout_height="wrap_content"
                         android:clickable="false"
                         android:text="@string/badge_trial_days_left"
+                        android:textSize="11.5sp"
                         app:chipBackgroundColor="@color/md_theme_primaryContainer"
+                        app:chipMinHeight="30dp"
                         app:chipStrokeWidth="0dp" />
 
                     <Space
-                        android:layout_width="8dp"
+                        android:layout_width="6dp"
                         android:layout_height="1dp" />
 
                     <com.google.android.material.chip.Chip
@@ -173,8 +179,9 @@
                         android:layout_height="wrap_content"
                         android:clickable="false"
                         android:text="@string/account_device_verified"
-                        android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+                        android:textSize="11sp"
                         app:chipBackgroundColor="@color/md_theme_surfaceVariant"
+                        app:chipMinHeight="30dp"
                         app:chipStrokeWidth="0dp" />
                 </LinearLayout>
 
@@ -182,18 +189,21 @@
                     android:id="@+id/tv_trial_countdown_detail"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="6dp"
                     android:text="@string/trial_countdown_active"
-                    android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-                    android:textColor="@color/md_theme_primary" />
+                    android:textColor="@color/md_theme_primary"
+                    android:textSize="12sp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_sign_out"
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="44dp"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/account_sign_out" />
+                    android:layout_height="38dp"
+                    android:layout_marginTop="8dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:text="@string/account_sign_out"
+                    android:textSize="12.5sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -202,19 +212,19 @@
             android:id="@+id/card_premium_subscription"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="10dp"
             app:cardBackgroundColor="@color/premium_card_bg"
-            app:cardCornerRadius="24dp"
-            app:cardElevation="3dp"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="2dp"
             app:strokeColor="@color/premium_accent_gold"
-            app:strokeWidth="1.5dp">
+            app:strokeWidth="1.25dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="@drawable/bg_premium_card_gradient"
                 android:orientation="vertical"
-                android:padding="24dp">
+                android:padding="16dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -223,8 +233,8 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:layout_width="30dp"
-                        android:layout_height="30dp"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_verified_shield"
                         app:tint="@color/premium_accent_gold" />
@@ -233,11 +243,11 @@
                         android:id="@+id/tv_premium_title"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="12dp"
+                        android:layout_marginStart="10dp"
                         android:layout_weight="1"
                         android:text="@string/premium_card_title"
-                        android:textAppearance="@style/TextAppearance.Material3.TitleLarge"
                         android:textColor="#FFFFFF"
+                        android:textSize="17sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
@@ -245,16 +255,16 @@
                     android:id="@+id/tv_premium_subtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="6dp"
                     android:text="@string/premium_card_subtitle"
-                    android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
-                    android:textColor="#CBD5E1" />
+                    android:textColor="#CBD5E1"
+                    android:textSize="12.5sp" />
 
                 <!-- VIP Benefits: #1 Auto WhatsApp & SMS Business Follow-up + Smart Call Announcer + Unknown Caller Shield + Unlimited Call Recording -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="10dp"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -262,11 +272,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="6dp">
+                        android:paddingVertical="4dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_verified_shield"
                             app:tint="@color/premium_accent_gold" />
@@ -275,10 +285,10 @@
                             android:id="@+id/tv_benefit_vip_followup"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
+                            android:layout_marginStart="9dp"
                             android:text="@string/benefit_vip_followup"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
                             android:textColor="#FDE68A"
+                            android:textSize="13sp"
                             android:textStyle="bold" />
                     </LinearLayout>
 
@@ -287,11 +297,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="6dp">
+                        android:paddingVertical="4dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_verified_shield"
                             app:tint="@color/premium_accent_gold" />
@@ -300,10 +310,10 @@
                             android:id="@+id/tv_benefit_vip_announcer"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
+                            android:layout_marginStart="9dp"
                             android:text="@string/benefit_vip_announcer"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-                            android:textColor="#F8FAFC" />
+                            android:textColor="#F8FAFC"
+                            android:textSize="13sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -311,11 +321,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="6dp">
+                        android:paddingVertical="4dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_verified_shield"
                             app:tint="@color/premium_accent_gold" />
@@ -324,10 +334,10 @@
                             android:id="@+id/tv_benefit_vip_shield"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
+                            android:layout_marginStart="9dp"
                             android:text="@string/benefit_vip_shield"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-                            android:textColor="#F8FAFC" />
+                            android:textColor="#F8FAFC"
+                            android:textSize="13sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -335,11 +345,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="6dp">
+                        android:paddingVertical="4dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_check_circle"
                             app:tint="#2DD4BF" />
@@ -347,10 +357,10 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
+                            android:layout_marginStart="9dp"
                             android:text="@string/benefit_unlimited_recording"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-                            android:textColor="#F8FAFC" />
+                            android:textColor="#F8FAFC"
+                            android:textSize="13sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -358,11 +368,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="6dp">
+                        android:paddingVertical="4dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_check_circle"
                             app:tint="#2DD4BF" />
@@ -370,10 +380,10 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
+                            android:layout_marginStart="9dp"
                             android:text="@string/benefit_custom_folder"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-                            android:textColor="#F8FAFC" />
+                            android:textColor="#F8FAFC"
+                            android:textSize="13sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -381,11 +391,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:paddingVertical="6dp">
+                        android:paddingVertical="4dp">
 
                         <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
                             android:contentDescription="@null"
                             android:src="@drawable/ic_check_circle"
                             app:tint="#2DD4BF" />
@@ -393,10 +403,10 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="12dp"
+                            android:layout_marginStart="9dp"
                             android:text="@string/benefit_ad_free"
-                            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-                            android:textColor="#F8FAFC" />
+                            android:textColor="#F8FAFC"
+                            android:textSize="13sp" />
                     </LinearLayout>
                 </LinearLayout>
 
@@ -404,68 +414,83 @@
                     android:id="@+id/tv_upi_payee_note"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="10dp"
                     android:text="@string/premium_upi_info"
-                    android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-                    android:textColor="#94A3B8" />
+                    android:textColor="#94A3B8"
+                    android:textSize="11.5sp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_upgrade_premium"
                     style="@style/Widget.Material3.Button"
                     android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="14dp"
+                    android:layout_height="46dp"
+                    android:layout_marginTop="10dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/btn_upgrade_premium"
                     android:textColor="#042F2E"
+                    android:textSize="13.5sp"
                     app:backgroundTint="#2DD4BF"
-                    app:cornerRadius="16dp" />
+                    app:cornerRadius="14dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_submit_utr_direct"
                     style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
+                    android:layout_height="42dp"
+                    android:layout_marginTop="7dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/btn_enter_utr_direct"
                     android:textColor="#E2E8F0"
-                    app:cornerRadius="16dp"
+                    android:textSize="13sp"
+                    app:cornerRadius="14dp"
                     app:strokeColor="#64748B" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_pay_razorpay"
                     style="@style/Widget.Material3.Button"
                     android:layout_width="match_parent"
-                    android:layout_height="50dp"
-                    android:layout_marginTop="10dp"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="8dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/btn_pay_razorpay"
                     android:textColor="#FFFFFF"
+                    android:textSize="13sp"
                     android:visibility="gone"
                     app:backgroundTint="#2563EB"
-                    app:cornerRadius="16dp" />
+                    app:cornerRadius="14dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_pay_payu"
                     style="@style/Widget.Material3.Button"
                     android:layout_width="match_parent"
-                    android:layout_height="50dp"
-                    android:layout_marginTop="8dp"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="7dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/btn_pay_payu"
                     android:textColor="#FFFFFF"
+                    android:textSize="13sp"
                     android:visibility="gone"
                     app:backgroundTint="#0F766E"
-                    app:cornerRadius="16dp" />
+                    app:cornerRadius="14dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_pay_custom_gateway"
                     style="@style/Widget.Material3.Button"
                     android:layout_width="match_parent"
-                    android:layout_height="50dp"
-                    android:layout_marginTop="8dp"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="7dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/btn_pay_custom_gateway"
                     android:textColor="#0F172A"
+                    android:textSize="13sp"
                     android:visibility="gone"
                     app:backgroundTint="#FBBF24"
-                    app:cornerRadius="16dp" />
+                    app:cornerRadius="14dp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -510,18 +535,18 @@
             android:id="@+id/card_whatsapp_support"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="10dp"
             app:cardBackgroundColor="@color/md_theme_surface"
-            app:cardCornerRadius="20dp"
+            app:cardCornerRadius="16dp"
             app:cardElevation="0dp"
             app:strokeColor="@color/md_theme_outline"
-            app:strokeWidth="1dp">
+            app:strokeWidth="0.75dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="18dp">
+                android:padding="13dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -530,8 +555,8 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:layout_width="24dp"
-                        android:layout_height="24dp"
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_message"
                         app:tint="@color/md_theme_primary" />
@@ -539,28 +564,32 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="10dp"
+                        android:layout_marginStart="8dp"
                         android:text="@string/whatsapp_support_title"
-                        android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
-                        android:textColor="@color/md_theme_onSurface" />
+                        android:textColor="@color/md_theme_onSurface"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="4dp"
                     android:text="@string/whatsapp_support_subtitle"
-                    android:textAppearance="@style/TextAppearance.Material3.BodyMedium"
-                    android:textColor="@color/md_theme_onSurfaceVariant" />
+                    android:textColor="@color/md_theme_onSurfaceVariant"
+                    android:textSize="12.5sp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_whatsapp_support"
                     style="@style/Widget.Material3.Button.TonalButton"
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="12dp"
+                    android:layout_height="42dp"
+                    android:layout_marginTop="10dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/whatsapp_support_button"
-                    app:cornerRadius="14dp"
+                    android:textSize="13sp"
+                    app:cornerRadius="12dp"
                     app:icon="@drawable/ic_message"
                     app:iconGravity="textStart" />
 
@@ -568,10 +597,13 @@
                     android:id="@+id/btn_view_crash_log"
                     style="@style/Widget.Material3.Button.TextButton"
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="4dp"
+                    android:layout_height="40dp"
+                    android:layout_marginTop="2dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
                     android:text="@string/crash_diag_title"
-                    app:cornerRadius="14dp" />
+                    android:textSize="12.5sp"
+                    app:cornerRadius="12dp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
